@@ -44,12 +44,31 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
    are untouched: unreachable in the shipped build, they go with the
    STREAMLINED_FRONTEND collapse, a separate pass.)
 2. C++ Windows server; online sessions of up to 4 players.
-3. Open design questions to settle WITH Anthony before building netcode:
-   - lockstep vs server-authoritative (the sim is deterministic — both work);
-   - what "the camera" means with 4 players (the original is ONE shared
-     screen with a hard 2-player separation leash, $A924/$A944: 61 units
-     across / 37 down = exactly one playfield);
-   - whether the server re-implements the sim in C++ or hosts the JS one.
+3. Netcode design — **SETTLED with Anthony 2026-08-29:**
+   - **LOCKSTEP RELAY.**  Every client runs the JS sim it already has; the
+     C++ server relays one direction byte per player per pass, owns the
+     session (who is in, when a join byte fires), and arbitrates desyncs
+     via the engine's own `fingerprint()` (players, camera, actors, tape
+     counters are all mixed in).  The server never runs the sim — that is
+     what keeps it a small standalone C++ program.  Late join = state
+     snapshot transfer (serializer still to be written).
+   - **PER-CLIENT CAMERA**, with the measured consequence understood: the
+     camera is SIM STATE, not a lens.  camX/camY are in `fingerprint()`,
+     and they gate real rules — actors off-camera are FROZEN ($A1DA's
+     culls gate the update callback; "nothing in the first dungeon stirs
+     until the camera brings it into view"), the generator cull recycles
+     actors by distance from the camera centre ($B0FE), and shots are
+     REMOVED at the screen edge ($8D97/$8DA1): shot range IS the screen.
+     So per-client display requires generalizing those camera-relative
+     rules to PLAYER-relative ones, all deterministic and lockstep-safe:
+     one VIRTUAL camera per in-game player, each computed with the
+     original follow logic ($A437/camStep); an actor updates when visible
+     to ANY of them; the generator cull measures to the nearest; a shot
+     culls against its OWNER's window; each client displays its own
+     player's window.  With one player in game this degenerates to
+     exactly the tested sim, so the whole change is provable against the
+     current suite.  The leash stays off online; load-slowdown is forced
+     OFF in online sessions (its pass-cost model reads a camera).
 
 ## Engine facts that cost real effort to learn — don't rediscover them
 
