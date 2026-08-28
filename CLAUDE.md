@@ -26,8 +26,23 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
 
 ## Planned work (agreed with Anthony, in order of intent)
 
-1. Strip local two-player from the client: player-2 blocks, join/leash/
-   shove/PvP, `indepGamepads`, the P2 options rows. Drop to one local player.
+1. ~~Strip local two-player from the client~~ **DONE 2026-08-29** (suite
+   1211 -> 1161, every retirement deliberate): the client is one-local-
+   player.  Gone: the PLAYERS/P2 options rows, the P2 key zone and the
+   cross-player rebind-conflict UI, `indepGamepads`/`kempston2`,
+   `CTRL_MAGIC`'s SPACE ($85A7), `controlRead`'s `who` parameter, and the
+   local keyboard feed of `players[1].dir`.  **Deliberately KEPT:** the
+   sim's two player blocks and the join/leash/shove machinery.  The engine
+   has NO 1P/2P switch (NOTES: "There is no one-player/two-player switch.
+   There never was.") -- both blocks ship marked not-in-game and whoever
+   presses FIRE joins ($9440, the same routine that revives a dead
+   player).  That join-in model IS drop-in online multiplayer, so the sim
+   side is the seed of step 2, not dead weight.  `players[1].dir` is
+   pinned 0 at the marked NETWORK SEAM in `readKeys()`; the abstract
+   input path (`input.p2`) still drives him -- that is the tests' path
+   and will be the server's.  (The faithful menu phases 'players'..'ctrl2'
+   are untouched: unreachable in the shipped build, they go with the
+   STREAMLINED_FRONTEND collapse, a separate pass.)
 2. C++ Windows server; online sessions of up to 4 players.
 3. Open design questions to settle WITH Anthony before building netcode:
    - lockstep vs server-authoritative (the sim is deterministic — both work);
@@ -38,9 +53,13 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
 
 ## Engine facts that cost real effort to learn — don't rediscover them
 
-- Each player's input is already a clean per-pass direction byte via
-  `controlRead(method, who, kb)` (bits: up/down/left/right/fire/potion).
-  That byte is the natural network-serialization unit.
+- A player's input is one clean per-pass direction byte (bits: up/down/
+  left/right/fire/potion) -- the natural network-serialization unit.  The
+  LOCAL player's byte comes from `controlRead(method, kb)`; a remote
+  player's arrives over the wire and lands in `players[n].dir` (see the
+  NETWORK SEAM comment in `readKeys()`).  A remote player's first FIRE
+  bit joins him mid-game through `joinPass()` -- no session plumbing
+  needed in the sim itself.
 - Faithful/added boundary flags exist throughout: `STREAMLINED_FRONTEND`,
   `FAITHFUL_TAPE_PROMPTS`, `FAITHFUL_SYM_CHEAT`, `zonePotion`. In this fork
   they can be collapsed toward the modern side — but strip incrementally
@@ -48,8 +67,9 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
 - The HUD font has verified glyphs ONLY for digits, uppercase letters and
   space. Punctuation renders garbage. Reword UI text; never print `:` `/`
   `>` etc. with it.
-- Key rebinding: 6 slots/player, swap-on-own-key, cross-player conflicts
-  refused with an on-screen reason. Zones persist in localStorage.
+- Key rebinding: 6 slots, swap-on-own-key, nothing ever refused (the
+  cross-player conflict UI left with local P2).  The zone persists in
+  localStorage; legacy two-zone saves migrate by taking player 1's own.
 - House discipline (keep it): mutation-test every fix — reintroduce the
   bug, watch the specific test fail, restore; and verify empirically over
   reading code ("measure, don't assume").

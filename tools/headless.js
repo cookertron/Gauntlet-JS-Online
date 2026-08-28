@@ -4588,69 +4588,62 @@ if (process.argv[2] === '--table') {
   /* --- 4. THE FOUR CONTROL METHODS ----------------------------------
      `python tools/fegate.py keymap` pokes $FFFC/$FFFB, presses each of the
      40 keys one at a time from a state booted through the real menu, calls
-     $855D and reads ($8427)/($8447).  Its output, verbatim:
+     $855D and reads ($8427)/($8447).  Its player 1 output, verbatim:
        player 1 method 0 SINCLAIR  UP=9 DOWN=8 LEFT=6 RIGHT=7 FIRE=0 MAGIC=CAPS
        player 1 method 1 KEMPSTON  MAGIC=CAPS         (no key -- it is a PORT)
        player 1 method 2 PROTEK    UP=7 DOWN=6 LEFT=5 RIGHT=8 FIRE=0 MAGIC=CAPS
        player 1 method 3 KEYBOARD  UP=1 DOWN=Q LEFT=S RIGHT=D FIRE=Z MAGIC=CAPS
-       player 2 method 0 SINCLAIR  UP=4 DOWN=3 LEFT=1 RIGHT=2 FIRE=5 MAGIC=SPACE
-       player 2 method 1 KEMPSTON  MAGIC=SPACE
-       player 2 method 2 PROTEK    UP=7 DOWN=6 LEFT=5 RIGHT=8 FIRE=0 MAGIC=SPACE
-       player 2 method 3 KEYBOARD  UP=8 DOWN=I LEFT=K RIGHT=L FIRE=M MAGIC=SPACE */
+     (Its player 2 rows -- $85A1's own zones, SPACE magic -- stay checked
+     in the FAITHFUL build; this fork's client wires one local player and
+     carries only the player 1 tables.  See CTRL_KEYS's own comment.) */
   {
     const WANT = [
-      [['9','8','6','7','0'], ['4','3','1','2','5']],
-      [null, null],
-      [['7','6','5','8','0'], ['7','6','5','8','0']],
-      [['1','Q','S','D','Z'], ['8','I','K','L','M']],
+      ['9','8','6','7','0'],
+      null,
+      ['7','6','5','8','0'],
+      ['1','Q','S','D','Z'],
     ];
     const BITS = [G.constants.DIR_UP, G.constants.DIR_DOWN,
                   G.constants.DIR_LEFT, G.constants.DIR_RIGHT,
                   G.constants.DIR_FIRE];
     const ALL = [].concat(...F.KB_HALFROWS);
     let bad = 0, names = [];
-    for (let m = 0; m < 4; m++) for (let who = 0; who < 2; who++){
-      if (!WANT[m][who]) continue;
+    for (let m = 0; m < 4; m++){
+      if (!WANT[m]) continue;
       for (let b = 0; b < 5; b++){
         for (const key of ALL){
           const kb = new F.Keyboard(); kb.press(key);
-          const d = F.controlRead(m, who, kb);
-          const wantSet = (key === WANT[m][who][b]);
-          if (!!(d & BITS[b]) !== wantSet){ bad++; names.push(m+'/'+who+'/'+key); }
+          const d = F.controlRead(m, kb);
+          const wantSet = (key === WANT[m][b]);
+          if (!!(d & BITS[b]) !== wantSet){ bad++; names.push(m+'/'+key); }
         }
       }
     }
-    check('all four control methods, all 40 keys, both players', bad, 0);
+    check('all four control methods, all 40 keys', bad, 0);
     /* KEMPSTON reads a PORT, not the keyboard: no key does anything. */
     {
       const kb = new F.Keyboard();
       let any = 0;
       for (const key of ALL){ kb.releaseAll(); kb.press(key);
-        if (F.controlRead(1, 0, kb) & 0x1F) any++; }
+        if (F.controlRead(1, kb) & 0x1F) any++; }
       check('method 1 KEMPSTON: no key on the keyboard moves you', any, 0);
       kb.releaseAll();
       const got = [];
       for (const bit of [1, 2, 4, 8, 0x10]){ kb.kempston = bit;
-        got.push(F.controlRead(1, 0, kb)); }
+        got.push(F.controlRead(1, kb)); }
       check('IN A,($1F) $01->$08 $02->$04 $04->$02 $08->$01 $10->$10',
             got, [8, 4, 2, 1, 0x10]);
     }
-    /* $857E / $85A7 are OUTSIDE the dispatch. */
+    /* $857E is OUTSIDE the dispatch. */
     {
       const got = [];
-      for (let m = 0; m < 4; m++) for (let who = 0; who < 2; who++){
-        const kb = new F.Keyboard(); kb.press(F.CTRL_MAGIC[who]);
-        got.push(!!(F.controlRead(m, who, kb) & G.constants.DIR_POTION));
+      for (let m = 0; m < 4; m++){
+        const kb = new F.Keyboard(); kb.press(F.CTRL_MAGIC);
+        got.push(!!(F.controlRead(m, kb) & G.constants.DIR_POTION));
       }
-      check('MAGIC is CAPS (p1) / SPACE (p2) in ALL FOUR methods',
-            got, [true, true, true, true, true, true, true, true]);
+      check('MAGIC is CAPS in ALL FOUR methods ($857E)',
+            got, [true, true, true, true]);
     }
-    /* KEMPSTON and PROTEK are SHARED -- $856E/$8597 both CALL $8680 and
-       $8578/$85A1 both $85B3, so the two players read the same input. */
-    check('KEMPSTON and PROTEK give both players the same key list',
-          [F.CTRL_KEYS[1][0] === F.CTRL_KEYS[1][1],
-           JSON.stringify(F.CTRL_KEYS[2][0]) === JSON.stringify(F.CTRL_KEYS[2][1])],
-          [true, true]);
   }
 
   /* --- 5. THE FRONT END'S TIMING MODEL ------------------------------
@@ -6962,25 +6955,6 @@ if (process.argv[2] === '--table') {
   checkTrue('a fresh menu reaches the options screen (boxout -> options)',
             toOptions().fe.phase === 'options');
 
-  /* --- PLAYERS always starts at 1, even with 2 persisted from before ---
-     Reported as a requirement, not the previous behaviour: this file used
-     to save and restore it like everything else on the screen.
-     settingsSave()/Load() read/write the LIVE singleton (F.live) ONLY --
-     never a scratch FrontEnd toOptions() makes -- so this drives them on
-     F.live directly, the same object the real page's own settingsLoad()
-     call (right before its first requestAnimationFrame) would act on. */
-  {
-    F.live.players = 2;
-    G.settings.save();
-    F.live.reset();                    // a fresh FrontEnd, as page load makes one
-    check('reset() alone leaves PLAYERS at 1 (the constructor default)',
-          F.live.players, 1);
-    G.settings.load();                 // what a real page load calls next
-    check('...and settingsLoad() does not restore a saved 2 over it',
-          F.live.players, 1);
-    G.settings.reset();
-  }
-
   /* --- it draws, and it draws the game's own furniture ---------------- */
   {
     const s = toOptions();
@@ -7029,7 +7003,6 @@ if (process.argv[2] === '--table') {
      what ships, not a re-implementation of it. */
   {
     const s = toOptions();
-    tap(s, '8', 1);                       // PLAYERS -> 2, so every group exists
     const items = s.fe.optLayout().items;
     const ys = items.map(it => it.y);
     checkTrue('every row gets its own line (the y column is strictly increasing)',
@@ -7044,12 +7017,12 @@ if (process.argv[2] === '--table') {
         checkTrue('...and within a group (' + items[i].r.group + ') there is no gap',
                   items[i].y === items[i - 1].y + 1);
       }
-    checkTrue('a 2-player screen has multiple section boundaries', gaps >= 3, 'gaps=' + gaps);
+    check('the one-player screen has its two section boundaries (p0 -> misc -> start)',
+          gaps, 2);
   }
   /* --- rows sharing a preview's band are narrowed, others are not ------- */
   {
     const s = toOptions();
-    tap(s, '8', 1);
     const L = s.fe.optLayout();
     for (const {y, narrow} of L.items)
       checkTrue((narrow ? 'row ' + y + ' sharing a preview\'s band is narrowed'
@@ -7089,40 +7062,14 @@ if (process.argv[2] === '--table') {
               new Set(overTime).size > 1, overTime.map((p, i) => p === overTime[0]).join(','));
   }
 
-  /* --- one preview per ACTIVE player, not one that follows the cursor --- */
+  /* --- the preview: the player's own, aligned with his row -------------- */
   {
     const s = toOptions();
     const L1 = s.fe.optLayout();
-    check('1 player: exactly one preview, for player 1',
+    check('exactly one preview, for player 1',
           L1.previews.map(pv => pv.p), [0]);
     const charRow1 = L1.items.find(it => it.r.k === 'char' && it.r.p === 0);
     check('...aligned with PLAYER 1\'s own row', L1.previews[0].y, charRow1.y);
-
-    tap(s, '8', 1);                                       // PLAYERS -> 2
-    const L2 = s.fe.optLayout();
-    check('2 players: BOTH previews exist, one each -- not one that follows the cursor',
-          L2.previews.map(pv => pv.p).sort(), [0, 1]);
-    for (const pv of L2.previews){
-      const charRow = L2.items.find(it => it.r.k === 'char' && it.r.p === pv.p);
-      check('preview ' + pv.p + ' aligned with PLAYER ' + (pv.p + 1) + '\'s own row',
-            pv.y, charRow.y);
-    }
-    checkTrue('...and the two previews do not sit on the same row',
-              L2.previews[0].y !== L2.previews[1].y);
-  }
-  /* --- the preview's column is FIXED -- never a function of any row's own
-     text -- so it cannot jump when a character name or a rebound key
-     changes width.  Reported as a requirement, not just a nice property:
-     the tried-and-abandoned title-screen crop never actually depended on
-     text width either, but the risk of a future "put it after the name"
-     layout doing exactly that is worth pinning down structurally. */
-  {
-    const s = toOptions();
-    const pCol1p = s.fe.optLayout().pCol;
-    tap(s, '8', 1);                                       // PLAYERS -> 2 (adds rows, longer names)
-    const pCol2p = s.fe.optLayout().pCol;
-    check('the preview\'s column does not move when the row list changes',
-          pCol2p, pCol1p);
   }
 
   /* --- an ARROW marks the selection now, not an inverted row -- reported
@@ -7151,13 +7098,13 @@ if (process.argv[2] === '--table') {
               y0 === y1 || !gutterLit(s.fe, y0));
   }
 
-  /* --- default rows: 1 player, keyboard --------------------------------- */
+  /* --- the rows: ONE local player, so no PLAYERS row at all ------------- */
   {
     const s = toOptions();
-    check('the default rows: players, player 1, its input, its rebind, slowdown, defaults, start',
+    check('the rows: player 1, its input, its rebind, slowdown, defaults, start',
           s.fe.optRows().map(r => r.k),
-          ['players', 'char', 'input', 'rebind', 'slow', 'reset', 'start']);
-    checkTrue('cursor starts on PLAYERS', s.fe.optRows()[s.fe.optSel].k === 'players');
+          ['char', 'input', 'rebind', 'slow', 'reset', 'start']);
+    checkTrue('cursor starts on PLAYER 1', s.fe.optRows()[s.fe.optSel].k === 'char');
   }
 
   /* --- navigation wraps both ways (7/8/... alias ArrowUp etc, see KEYMAP) */
@@ -7175,51 +7122,39 @@ if (process.argv[2] === '--table') {
      direction bits in the SAME poll (padBits()), and a keyboard player
      resting a finger on ENTER while tapping a direction does too. */
   {
-    const s = toOptions();
-    s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'char' && r.p === 0);
+    const s = toOptions();                      // fresh: cursor on CHAR, row 0
     const before = s.fe.optChar[0];
     s.kb.press('7'); s.kb.press('8');           // UP + RIGHT, same frame
     s.fe.frame(s.kb, s.ev, s.n++);
-    check('RIGHT acted on the CHAR row it was pressed on, not PLAYERS',
-          [s.fe.optChar[0] !== before, s.fe.players], [true, 1]);
-    check('...and UP, same frame, still moved the cursor off it',
-          s.fe.optSel, s.fe.optRows().findIndex(r => r.k === 'players'));
+    checkTrue('RIGHT acted on the CHAR row it was pressed on',
+              s.fe.optChar[0] !== before);
+    check('...and UP, same frame, still moved the cursor off it (wrapping to the end)',
+          s.fe.optSel, s.fe.optRows().length - 1);
   }
   {
-    const s = toOptions();                      // fresh: cursor on PLAYERS
-    checkTrue('cursor starts on PLAYERS for this one too',
-              s.fe.optRows()[s.fe.optSel].k === 'players');
+    const s = toOptions();                      // fresh: cursor on CHAR, row 0
+    const before = s.fe.optChar[0];
     s.kb.press('7'); s.kb.press('ENTER');       // UP + GO, same frame
     s.fe.frame(s.kb, s.ev, s.n++);
-    check('GO acted on PLAYERS (stepped it), not on wherever UP wrapped to',
-          s.fe.players, 2);
-    checkTrue('...and did NOT fire START (that would need GO on the START row)',
+    checkTrue('GO acted on CHAR (stepped it), not on wherever UP wrapped to',
+              s.fe.optChar[0] !== before);
+    /* sharper than it used to be: UP from row 0 wraps the cursor onto
+       START itself, so an act-after-navigate regression would boot the
+       game right here. */
+    checkTrue('...and did NOT fire START, even though UP wrapped the cursor onto it',
               s.fe.phase === 'options');
   }
 
-  /* --- PLAYERS reveals (and hides) player 2's rows ---------------------- */
+  /* --- character selection cycles ALL FOUR freely -- the old exclusion
+     only ever protected the other LOCAL player's pick ------------------- */
   {
     const s = toOptions();
-    tap(s, '8', 1);                    // RIGHT: 1 -> 2
-    check('PLAYERS steps to 2', s.fe.players, 2);
-    check('...and reveals PLAYER 2 / its input / its own rebind',
-          s.fe.optRows().map(r => r.k),
-          ['players', 'char', 'input', 'rebind', 'char', 'input', 'rebind', 'slow', 'reset', 'start']);
-    tap(s, '5', 1);                    // LEFT: 2 -> 1
-    check('...and PLAYERS steps back to 1, hiding them again', s.fe.players, 1);
-  }
-
-  /* --- character selection never lands on the other player's ----------- */
-  {
-    const s = toOptions();
-    tap(s, '8', 1);                                          // PLAYERS -> 2
-    s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'char' && r.p === 0);
-    const other = s.fe.optChar[1];
+    s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'char');
     const seen = [s.fe.optChar[0]];
-    for (let i = 0; i < 3; i++){ tap(s, '8', 1); seen.push(s.fe.optChar[0]); }
-    checkTrue('player 1 never lands on player 2\'s character while cycling',
-              !seen.includes(other), seen.join(','));
-    check('3 steps of 4 (one slot excluded) return to the start', seen[3], seen[0]);
+    for (let i = 0; i < 4; i++){ tap(s, '8', 1); seen.push(s.fe.optChar[0]); }
+    check('the single player cycles through all four characters',
+          new Set(seen.slice(0, 4)).size, 4);
+    check('...and 4 steps of 4 return to the start', seen[4], seen[0]);
   }
 
   /* --- CONTROLLER is refused with no pad, offered once one connects ----- */
@@ -7245,7 +7180,7 @@ if (process.argv[2] === '--table') {
      no pad connected yet (many browsers withhold a gamepad from
      navigator.getGamepads() until one of its buttons is pressed), and a
      pad can be unplugged mid-screen.  Reached START with CONTROLLER set
-     and nothing feeding kempston/kempston2 would leave that player unable
+     and nothing feeding kempston would leave that player unable
      to move for the whole game, with no in-game panel left to fix it. */
   {
     const s = toOptions();
@@ -7267,44 +7202,6 @@ if (process.argv[2] === '--table') {
     s.fe.frame(s.kb, s.ev, s.n++);
     check('...and falls back the moment it is unplugged', s.fe.optMethod[0], 3);
   }
-  /* Symmetric for player 2 -- the downgrade loop treats both players the
-     same way on purpose (see optFrame()'s own comment on why player 2 is
-     not a special case here).  Mutation-verified: an earlier draft of this
-     check only ever exercised player 1, and making the downgrade loop
-     asymmetric (player 1 only) still passed every test in this file. */
-  {
-    const s = toOptions();
-    s.fe.players = 2;
-    s.fe.optMethod[1] = 1;                    // as if restored from storage
-    s.fe.frame(s.kb, s.ev, s.n++);             // one frame is enough: optFrame()
-    check('P2 CONTROLLER with no pad is downgraded to KEYBOARD too, unprompted',
-          s.fe.optMethod[1], 3);
-  }
-
-  /* --- CONTROLLER + CONTROLLER needs a SECOND, independent pad ---------- */
-  {
-    const s = toOptions();
-    tap(s, '8', 1);                                           // PLAYERS -> 2
-    sandbox.navigator = { getGamepads: () => [
-      { connected: true, id: 'Pad One', axes: [0, 0], buttons: [] }] };
-    F.pollGamepads();
-    s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'input' && r.p === 0);
-    tap(s, '8', 1);
-    check('player 1 takes the one pad', s.fe.optMethod[0], 1);
-    s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'input' && r.p === 1);
-    tap(s, '8', 1);
-    check('...and player 2 is refused CONTROLLER: only one pad, already taken',
-          s.fe.optMethod[1], 3);
-    sandbox.navigator = { getGamepads: () => [
-      { connected: true, id: 'Pad One', axes: [0, 0], buttons: [] },
-      { connected: true, id: 'Pad Two', axes: [0, 0], buttons: [] }] };
-    F.pollGamepads();
-    tap(s, '8', 1);
-    check('...and accepted once a SECOND pad is connected', s.fe.optMethod[1], 1);
-    delete sandbox.navigator;
-    F.pollGamepads();
-  }
-
   /* --- pollGamepads: compacts the sparse Gamepad API array -------------- */
   {
     sandbox.navigator = { getGamepads: () => [
@@ -7313,16 +7210,17 @@ if (process.argv[2] === '--table') {
     check('a pad in API slot 1 (slot 0 empty) is reported as "pad 0"',
           [r.count, r.names], [1, ['SOLO PAD']]);
     check('...axes[0]=1 (right) feeds kempston', F.liveKb.kempston, 0x01);
-    check('...and NOT kempston2, with only one pad connected', F.liveKb.kempston2, 0);
+    /* pad 0 is the only pad that FEEDS anything now (one local player);
+       the others are still REPORTED, for the options screen's own count. */
     sandbox.navigator = { getGamepads: () => [
       { connected: true, id: 'First', axes: [0, 0], buttons: [] },
       { connected: true, id: 'Second', axes: [-1, 0], buttons: [] }] };
-    F.pollGamepads();
-    check('a second connected pad feeds kempston2, independently of the first',
-          [F.liveKb.kempston, F.liveKb.kempston2], [0, 0x02]);
+    const r2 = F.pollGamepads();
+    check('a second connected pad is reported but feeds nothing',
+          [r2.count, F.liveKb.kempston], [2, 0]);
     delete sandbox.navigator;
     F.pollGamepads();
-    check('with nothing connected, both clear', [F.liveKb.kempston, F.liveKb.kempston2], [0, 0]);
+    check('with nothing connected, kempston clears', F.liveKb.kempston, 0);
   }
 
   /* --- rebinding actually rebinds: SIX slots now (POTION is the sixth --
@@ -7332,7 +7230,7 @@ if (process.argv[2] === '--table') {
     s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'rebind');
     tap(s, 'ENTER', 1);
     check('activating REBIND starts capture at UP', s.fe.optBinding, 0);
-    const zone = F.CTRL_KEYS[3][0];
+    const zone = F.CTRL_KEYS[3];
     const wasUp = zone[0], wasDown = zone[1];
     tap(s, 'J', 2);
     check('...and the held key becomes the new UP binding', zone[0], 'J');
@@ -7365,11 +7263,11 @@ if (process.argv[2] === '--table') {
      audience here, a KEYBOARD player who wants SPACE as FIRE is. */
   {
     const DIR_FIRE = G.constants.DIR_FIRE;
-    F.CTRL_KEYS[3][0] = ['1', 'Q', 'S', 'D', 'SPACE', 'CAPS'];
+    F.CTRL_KEYS[3] = ['1', 'Q', 'S', 'D', 'SPACE', 'CAPS'];
     const kb = new F.Keyboard();
     kb.press('SPACE');
     checkTrue('a SPACE binding fires through controlRead(), same as any key',
-              !!(F.controlRead(3, 0, kb) & DIR_FIRE));
+              !!(F.controlRead(3, kb) & DIR_FIRE));
   }
   /* CAPS and SYM are ALSO no longer reserved -- see optCaptureFrame's own
      comment: SYM because FAITHFUL_SYM_CHEAT defaults off so there's no
@@ -7383,7 +7281,7 @@ if (process.argv[2] === '--table') {
     const s = toOptions();
     s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'rebind');
     tap(s, 'ENTER', 1);
-    const zone = F.CTRL_KEYS[3][0];
+    const zone = F.CTRL_KEYS[3];
     const wasUp = zone[0];
     tap(s, 'CAPS', 2);
     check('CAPS, no longer reserved, BINDS instead of skipping', zone[0], 'CAPS');
@@ -7404,17 +7302,17 @@ if (process.argv[2] === '--table') {
   {
     const DIR_UP = G.constants.DIR_UP, DIR_DOWN = G.constants.DIR_DOWN,
           DIR_POTION = G.constants.DIR_POTION;
-    F.CTRL_KEYS[3][0] = ['CAPS', 'SYM', 'S', 'D', 'Z', 'X'];
+    F.CTRL_KEYS[3] = ['CAPS', 'SYM', 'S', 'D', 'Z', 'X'];
     const kb = new F.Keyboard();
     kb.press('CAPS');
-    const d = F.controlRead(3, 0, kb);
+    const d = F.controlRead(3, kb);
     checkTrue('a CAPS binding moves through controlRead(), same as any key',
               !!(d & DIR_UP));
     checkTrue('...and, faithful default, STILL casts player 1\'s own magic ($857E)',
               !!(d & DIR_POTION));
     kb.releaseAll(); kb.press('SYM');
     checkTrue('a SYM binding moves through controlRead() too',
-              !!(F.controlRead(3, 0, kb) & DIR_DOWN));
+              !!(F.controlRead(3, kb) & DIR_DOWN));
     checkTrue('...and, cheat off by default, carries no hidden side effect any more',
               G.symCheat.get() === false);
   }
@@ -7426,55 +7324,12 @@ if (process.argv[2] === '--table') {
     const s = toOptions();
     s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'rebind');
     tap(s, 'ENTER', 1);
-    const zone = F.CTRL_KEYS[3][0];
+    const zone = F.CTRL_KEYS[3];
     s.kb.press('T');
     for (let i = 0; i < 5; i++) s.fe.frame(s.kb, s.ev, s.n++);   // held far too long
     s.kb.releaseAll(); s.fe.frame(s.kb, s.ev, s.n++);
     check('a key held for several frames still binds only ONE direction',
           [zone[0], s.fe.optBinding], ['T', 1]);
-  }
-
-  /* --- the ONE true conflict: a key the OTHER player holds -- refused,
-     and now WITH THE REASON ON SCREEN.  Reported from play as "O and P
-     aren't available for some reason": zones persist in localStorage, the
-     screen displays them nowhere, so a silently-refused key was
-     indistinguishable from a broken one.  The refusal stands (one physical
-     key cannot drive two players -- a shared keyboard cannot say whose
-     finger pressed it), checked regardless of the other player's CURRENT
-     method (he can switch to KEYBOARD after the clash was saved) -- but it
-     must never be silent again: optBindMsg names the owning player and the
-     footer draws it. */
-  {
-    F.CTRL_KEYS[3][0] = ['A', 'B', 'C', 'D', 'E', 'F'];
-    F.CTRL_KEYS[3][1] = ['V', 'W', 'X', 'Y', 'Z', 'U'];
-    const s = toOptions();
-    s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'players');
-    tap(s, '8', 1);                                   // PLAYERS -> 2
-    s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'rebind' && r.p === 1);
-    tap(s, 'ENTER', 1);
-    check('activating P2 REBIND starts capture at UP', s.fe.optBinding, 0);
-    tap(s, 'A', 2);                    // 'A' is already player 1's UP key
-    check('a key already claimed by the OTHER player is refused',
-          F.CTRL_KEYS[3][1][0], 'V');
-    check('...and capture does NOT advance', s.fe.optBinding, 0);
-    check('...and the REASON is set for the footer to draw',
-          s.fe.optBindMsg, 'PLAYER 1 HAS THAT KEY');
-    checkTrue('...with time on its clock', s.fe.optBindMsgT > 0);
-    tap(s, 'Q', 2);                    // unclaimed
-    check('...but an unclaimed key still binds normally',
-          [F.CTRL_KEYS[3][1][0], s.fe.optBinding], ['Q', 1]);
-    check('...and the successful bind clears the message', s.fe.optBindMsgT, 0);
-  }
-  /* the mirror direction, for the message's own arithmetic */
-  {
-    F.CTRL_KEYS[3][0] = ['A', 'B', 'C', 'D', 'E', 'F'];
-    F.CTRL_KEYS[3][1] = ['V', 'W', 'X', 'Y', 'Z', 'U'];
-    const s = toOptions();
-    s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'rebind' && r.p === 0);
-    tap(s, 'ENTER', 1);
-    tap(s, 'V', 2);                    // 'V' is player 2's UP key
-    check('player 1 refused a player-2 key names PLAYER 2',
-          s.fe.optBindMsg, 'PLAYER 2 HAS THAT KEY');
   }
 
   /* --- a key of your OWN, sitting in another slot, SWAPS -- never refuses.
@@ -7485,30 +7340,26 @@ if (process.argv[2] === '--table') {
      this slot's old key, and the zone stays six distinct keys at every
      step. */
   {
-    F.CTRL_KEYS[3][0] = ['A', 'B', 'C', 'D', 'E', 'F'];
-    F.CTRL_KEYS[3][1] = ['V', 'W', 'X', 'Y', 'Z', 'U'];
+    F.CTRL_KEYS[3] = ['A', 'B', 'C', 'D', 'E', 'F'];
     const s = toOptions();
     s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'rebind' && r.p === 0);
     tap(s, 'ENTER', 1);
     tap(s, 'Q', 2);                    // UP -> 'Q', unclaimed
     check('UP bound to the fresh key, capture advanced to DOWN',
-          [F.CTRL_KEYS[3][0][0], s.fe.optBinding], ['Q', 1]);
+          [F.CTRL_KEYS[3][0], s.fe.optBinding], ['Q', 1]);
     tap(s, 'Q', 2);                    // DOWN wants UP's OWN new key: SWAP
     check('a key of your own SWAPS instead of refusing: DOWN takes it...',
-          F.CTRL_KEYS[3][0][1], 'Q');
-    check('...UP inherits DOWN\'s old key', F.CTRL_KEYS[3][0][0], 'B');
+          F.CTRL_KEYS[3][1], 'Q');
+    check('...UP inherits DOWN\'s old key', F.CTRL_KEYS[3][0], 'B');
     check('...and capture ADVANCES', s.fe.optBinding, 2);
-    checkTrue('...with no refusal message', s.fe.optBindMsgT === 0);
-    const seen = new Set(F.CTRL_KEYS[3][0]);
+    const seen = new Set(F.CTRL_KEYS[3]);
     check('...and the zone still holds six distinct keys', seen.size, 6);
   }
 
-  /* --- THE FLAGSHIP, in as many words as it was reported: a 2-player
-     game, both on the one keyboard, player 1 on the classic QAOP + SPACE
-     with CAPS for the potion -- ONE pass through capture, from factory
-     defaults, zero refusals.  The first cut could not do this: Q was
-     refused outright (it was UP's own DOWN key), and any key a stale save
-     had left in player 2's zone was refused invisibly. */
+  /* --- THE FLAGSHIP, in as many words as it was reported: the classic
+     QAOP + SPACE with CAPS for the potion -- ONE pass through capture,
+     from factory defaults, zero refusals.  The first cut could not do
+     this: Q was refused outright (it was UP's own DOWN key). */
   {
     G.settings.reset();
     const s = toOptions();
@@ -7517,59 +7368,49 @@ if (process.argv[2] === '--table') {
     tap(s, 'Q', 2); tap(s, 'A', 2); tap(s, 'O', 2);
     tap(s, 'P', 2); tap(s, 'SPACE', 2); tap(s, 'CAPS', 2);
     check('QAOP + SPACE + CAPS lands in ONE pass from the defaults',
-          F.CTRL_KEYS[3][0], ['Q', 'A', 'O', 'P', 'SPACE', 'CAPS']);
+          F.CTRL_KEYS[3], ['Q', 'A', 'O', 'P', 'SPACE', 'CAPS']);
     check('...capture is done', s.fe.optBinding, -1);
-    check('...player 2\'s zone was never touched',
-          F.CTRL_KEYS[3][1], ['8', 'I', 'K', 'L', 'M', 'N']);
     G.settings.reset();
   }
 
   /* --- zonePotion: WHERE the potion comes from, end to end --------------
-     The unconditional $857E/$85A7 CAPS/SPACE reads are the faithful
-     default; a game configured by the streamlined screen gets per-player
-     wiring instead (optFinish() -> feHandover() -> game.reset()), and the
-     difference is exactly the trap the flagship layout above would
-     otherwise spring: with the faithful reads live, player 1's SPACE-fire
-     casts PLAYER 2's magic on every shot. */
+     The unconditional $857E CAPS read is the faithful default; a game
+     configured by the streamlined screen reads the zone's own POTION slot
+     instead (optFinish() -> feHandover() -> game.reset()), and the
+     difference is the trap this closes: with the faithful read live, a
+     player who binds anything onto CAPS casts magic on every press. */
   {
     const DIR_FIRE = G.constants.DIR_FIRE, DIR_POTION = G.constants.DIR_POTION;
     G.game.reset({ zonePotion: true });
-    F.CTRL_KEYS[3][0] = ['Q', 'A', 'O', 'P', 'SPACE', 'X'];
-    F.CTRL_KEYS[3][1] = ['8', 'I', 'K', 'L', 'M', 'N'];
+    F.CTRL_KEYS[3] = ['Q', 'A', 'O', 'P', 'SPACE', 'X'];
     const kb = new F.Keyboard();
     kb.press('SPACE');
-    checkTrue('zonePotion: player 1\'s SPACE-fire fires',
-              !!(F.controlRead(3, 0, kb) & DIR_FIRE));
-    checkTrue('...and does NOT cast player 2\'s magic -- the QAOP trap, closed',
-              !(F.controlRead(3, 1, kb) & DIR_POTION));
+    checkTrue('zonePotion: a SPACE-fire binding fires',
+              !!(F.controlRead(3, kb) & DIR_FIRE));
     kb.releaseAll(); kb.press('X');
     checkTrue('...the zone\'s own POTION slot is what casts now',
-              !!(F.controlRead(3, 0, kb) & DIR_POTION));
+              !!(F.controlRead(3, kb) & DIR_POTION));
     kb.releaseAll(); kb.press('CAPS');
     checkTrue('...and the unconditional CAPS read is off',
-              !(F.controlRead(3, 0, kb) & DIR_POTION));
-    kb.releaseAll(); kb.press('N');
-    checkTrue('...player 2\'s own POTION slot casts for player 2',
-              !!(F.controlRead(3, 1, kb) & DIR_POTION));
+              !(F.controlRead(3, kb) & DIR_POTION));
     const kb2 = new F.Keyboard();
     kb2.kempston = F.KEMPSTON_POTION;
     checkTrue('...and a pad player still gets the pad\'s own potion bit',
-              !!(F.controlRead(1, 0, kb2) & DIR_POTION));
+              !!(F.controlRead(1, kb2) & DIR_POTION));
     G.seed({});                        // back to the faithful default
     const kb3 = new F.Keyboard();
     kb3.press('CAPS');
-    checkTrue('faithful default restored: CAPS is player 1\'s magic again ($857E)',
-              !!(F.controlRead(3, 0, kb3) & DIR_POTION));
-    kb3.releaseAll(); kb3.press('SPACE');
-    checkTrue('...and SPACE is player 2\'s ($85A7)',
-              !!(F.controlRead(3, 1, kb3) & DIR_POTION));
+    checkTrue('faithful default restored: CAPS is the magic key again ($857E)',
+              !!(F.controlRead(3, kb3) & DIR_POTION));
     G.settings.reset();
   }
 
-  /* --- a save from the five-key era migrates cleanly --------------------
-     Old blobs carry five keys per zone (no POTION slot existed).  Loading
-     one restores its five and leaves slot 5 at the shipped default rather
-     than undefined -- controlRead must never see a hole. */
+  /* --- saves migrate cleanly across BOTH eras ---------------------------
+     Legacy blobs differ two ways: five keys per zone (no POTION slot
+     existed), and -- from the two-local-player era -- a PAIR of zones per
+     method, of which the loader takes player 1's own.  Either way slot 5
+     falls back to the shipped default rather than undefined -- controlRead
+     must never see a hole. */
   {
     G.settings.reset();
     sandbox.localStorage.setItem('gauntlet-settings', JSON.stringify({
@@ -7579,51 +7420,44 @@ if (process.argv[2] === '--table') {
              [['7', '6', '5', '8', '0'], ['7', '6', '5', '8', '0']],
              [['W', 'E', 'R', 'T', 'Y'], ['8', 'I', 'K', 'L', 'M']]] }));
     G.settings.load();
-    check('a five-key save restores its five keys',
-          F.CTRL_KEYS[3][0].slice(0, 5), ['W', 'E', 'R', 'T', 'Y']);
+    check('a two-local-player-era five-key save restores PLAYER 1\'s five keys',
+          F.CTRL_KEYS[3].slice(0, 5), ['W', 'E', 'R', 'T', 'Y']);
     check('...and the POTION slot falls back to the default, not a hole',
-          F.CTRL_KEYS[3][0][5], 'CAPS');
-    check('...player 2\'s too', F.CTRL_KEYS[3][1][5], 'N');
-    /* and the CURRENT, six-key shape round-trips -- the shape check must
-       accept both widths, not just the old one. */
+          F.CTRL_KEYS[3][5], 'CAPS');
+    /* and the CURRENT, one-zone six-key shape round-trips -- the shape
+       check must accept both widths, not just the old one. */
     G.settings.reset();
-    F.CTRL_KEYS[3][0] = ['Q', 'A', 'O', 'P', 'SPACE', 'CAPS'];
+    F.CTRL_KEYS[3] = ['Q', 'A', 'O', 'P', 'SPACE', 'CAPS'];
     G.settings.save();
-    F.CTRL_KEYS[3][0] = ['1', 'Q', 'S', 'D', 'Z', 'CAPS'];   // dirty it
+    F.CTRL_KEYS[3] = ['1', 'Q', 'S', 'D', 'Z', 'CAPS'];   // dirty it
     G.settings.load();
     check('a six-key save round-trips whole',
-          F.CTRL_KEYS[3][0], ['Q', 'A', 'O', 'P', 'SPACE', 'CAPS']);
+          F.CTRL_KEYS[3], ['Q', 'A', 'O', 'P', 'SPACE', 'CAPS']);
     /* and a malformed six-wide row for a FAITHFUL five-key method must not
        extend it -- those widths are the original's, not this screen's. */
     sandbox.localStorage.setItem('gauntlet-settings', JSON.stringify({
-      keys: [[['9', '8', '6', '7', '0', 'J'], ['4', '3', '1', '2', '5']],
-             [null, null],
-             [['7', '6', '5', '8', '0'], ['7', '6', '5', '8', '0']],
-             [['1', 'Q', 'S', 'D', 'Z', 'CAPS'], ['8', 'I', 'K', 'L', 'M', 'N']]] }));
+      keys: [['9', '8', '6', '7', '0', 'J'],
+             null,
+             ['7', '6', '5', '8', '0'],
+             ['1', 'Q', 'S', 'D', 'Z', 'CAPS']] }));
     G.settings.load();
     check('a six-wide blob cannot EXTEND a faithful five-key method row',
-          F.CTRL_KEYS[0][0].length, 5);
+          F.CTRL_KEYS[0].length, 5);
     G.settings.reset();
   }
 
   /* --- DEFAULTS restores keys and slowdown ------------------------------ */
   {
     const s = toOptions();
-    F.CTRL_KEYS[3][0][0] = 'N';                     // dirty it first
+    F.CTRL_KEYS[3][0] = 'N';                        // dirty it first
     G.settings.slowdown = false;
     s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'reset');
     tap(s, 'ENTER', 1);
-    check('DEFAULTS restores the key map', F.CTRL_KEYS[3][0][0], '1');
+    check('DEFAULTS restores the key map', F.CTRL_KEYS[3][0], '1');
     checkTrue('...and turns SLOWDOWN back on', G.settings.slowdown === true);
-    check('...and the POTION defaults hold: CAPS for player 1',
-          F.CTRL_KEYS[3][0][5], 'CAPS');
-    /* N, not the faithful SPACE, ON PURPOSE -- see CTRL_KEYS's own comment:
-       a default that parks player 2's potion on SPACE would collide with
-       the classic QAOP + SPACE fire binding out of the box. */
-    check('...and N -- deliberately NOT SPACE -- for player 2',
-          F.CTRL_KEYS[3][1][5], 'N');
-    checkTrue('...and the twelve default keys are all distinct',
-              new Set([...F.CTRL_KEYS[3][0], ...F.CTRL_KEYS[3][1]]).size === 12);
+    check('...and the POTION default holds: CAPS', F.CTRL_KEYS[3][5], 'CAPS');
+    checkTrue('...and the six default keys are all distinct',
+              new Set(F.CTRL_KEYS[3]).size === 6);
   }
 
   /* --- SLOWDOWN is real, and ON by default ------------------------------ */
@@ -7666,56 +7500,28 @@ if (process.argv[2] === '--table') {
               quiet < 5.0001, 'empty room ' + quiet.toFixed(2) + ' frames');
   }
 
-  /* --- START writes exactly what the faithful pickers would have -------- */
-  {
-    const s = toOptions();
-    sandbox.navigator = { getGamepads: () => [
-      { connected: true, id: 'Pad One', axes: [0, 0], buttons: [] },
-      { connected: true, id: 'Pad Two', axes: [0, 0], buttons: [] }] };
-    F.pollGamepads();
-    tap(s, '8', 1);                          // PLAYERS -> 2
-    s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'input' && r.p === 0);
-    tap(s, '8', 1);                          // p1 -> CONTROLLER
-    s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'input' && r.p === 1);
-    tap(s, '8', 1);                          // p2 -> CONTROLLER (a 2nd pad exists)
-    check('both players took CONTROLLER', s.fe.optMethod, [1, 1]);
-    s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'start');
-    const [c0, c1] = s.fe.optChar;
-    tap(s, 'ENTER', 1);
-    check('START copies char/method into the same five bytes the pickers use',
-          [s.fe.FFFF, s.fe.FFFE, s.fe.FFFC, s.fe.FFFB], [c0 & 3, c1 & 3, 1, 1]);
-    checkTrue('...and BOTH on CONTROLLER sets indepGamepads', s.fe.indepOut === true);
-    checkTrue('...and the screen is done (pressplay hands over on the next frame)',
-              s.fe.frame(s.kb, s.ev, s.n));
-    delete sandbox.navigator;
-    F.pollGamepads();
-  }
-  /* one KEYBOARD player and one CONTROLLER must NOT set indepGamepads --
-     that is the faithful SHARED-port case ($856E/$8597 both CALL $8680).
-     This is also the ONLY scenario in this suite where the two players end
-     up on DIFFERENT methods, which matters: optFinish() writes
-     `FFFC = optMethod[0]` and `FFFB = optMethod[1]` in that order, and the
-     "both CONTROLLER" check above cannot tell FFFC and FFFB apart from each
-     other -- optMethod is [1,1] there, so swapping the two assignments
-     would still produce the same bytes and the check would not notice.
-     Mutation-verified: swapping optFinish()'s FFFC/FFFB assignment makes
-     the two checks below fail (they alone did not before this comment was
-     written) while the "both CONTROLLER" one stays green throughout. */
+  /* --- START writes exactly what the faithful pickers would have.
+     Player 1 takes CONTROLLER so FFFC (1) and FFFB (the fixed KEYBOARD 3)
+     hold DIFFERENT values -- a swapped pair of assignments in optFinish()
+     cannot hide behind two equal bytes.  $FFFE is the never-joined player
+     2 block's sprite bank: feDrawP2's guard over the CHAR2_INDEX default
+     (see optFinish's own comment). */
   {
     const s = toOptions();
     sandbox.navigator = { getGamepads: () => [
       { connected: true, id: 'Pad One', axes: [0, 0], buttons: [] }] };
     F.pollGamepads();
-    tap(s, '8', 1);                    // PLAYERS -> 2 -- player 1 stays KEYBOARD
-    s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'input' && r.p === 1);
-    tap(s, '8', 1);                    // player 2 -> CONTROLLER
-    check('mixed methods going in: player 1 keyboard, player 2 controller',
-          s.fe.optMethod, [3, 1]);
+    s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'input' && r.p === 0);
+    tap(s, '8', 1);                          // p1 -> CONTROLLER
+    check('player 1 took CONTROLLER', s.fe.optMethod[0], 1);
     s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'start');
+    const c0 = s.fe.optChar[0];
     tap(s, 'ENTER', 1);
-    check('...and FFFC/FFFB each carry THEIR OWN player\'s method, not swapped',
-          [s.fe.FFFC, s.fe.FFFB], [3, 1]);
-    checkTrue('keyboard + controller does NOT set indepGamepads', s.fe.indepOut === false);
+    check('START copies char/method into the same five bytes the pickers use',
+          [s.fe.FFFF, s.fe.FFFE, s.fe.FFFC, s.fe.FFFB],
+          [c0 & 3, F.feDrawP2(c0, F.GATE_CONFIG.char2), 1, 3]);
+    checkTrue('...and the screen is done (pressplay hands over on the next frame)',
+              s.fe.frame(s.kb, s.ev, s.n));
     delete sandbox.navigator;
     F.pollGamepads();
   }
@@ -7736,63 +7542,28 @@ if (process.argv[2] === '--table') {
     }
     checkTrue('the LIVE front end (what the page actually runs) also reaches options',
               F.live.phase === 'options');
-    sandbox.navigator = { getGamepads: () => [
-      { connected: true, id: 'Pad One', axes: [0, 0], buttons: [] },
-      { connected: true, id: 'Pad Two', axes: [0, 0], buttons: [] }] };
-    F.pollGamepads();
     const tapLive = (key, frames) => { for (let i = 0; i < (frames || 2); i++){
         kb.press(key); F.live.frame(kb, [], n++); }
       for (let i = 0; i < 3; i++){ kb.releaseAll(); F.live.frame(kb, [], n++); } };
-    tapLive('8', 1);                                      // PLAYERS -> 2
-    F.live.optSel = F.live.optRows().findIndex(r => r.k === 'input' && r.p === 0);
-    tapLive('8', 1);
-    F.live.optSel = F.live.optRows().findIndex(r => r.k === 'input' && r.p === 1);
-    tapLive('8', 1);
     F.live.optSel = F.live.optRows().findIndex(r => r.k === 'start');
     tapLive('ENTER', 1);
     checkTrue('the live front end is done', F.live.done);
     F.feHandover();
-    checkTrue('feHandover() carries indepOut into the module flag',
-              F.indepGamepads === true);
-    /* zonePotion rides the same wire (optFinish -> feHandover -> reset):
-       a game configured by THIS screen never has the unconditional
-       CAPS/SPACE magic reads.  Probe with SPACE -> player 2: under the
-       faithful default $85A7 would set DIR_POTION here; under zonePotion
-       player 2's potion is his zone's own slot (default N), so SPACE must
-       do nothing for him.  (CAPS -> player 1 would NOT discriminate:
-       CAPS is player 1's zone-potion DEFAULT, so it casts either way.) */
+    /* zonePotion rides the wire (optFinish -> feHandover -> reset): a
+       game configured by THIS screen never has the unconditional CAPS
+       magic read.  CAPS alone cannot discriminate (it is also the potion
+       slot's DEFAULT, so it casts either way) -- park potion on X first:
+       CAPS must then cast nothing, and X must cast. */
+    F.CTRL_KEYS[3] = ['1', 'Q', 'S', 'D', 'Z', 'X'];
     const kbz = new F.Keyboard();
-    kbz.press('SPACE');
-    checkTrue('...and zonePotion rides it too: SPACE is no longer player 2\'s magic',
-              !(F.controlRead(3, 1, kbz) & G.constants.DIR_POTION));
-    delete sandbox.navigator;
-    F.pollGamepads();
+    kbz.press('CAPS');
+    checkTrue('...and zonePotion rides it too: the unconditional CAPS read is off',
+              !(F.controlRead(3, kbz) & G.constants.DIR_POTION));
+    kbz.releaseAll(); kbz.press('X');
+    checkTrue('...while the zone\'s own POTION slot casts',
+              !!(F.controlRead(3, kbz) & G.constants.DIR_POTION));
+    G.settings.reset();
     G.seed({});                              // back to the gate baseline
-  }
-
-  /* --- indepGamepads' own dispatch, independent of the screen -----------
-     G.seed(s) is a test convenience that calls game.reset() with NO
-     arguments and then pokes a fixed whitelist of fields (char, char2, x,
-     y, camX, camY, map, pass) onto the result -- it does not forward
-     arbitrary cfg through to reset(), so indepGamepads (like method1/2 and
-     buildSeed) has to go through game.reset() itself to be set. */
-  {
-    G.game.reset({ indepGamepads: true });
-    checkTrue('cfg.indepGamepads reaches the module flag via reset()',
-              F.indepGamepads === true);
-    const kb = new F.Keyboard();
-    kb.kempston = 0x08; kb.kempston2 = 0x01;      // up vs right, so they cannot be confused
-    check('player 2 (who=1) reads kempston2 when indepGamepads is true',
-          F.controlRead(1, 1, kb) & G.constants.DIR_RIGHT, G.constants.DIR_RIGHT);
-    check('...and NOT kempston', F.controlRead(1, 1, kb) & G.constants.DIR_UP, 0);
-    check('player 1 (who=0) still reads kempston regardless',
-          F.controlRead(1, 0, kb) & G.constants.DIR_UP, G.constants.DIR_UP);
-    G.seed({});
-    checkTrue('...and the default (a fresh game) is the faithful shared port',
-              F.indepGamepads === false);
-    kb.kempston = 0x08; kb.kempston2 = 0x01;
-    check('...so player 2 reads the SHARED kempston again',
-          F.controlRead(1, 1, kb) & G.constants.DIR_UP, G.constants.DIR_UP);
   }
 
   /* --- POTION on a gamepad -- ADDED, the real Kempston port has no button
@@ -7823,12 +7594,12 @@ if (process.argv[2] === '--table') {
     const kb2 = new F.Keyboard();
     kb2.kempston = F.KEMPSTON_POTION;
     checkTrue('KEMPSTON reads potion off the pad bit',
-              !!(F.controlRead(1, 0, kb2) & DIR_POTION));
+              !!(F.controlRead(1, kb2) & DIR_POTION));
     for (const m of [0, 2, 3])
       checkTrue('method ' + m + ' ignores kb.kempston entirely (it never did)',
-                !(F.controlRead(m, 0, kb2) & DIR_POTION));
+                !(F.controlRead(m, kb2) & DIR_POTION));
     checkTrue('...and KEMPSTON with the bit clear does not fire it either',
-              !(F.controlRead(1, 0, new F.Keyboard()) & DIR_POTION));
+              !(F.controlRead(1, new F.Keyboard()) & DIR_POTION));
   }
 }
 

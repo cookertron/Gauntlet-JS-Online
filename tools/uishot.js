@@ -153,12 +153,11 @@ function optShot(name, setup){
 /* the ACTUAL boot state: untouched, 1 player, cursor on PLAYERS */
 optShot('options-default.png', null);
 
-/* two players, still on the keyboard -- the rebind row visible for each */
-optShot('options-keyboard.png', fe => {
-  fe.optSel = fe.optRows().findIndex(r => r.k === 'players');
-  // step to 2 players the same way a real keypress would
-  fe.frame(Object.assign(new F.Keyboard(), {held: new Set(['8'])}), [], 99999);
-  fe.optSel = fe.optRows().findIndex(r => r.k === 'char' && r.p === 1);
+/* mid-rebind: capture waiting on a key, the guided footer up */
+optShot('options-rebind.png', fe => {
+  fe.optSel = fe.optRows().findIndex(r => r.k === 'rebind');
+  // activate REBIND the same way a real ENTER press would
+  fe.frame(Object.assign(new F.Keyboard(), {held: new Set(['ENTER'])}), [], 99999);
 });
 
 /* a connected gamepad offered and taken for player 1 */

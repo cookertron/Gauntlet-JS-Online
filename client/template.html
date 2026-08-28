@@ -565,7 +565,7 @@ const CHAR_MENU_DEFAULT = 0;                       // the warrior
    level 9 came out the same way up every single game; on a real machine it is
    one of four. */
 const GATE_CONFIG = {char: 3, char2: 1, method1: 3, method2: 3,
-                     buildSeed: 0x13579BDF, indepGamepads: false};
+                     buildSeed: 0x13579BDF};
 /* A FRESH one for a real game.  The shipped page has Date and performance;
    the headless sandbox has NEITHER, and has to stay reproducible anyway --
    so falling back to the constant there is not a compromise, it is what every
@@ -601,16 +601,14 @@ const CHAR_RAW = [0x20, 0x20];                     // what the capture holds
 
    The STREAMLINED options screen (the one that actually ships) is a
    SECOND, later consumer that is not faithful in the first place, so
-   $C43F is not what it owes fidelity to: FrontEnd.reset() seeds player 2's
-   DEFAULT shown character from this constant (falling forward one slot
-   only if that would collide with player 1's own default), and a player
-   who sets PLAYERS to 2 and presses START without touching PLAYER 2's row
-   gets it -- deterministically, every time, not 1-in-3.  That is a
-   DELIBERATE product choice (a stable, reviewable default beats a hidden
-   coin flip on a screen the player can see), not a reproduction of $C43F,
-   and nothing pins it down as a test invariant: change it and every one
-   of the 1100+ headless checks still passes, because the picked index
-   is presentation, not simulation. */
+   $C43F is not what it owes fidelity to: with one LOCAL player left
+   (online fork), optFinish() derives $FFFE from this constant through
+   feDrawP2's own guard -- CHAR2_INDEX, falling forward one slot if that
+   collides with player 1's pick -- deterministically, every time, not
+   1-in-3.  That is a DELIBERATE product choice (a stable, reviewable
+   default beats a hidden coin flip), not a reproduction of $C43F, and
+   nothing pins it down as a test invariant: the byte only ever names the
+   sprite bank the never-joined player 2 block loads (see readKeys). */
 const CHAR2_INDEX = GATE_CONFIG.char2;             // the valkyrie
 
 /* $7D34 -- six 8-byte records, of which six bytes each are used.  $AB6F does
@@ -2311,20 +2309,10 @@ const KB_HALFROWS = [
    VIEW and not the state, but the decode is kept so a reader can check any
    (IX+r) bit in this file against the machine. */
 class Keyboard {
-  /* `kempston2` is an ADDED capability, not a ported one: the original has
-     exactly one Kempston port, so two Kempston-selected players SHARE
-     `kempston` there ($856E/$8597 both CALL $8680, reproduced below).  A
-     second independent gamepad has nowhere to plug into the original at
-     all, so it gets its own field.  pollGamepads() FEEDS it whenever a
-     second pad is physically connected, regardless of what either player
-     has chosen -- the CHOICE is gated on the read side, not the feed: see
-     `indepGamepads` at controlRead(), which is what decides whether
-     player 2 is ever actually given this field instead of the shared
-     `kempston` one. */
-  constructor(){ this.held = new Set(); this.kempston = 0; this.kempston2 = 0; }
+  constructor(){ this.held = new Set(); this.kempston = 0; }
   press(k){ this.held.add(k); }
   release(k){ this.held.delete(k); }
-  releaseAll(){ this.held.clear(); this.kempston = 0; this.kempston2 = 0; }
+  releaseAll(){ this.held.clear(); this.kempston = 0; }
   down(k){ return this.held.has(k); }
   /* $C8EA -- one half-row as the front end sees it. */
   halfrow(r){
@@ -2378,24 +2366,22 @@ const FE_ENTER = [6, 0];
      $857E  BIT 0,(IY+0)  CAPS SHIFT -> OR $20 -> ($8427)   player 1
      $85A7  BIT 0,(IY+7)  SPACE      -> OR $20 -> ($8447)   player 2       */
 const CTRL_KEMPSTON = 1;
-/* [up, down, left, right, fire] per method per player; the Kempston arm has
-   no key list because it reads a port.  The KEYBOARD rows carry a SIXTH,
-   ADDED slot -- POTION -- which only exists for the rebindable method (the
-   original has no such binding anywhere; magic is $857E/$85A7's fixed
-   CAPS/SPACE, outside the dispatch).  Player 1's default is CAPS, the same
-   key the faithful read uses.  Player 2's default is N, NOT the faithful
-   SPACE -- deliberately, because SPACE is the single most-wanted FIRE
-   binding of the whole Spectrum era (QAOP + SPACE), and a default that
-   parks player 2's potion on it would make the classic layout collide out
-   of the box.  The faithful SPACE behaviour is untouched on the faithful
-   path -- see zonePotion below. */
+/* [up, down, left, right, fire] per method; the Kempston arm has no key
+   list because it reads a port.  ONLINE FORK: one LOCAL player, so ONE
+   zone per method -- these are the original's PLAYER 1 tables ($85B3;
+   player 2's own rows live on in the faithful build and in
+   notes/NOTES-engine.md, and a remote player's zones are his own
+   client's business).  The KEYBOARD row carries a SIXTH, ADDED slot --
+   POTION -- which only exists for the rebindable method (the original
+   has no such binding anywhere; magic is $857E's fixed CAPS, outside
+   the dispatch, and CAPS is also this slot's default). */
 const CTRL_KEYS = [
-  [['9', '8', '6', '7', '0'], ['4', '3', '1', '2', '5']],           // 0 SINCLAIR
-  [null, null],                                                     // 1 KEMPSTON
-  [['7', '6', '5', '8', '0'], ['7', '6', '5', '8', '0']],           // 2 PROTEK, shared
-  [['1', 'Q', 'S', 'D', 'Z', 'CAPS'], ['8', 'I', 'K', 'L', 'M', 'N']], // 3 KEYBOARD
+  ['9', '8', '6', '7', '0'],                 // 0 SINCLAIR
+  null,                                      // 1 KEMPSTON
+  ['7', '6', '5', '8', '0'],                 // 2 PROTEK
+  ['1', 'Q', 'S', 'D', 'Z', 'CAPS'],         // 3 KEYBOARD
 ];
-const CTRL_MAGIC = ['CAPS', 'SPACE'];       // $857E / $85A7
+const CTRL_MAGIC = 'CAPS';                  // $857E, outside the dispatch
 /* $8680 -- IN A,($1F), ACTIVE HIGH, standard Kempston bit order.  Measured
    $01->$08 $02->$04 $04->$02 $08->$01 $10->$10 on ($8427). */
 const KEMPSTON_MAP = [[0x01, DIR_RIGHT], [0x02, DIR_LEFT], [0x04, DIR_DOWN],
@@ -2410,17 +2396,6 @@ const KEMPSTON_MAP = [[0x01, DIR_RIGHT], [0x02, DIR_LEFT], [0x04, DIR_DOWN],
    button of his own for it or he cannot use potions at all.  padBits()
    sets this bit; nothing on the real hardware ever will. */
 const KEMPSTON_POTION = 0x20;
-/* ADDED, not ported: true only when the options screen gave the two players
-   two SEPARATE gamepads.  Default false, which is the faithful case -- both
-   Kempston-selected players read the one shared `kempston` byte, exactly as
-   $856E/$8597 do -- and every EXISTING gate and headless check outside
-   tools/headless.js's own "THE OPTIONS SCREEN" / "indepGamepads' own
-   dispatch" sections runs with it false.  Those two sections drive it true
-   deliberately, to check the dispatch this flag makes: with it true,
-   player 2 (who === 1) reads `kempston2` instead, because a second gamepad
-   has no address on the original hardware, so it cannot be a mode of
-   `method`, only a separate wire tapped in beside it. */
-let indepGamepads = false;
 /* THE THIRD DEPARTURE, same faithful/added boundary as FAITHFUL_TAPE_PROMPTS
    and STREAMLINED_FRONTEND up in the front end, but the DECISION runs the
    other way: this one starts FALSE, off by default, because keeping it on
@@ -2439,39 +2414,42 @@ let indepGamepads = false;
 let FAITHFUL_SYM_CHEAT = false;
 /* ADDED, not ported: WHERE the potion comes from.  False -- the default,
    and what every gate and headless check outside its own tests runs with --
-   is the faithful wiring: $857E/$85A7 read CAPS (player 1) and SPACE
-   (player 2) unconditionally, OUTSIDE the method dispatch, so those two
-   keys cast magic no matter what either player is doing or holding them
-   for.  True -- set only by the streamlined options screen's handover
-   (optFinish() -> feHandover(), the same wire indepGamepads rides) -- each
-   player's potion comes from THEIR OWN input path instead: a KEYBOARD
-   player reads the sixth, rebindable slot of their own zone (see
-   CTRL_KEYS), a CONTROLLER player reads the pad's own potion bit (see
-   KEMPSTON_POTION), and the unconditional CAPS/SPACE reads are OFF.
-   Why it exists at all: with the unconditional reads live, a player who
-   binds FIRE to SPACE -- the single most classic Spectrum layout there is,
-   QAOP + SPACE -- casts PLAYER 2's magic on every shot, and a player 2 who
-   binds anything to CAPS casts player 1's.  Those were documented as
-   accepted quirks while potion had no binding of its own to move to; once
-   it does, they stop being quirks and start being traps, so the streamlined
-   screen turns them off wholesale.  Reported as the port's whole purpose:
-   keep the game intact, modernise how you reach it. */
+   is the faithful wiring: $857E reads CAPS unconditionally, OUTSIDE the
+   method dispatch, so that key casts magic no matter what the player is
+   doing or holding it for.  ($85A7's matching SPACE read was player 2's;
+   it left with local player 2 -- a remote player's magic is his own
+   client's read.)  True -- set only by the streamlined options screen's
+   handover (optFinish() -> feHandover()) -- the potion comes from the
+   player's OWN input path instead: a KEYBOARD player reads the sixth,
+   rebindable slot of the zone (see CTRL_KEYS), a CONTROLLER player reads
+   the pad's own potion bit (see KEMPSTON_POTION), and the unconditional
+   CAPS read is OFF.  Why it exists at all: with the unconditional read
+   live, a player who binds anything to CAPS casts magic on every press
+   of it.  That was documented as an accepted quirk while potion had no
+   binding of its own to move to; once it does, it stops being a quirk
+   and starts being a trap, so the streamlined screen turns it off
+   wholesale.  Reported as the port's whole purpose: keep the game
+   intact, modernise how you reach it. */
 let zonePotion = false;
-function controlRead(method, who, kb){
+/* THE LOCAL PLAYER'S direction byte (bits: up/down/left/right/fire/potion,
+   see DIR_*).  One reader, one player: the `who` parameter left with local
+   player 2 -- a remote player's byte arrives over the wire, it is not read
+   from this keyboard. */
+function controlRead(method, kb){
   let d = 0;
   const m = method & 3;
   if (m === CTRL_KEMPSTON){
-    const v = (who === 1 && indepGamepads) ? kb.kempston2 : kb.kempston;
+    const v = kb.kempston;
     for (const km of KEMPSTON_MAP) if (v & km[0]) d |= km[1];
     if (v & KEMPSTON_POTION) d |= DIR_POTION;   // ADDED -- see KEMPSTON_POTION
   } else {
-    const k = CTRL_KEYS[m][who];
+    const k = CTRL_KEYS[m];
     if (kb.down(k[0])) d |= DIR_UP;      if (kb.down(k[1])) d |= DIR_DOWN;
     if (kb.down(k[2])) d |= DIR_LEFT;    if (kb.down(k[3])) d |= DIR_RIGHT;
     if (kb.down(k[4])) d |= DIR_FIRE;
     if (zonePotion && k[5] && kb.down(k[5])) d |= DIR_POTION;  // ADDED -- see zonePotion
   }
-  if (!zonePotion && kb.down(CTRL_MAGIC[who])) d |= DIR_POTION;  // $857E / $85A7, faithful
+  if (!zonePotion && kb.down(CTRL_MAGIC)) d |= DIR_POTION;  // $857E, faithful
   return d;
 }
 
@@ -2803,21 +2781,17 @@ class FrontEnd {
     this.FFFC = 0x2A; this.FFFB = 0x2A;
     this.done = false;
     /* ---- THE OPTIONS SCREEN (ADDED; see STREAMLINED_FRONTEND) ---------
-       Reuses `this.players` above.  optChar/optMethod hold what the two
-       pickers and two control questions would have; optFinish() copies
-       them into $FFFF/$FFFE/$FFFC/$FFFB exactly as those did, so nothing
-       downstream of 'pressplay' has to know this screen exists. */
+       optChar/optMethod hold what the picker and the control question
+       would have; optFinish() copies them into $FFFF/$FFFE/$FFFC/$FFFB
+       exactly as those did, so nothing downstream of 'pressplay' has to
+       know this screen exists.  One element each: the screen configures
+       the ONE local player (see optRows). */
     this.optSel = 0;
-    this.optChar = [this.cursor,
-                     this.cursor === CHAR2_INDEX ? (CHAR2_INDEX + 1) & 3 : CHAR2_INDEX];
-    this.optMethod = [3, 3];          // KEYBOARD, KEYBOARD -- GATE_CONFIG's own pair
+    this.optChar = [this.cursor];
+    this.optMethod = [3];             // KEYBOARD -- GATE_CONFIG's own default
     this.optBinding = -1;             // -1 idle, else 0..5 = UI_DIRS index mid-capture
-    this.optBindPlayer = 0;
     this.optBindReady = false;
-    this.optBindMsg = '';             // why the last press was refused, for the footer
-    this.optBindMsgT = 0;             // frames left to show it
     this.optEdge = {};                // previous-frame nav state, for edge detection
-    this.indepOut = false;            // see optFinish() / indepGamepads
     this.zoneOut = false;             // see optFinish() / zonePotion
     this.enter(FAITHFUL_TAPE_PROMPTS ? 'stoptape' : 'loading');
   }
@@ -3147,8 +3121,8 @@ class FrontEnd {
 
   /* =====================================================================
      THE OPTIONS SCREEN -- ADDED, not ported.  See STREAMLINED_FRONTEND.
-     PLAYERS / PLAYER 1 / [PLAYER 2] / two control-method questions,
-     collapsed into one screen, in KEYBOARD/CONTROLLER terms.  Navigation
+     PLAYER 1 and his control method, collapsed into one screen, in
+     KEYBOARD/CONTROLLER terms.  Navigation
      reuses the Spectrum's own cursor keys, 5/8/6/7 (see KEYMAP), for
      movement, plus ENTER of its own for confirm -- see FE_ENTER, not
      FE_SPACE -- so it needs no control method of its OWN to be usable,
@@ -3165,69 +3139,57 @@ class FrontEnd {
     return cls ? {text: String.fromCharCode(...cls.codes), ink: cls.ink}
                : {text: ['WARRIOR', 'VALKYRIE', 'WIZARD', 'ELF'][idx], ink: 0x47};
   }
-  /* Can player `p` be offered CONTROLLER right now?  Player 1 just needs a
-     pad.  Player 2 needs a SECOND, independent one only if player 1 is
-     ALSO on a controller -- otherwise he can share pad 0 with a keyboard
-     player exactly the way $856E/$8597 always could. */
-  canController(p){
-    if (p === 0) return padStatus.count >= 1;
-    return this.optMethod[0] === 1 ? padStatus.count >= 2 : padStatus.count >= 1;
-  }
-  padNameFor(p){
-    const idx = (p === 1 && this.optMethod[0] === 1) ? 1 : 0;
-    return padStatus.names[idx] || 'NONE';
-  }
+  /* Can the player be offered CONTROLLER right now?  He just needs a pad. */
+  canController(){ return padStatus.count >= 1; }
+  padNameFor(){ return padStatus.names[0] || 'NONE'; }
   /* `group` is RENDER-ONLY: optRender() opens a blank gap line between two
-     rows whose group differs, so the whole screen reads as sections
-     (PLAYERS, then each player's own block, then the rest) rather than one
-     dense list.  Navigation ignores it entirely -- optSel indexes THIS
-     array, gaps are never a selectable position. */
+     rows whose group differs, so the whole screen reads as sections (the
+     player's own block, then the rest) rather than one dense list.
+     Navigation ignores it entirely -- optSel indexes THIS array, gaps are
+     never a selectable position. */
   optRows(){
-    const rows = [{k: 'players', group: 'top', label: 'PLAYERS', value: () => String(this.players)}];
+    /* ONLINE FORK: one LOCAL player, so one player block and no PLAYERS
+       row.  Remote players will be configured by their own clients; this
+       screen only ever asks about the person at THIS keyboard. */
+    const rows = [];
     const push = p => {
       const group = 'p' + p;
       rows.push({k: 'char', p, group, label: 'PLAYER ' + (p + 1),
                  value: () => this.charInfo(p).text, attr: () => this.charInfo(p).ink});
-      rows.push({k: 'input', p, group, label: (p === 0 ? 'P1' : 'P2') + ' INPUT',
+      rows.push({k: 'input', p, group, label: 'P1 INPUT',
                  value: () => this.optMethod[p] === 1 ? 'CONTROLLER' : 'KEYBOARD'});
       if (this.optMethod[p] === 1)
-        rows.push({k: 'pad', p, group, label: (p === 0 ? 'P1' : 'P2') + ' PAD',
-                   value: () => this.padNameFor(p)});
+        rows.push({k: 'pad', p, group, label: 'P1 PAD',
+                   value: () => this.padNameFor()});
       else
         rows.push({k: 'rebind', p, group, label: '', value: () => 'REBIND KEYS'});
     };
     push(0);
-    if (this.players === 2) push(1);
     rows.push({k: 'slow', group: 'misc', label: 'SLOWDOWN', value: () => (loadSlowdown ? 'ON' : 'OFF')});
     rows.push({k: 'reset', group: 'misc', label: 'DEFAULTS', value: () => ''});
     rows.push({k: 'start', group: 'start', label: '', value: () => 'START GAME'});
     return rows;
   }
-  optOtherChar(p, d){
-    const other = this.players === 2 ? this.optChar[1 - p] : -1;
-    let v = this.optChar[p];
-    do { v = (v + d + 4) & 3; } while (v === other);
-    return v;
-  }
-  optToggleInput(p){
-    const want = this.optMethod[p] === 3 ? 1 : 3;      // KEYBOARD(3) <-> KEMPSTON(1)
-    if (want === 1 && !this.canController(p)) return;  // no pad to give it -- refuse
-    this.optMethod[p] = want;
+  optToggleInput(){
+    const want = this.optMethod[0] === 3 ? 1 : 3;      // KEYBOARD(3) <-> KEMPSTON(1)
+    if (want === 1 && !this.canController()) return;   // no pad to give it -- refuse
+    this.optMethod[0] = want;
   }
   optStep(r, d){
-    if (r.k === 'players'){ this.players = this.players === 1 ? 2 : 1; this.optSel = 0; return; }
-    if (r.k === 'char'){ this.optChar[r.p] = this.optOtherChar(r.p, d); return; }
-    if (r.k === 'input'){ this.optToggleInput(r.p); return; }
+    /* the single player cycles all FOUR characters freely -- the old
+       exclusion only ever protected the other LOCAL player's pick, and
+       there is no other local player any more. */
+    if (r.k === 'char'){ this.optChar[0] = (this.optChar[0] + d + 4) & 3; return; }
+    if (r.k === 'input'){ this.optToggleInput(); return; }
     if (r.k === 'slow'){ loadSlowdown = !loadSlowdown; return; }
   }
   optActivate(r){
     if (r.k === 'rebind'){
-      this.optBinding = 0; this.optBindPlayer = r.p; this.optBindReady = false;
-      this.optBindMsgT = 0; return;
+      this.optBinding = 0; this.optBindReady = false; return;
     }
     if (r.k === 'reset'){ settingsReset(); return; }
     if (r.k === 'start'){ this.optFinish(); return; }
-    this.optStep(r, 1);                 // players/char/input/slow: ENTER also advances
+    this.optStep(r, 1);                 // char/input/slow: ENTER also advances
   }
   /* Guided, six keys in order (UI_DIRS -- up, down, left, right, fire and
      POTION, the sixth slot ADDED alongside zonePotion): whichever
@@ -3235,31 +3197,19 @@ class FrontEnd {
      ENTER is the only reserved key -- it is this screen's own confirm (see
      FE_ENTER) and SKIPS the slot instead of binding it, keeping the old
      key.
-     Reported requirement, round two: EVERY key bindable, for BOTH players,
-     and never a refusal the player can't understand.  The first cut
-     refused any key found anywhere in either player's CURRENT zone, and
-     play found both ways that goes wrong:
-       * your OWN current keys blocked you -- UP could not take Q while Q
-         still sat in DOWN's slot, so the classic QAOP layout was
-         unreachable from the defaults in a single pass;
-       * the OTHER player's zone blocked you INVISIBLY -- zones persist in
-         localStorage (settingsSave) across sessions, the screen displays
-         them nowhere, so a key some past session left in player 2's zone
-         refused player 1 with no way to even discover why.  Reported from
-         play as "O and P aren't available for some reason", which is
-         exactly what it looked like from the chair.
-     So capture now distinguishes the two cases instead of lumping them:
-       * a key of YOUR OWN, sitting in another slot, SWAPS -- that slot
-         inherits this slot's old key, the zone stays six distinct keys at
-         every step, and nothing is ever refused: rearranging your own
-         keys is not a conflict.
-       * a key in the OTHER player's zone is the one TRUE conflict -- one
-         physical key cannot drive two players, because a shared keyboard
-         cannot say whose finger pressed it -- and it is refused WITH THE
-         REASON ON SCREEN (optBindMsg, drawn in the footer): capture stays
-         on the same slot and names the player who owns the key.  Still
-         checked regardless of that player's current method (he can switch
-         to KEYBOARD after the clash was saved), but never silently again.
+     Reported requirement, round two: EVERY key bindable, and never a
+     refusal the player can't understand.  The first cut refused any key
+     found anywhere in the CURRENT zone, and play found how that goes
+     wrong: your OWN current keys blocked you -- UP could not take Q while
+     Q still sat in DOWN's slot, so the classic QAOP layout was
+     unreachable from the defaults in a single pass.  So a key of your
+     own, sitting in another slot, SWAPS instead -- that slot inherits
+     this slot's old key, the zone stays six distinct keys at every step,
+     and nothing is ever refused.  (ONLINE FORK: the one TRUE conflict
+     this screen used to police -- a key in the OTHER player's zone, one
+     physical key unable to drive two players -- left with the second
+     LOCAL player, and the whole refusal arm, optBindMsg and its footer
+     message went with it.  Remote players bring their own keyboards.)
      The reservation history, for the record: SPACE was freed by moving
      this screen's confirm onto ENTER (see FE_ENTER); SYM by turning the
      $A84D walk-through-walls cheat off by default (FAITHFUL_SYM_CHEAT);
@@ -3284,31 +3234,32 @@ class FrontEnd {
     if (held.size === 0) return;        // ready, but nothing pressed yet
     let got = null;
     for (const k of held){ got = k; break; }
-    const keys = CTRL_KEYS[3][this.optBindPlayer];
-    const other = CTRL_KEYS[3][1 - this.optBindPlayer];
+    const keys = CTRL_KEYS[3];
     if (got === 'ENTER'){                       // reserved: skip, keep the old key
-      this.optBinding++; this.optBindMsgT = 0;
-    } else if (other && other.includes(got)){   // the one true conflict
-      this.optBindMsg = 'PLAYER ' + (2 - this.optBindPlayer) + ' HAS THAT KEY';
-      this.optBindMsgT = 150;                   // ~3 seconds; stays on this slot
+      this.optBinding++;
     } else if (keys){
       const j = keys.indexOf(got);              // ours already?  SWAP, never refuse
       if (j >= 0 && j !== this.optBinding) keys[j] = keys[this.optBinding];
       keys[this.optBinding] = got;
-      this.optBinding++; this.optBindMsgT = 0;
+      this.optBinding++;
     }
     if (this.optBinding >= UI_DIRS.length){ this.optBinding = -1; settingsSave(); }
     this.optBindReady = false;          // now wait for THIS key's release
   }
   optFinish(){
     this.FFFF = this.optChar[0] & 3;
-    this.FFFE = this.optChar[1] & 3;
+    /* $FFFE -- player 2's character.  His block still exists (never in
+       the game until a REMOTE player's FIRE arrives -- see readKeys) and
+       $BE64 still loads a sprite bank for it, so the byte must hold a
+       valid index that is not player 1's.  feDrawP2 applied to the
+       CHAR2_INDEX constant is exactly the default rule this screen always
+       used: CHAR2_INDEX, falling forward one slot on a collision. */
+    this.FFFE = feDrawP2(this.optChar[0], CHAR2_INDEX);
     this.FFFC = this.optMethod[0] & 3;
-    this.FFFB = this.optMethod[1] & 3;
-    /* independent controllers only when BOTH players are actually on one --
-       one player on KEYBOARD sharing method 1 with the other is the
-       faithful shared-port case and indepGamepads must stay false for it. */
-    this.indepOut = (this.optMethod[0] === 1 && this.optMethod[1] === 1);
+    /* $FFFB -- player 2's method.  Local input never reads it any more
+       (readKeys wires only player 1); the byte stays in the five-byte
+       contract at the old KEYBOARD default. */
+    this.FFFB = 3;
     /* a game configured through THIS screen always gets the per-player
        potion wiring -- see zonePotion.  The faithful front end never sets
        this, so its handover keeps the faithful CAPS/SPACE reads. */
@@ -3325,24 +3276,10 @@ class FrontEnd {
        many browsers withhold a gamepad from navigator.getGamepads() until
        one of its buttons is pressed), and a pad can be unplugged mid-
        screen.  Either way, reaching START with (IX+14)-style CONTROLLER
-       set and nothing feeding kempston/kempston2 would leave that player
-       unable to move for the whole game with no way back in -- the
-       mid-game panel that could once reconfigure this is gone.
-       Symmetric for BOTH players on purpose: an earlier version of this
-       screen made player 2 controller-only, reasoning that CAPS (his
-       binding it would cast PLAYER 1's magic) needed that to be safe.
-       That reasoning didn't hold up -- it's the exact mirror of SPACE
-       binding into player 1's zone casting PLAYER 2's magic, which this
-       screen already accepts as a documented quirk (see optCaptureFrame's
-       own comment) -- and being controller-only left player 2 with no
-       valid method at all whenever player 1 took the only pad, or when no
-       pad existed and player 1 stayed on the keyboard.  Two keyboard
-       players sharing the one keyboard through their own disjoint zones
-       is exactly what the original hardware already supports; the real
-       safety net is the rebind-collision check against an ACTUAL
-       duplicate key, not a method restriction. */
-    for (const p of [0, 1])
-      if (this.optMethod[p] === 1 && !this.canController(p)) this.optMethod[p] = 3;
+       set and nothing feeding kempston would leave the player unable to
+       move for the whole game with no way back in -- the mid-game panel
+       that could once reconfigure this is gone. */
+    if (this.optMethod[0] === 1 && !this.canController()) this.optMethod[0] = 3;
     /* pad 0 only, for MENU navigation -- no player has a controller
        assigned yet, so there is no "which pad is player 2's" to ask. */
     const padv = (padStatus.bits && padStatus.bits[0]) || 0;
@@ -3356,7 +3293,6 @@ class FrontEnd {
     const pressed = k => now[k] && !this.optEdge[k];
     if (this.optBinding >= 0){
       this.optCaptureFrame();
-      if (this.optBindMsgT > 0) this.optBindMsgT--;   // the refusal reason fades
       this.optEdge = now;
       return;
     }
@@ -3382,12 +3318,10 @@ class FrontEnd {
   /* THE WHOLE PLAYING FIELD, not a small centred box: a small box left the
      title screen showing round the edges (a nice throwback) but squeezed
      the rows tight enough to read as one cluttered block.  Full screen buys
-     the room for a blank line between sections (PLAYERS, each player's own
-     block, the rest) and for a corner preview PER PLAYER -- each one's own
-     in-game sprite (see drawCharPreview), turning and walking slowly, its
-     top aligned with that player's own PLAYER 1/PLAYER 2 row, not the
-     screen's -- so with two players up, both sprites are on screen at once,
-     not one that swaps when the cursor moves between them. */
+     the room for a blank line between sections (the player's own block,
+     then the rest) and for a corner preview -- the player's own in-game
+     sprite (see drawCharPreview), turning and walking slowly, its top
+     aligned with the PLAYER 1 row, not the screen's. */
   /* THE LAYOUT, as data -- kept separate from optRender()'s drawing so
      tools/headless.js can check the ROW MATH (does a group boundary really
      skip a line, does nothing overlap a preview's rows) directly, rather
@@ -3426,13 +3360,12 @@ class FrontEnd {
       group = r.group;
       return {r, i, y: y++};
     });
-    /* one preview per ACTIVE player, top-aligned with that player's own
-       PLAYER n row -- not the screen's top, and not "whichever the cursor
-       is near". */
+    /* the player's own preview, top-aligned with his PLAYER 1 row -- not
+       the screen's top, and not "wherever the cursor is". */
     const previews = [];
-    for (let p = 0; p < this.players; p++){
-      const it = items.find(it => it.r.k === 'char' && it.r.p === p);
-      if (it) previews.push({p, y: it.y});
+    {
+      const it = items.find(it => it.r.k === 'char');
+      if (it) previews.push({p: 0, y: it.y});
     }
     for (const it of items)
       it.narrow = previews.some(pv => it.y >= pv.y && it.y < pv.y + PH);
@@ -3474,7 +3407,7 @@ class FrontEnd {
       const sel = i === this.optSel;
       if (sel) uiBits(ctx, UI_ARROW, col + 1, y, UI_ATTR);
       let text;
-      if (this.optBinding >= 0 && r.k === 'rebind' && r.p === this.optBindPlayer)
+      if (this.optBinding >= 0 && r.k === 'rebind')
         text = 'NEW KEY FOR ' + UI_DIRS[this.optBinding];   // no ':' -- see UI_ARROW
       else text = String(r.value());
       const attr = r.attr ? r.attr() : UI_ATTR;
@@ -3491,14 +3424,11 @@ class FrontEnd {
       }
     });
 
-    /* mid-capture the footer is the guidance line -- or, for a few
-       seconds after a refused key, the REASON it was refused, which is
-       the whole point of optBindMsg: a refusal you can't see is a key
-       that just "isn't available for some reason".  (The old capture
+    /* mid-capture the footer is the guidance line.  (The old capture
        footer still read 'ENTER CAPS SYM TO SKIP' -- stale twice over,
        CAPS and SYM have been bindable since their reservations fell.) */
     const foot = (this.optBinding >= 0)
-      ? (this.optBindMsgT > 0 ? this.optBindMsg : 'ENTER TO SKIP')
+      ? 'ENTER TO SKIP'
       : 'ARROWS MOVE   ENTER CONFIRM';
     uiText(ctx, foot, col + ((W - foot.length) >> 1), row + H - 2, UI_ATTR);
   }
@@ -3862,11 +3792,11 @@ class Game{
        unforced probe writes. */
     this.cfg = cfg = Object.assign({}, GATE_CONFIG, cfg || {});
     this.method1 = cfg.method1 & 3;                 // $FFFC -> $8560
-    this.method2 = cfg.method2 & 3;                 // $FFFB -> $8589
-    /* ADDED (see indepGamepads at controlRead): the options screen's own
-       "CONTROLLER + CONTROLLER" choice.  false is the faithful default and
-       what every gate and headless check runs with. */
-    indepGamepads = !!cfg.indepGamepads;
+    /* $FFFB -> $8589 -- stored because the byte is part of block A's
+       contract, but local input never reads it any more (readKeys wires
+       only player 1; a remote player 2's input arrives as a direction
+       byte, method already applied at his end). */
+    this.method2 = cfg.method2 & 3;
     /* ADDED (see zonePotion at controlRead): per-player potion wiring, set
        only by the streamlined screen's handover.  false is the faithful
        default -- $857E/$85A7's unconditional CAPS/SPACE -- and what every
@@ -4572,8 +4502,17 @@ class Game{
     this.symHeld = FAITHFUL_SYM_CHEAT &&
       ((input && input.kb) ? input.kb.down('SYM') : !!(input && input.sym));
     if (input && input.kb){                          // $855D, for real
-      this.players[0].dir = controlRead(this.method1, 0, input.kb);
-      this.players[1].dir = controlRead(this.method2, 1, input.kb);
+      /* ONLINE FORK: exactly ONE local player.  The original's player-2
+         read ($8589 -> $85B3, the same dispatch) is deliberately not wired
+         to the local keyboard any more.  players[1].dir is the NETWORK
+         SEAM: a remote player's direction byte lands here, and his first
+         FIRE joins him through joinPass() exactly as a second local player
+         always did ($9440 -- "whoever presses FIRE is in").  Until netcode
+         exists it stays 0, so $944C's FIRE gate keeps him out of the game.
+         The abstract path below (input.p2) is untouched: it is how the
+         tests -- and one day the server -- drive player 2. */
+      this.players[0].dir = controlRead(this.method1, input.kb);
+      this.players[1].dir = 0;
       return;
     }
     const bits = i => {
@@ -8523,7 +8462,7 @@ class Game{
        ($FFFC) while its commit ("MAGIC BUTTON SETS NAME") is CAPS SHIFT in
        all four methods, because $857E is outside the dispatch. */
     let d = 0;
-    if (input && input.kb) d = controlRead(this.method1, 0, input.kb);
+    if (input && input.kb) d = controlRead(this.method1, input.kb);
     else {
       if(input.up) d|=DIR_UP; if(input.down) d|=DIR_DOWN;
       if(input.left) d|=DIR_LEFT; if(input.right) d|=DIR_RIGHT;
@@ -10183,7 +10122,6 @@ function feHandover(){
   game.reset({char: frontend.FFFF, char2: frontend.FFFE,
               method1: frontend.FFFC, method2: frontend.FFFB,
               buildSeed: freshBuildSeed(),
-              indepGamepads: frontend.indepOut,
               zonePotion: frontend.zoneOut});
   game.enterAttract();
   feRunning = false;
@@ -10222,16 +10160,16 @@ const SETTINGS_KEY = 'gauntlet-settings';
 /* A quiet CONTENDED pass is five video frames (tools/clockgate.py hz).  With
    the load slowdown off, no pass is charged more than that. */
 const SMOOTH_CAP = 5;
-const CTRL_DEFAULTS = CTRL_KEYS.map(m => m.map(k => (k ? k.slice() : null)));
+const CTRL_DEFAULTS = CTRL_KEYS.map(k => (k ? k.slice() : null));
 let loadSlowdown = true;            // the original's behaviour, and the default
 
 function settingsSave(){
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      method1: frontend.optMethod[0] & 3, method2: frontend.optMethod[1] & 3,
+      method1: frontend.optMethod[0] & 3,
       char: frontend.optChar.slice(),
       slowdown: loadSlowdown,
-      keys: CTRL_KEYS.map(m => m.map(k => (k ? k.slice() : null))) }));
+      keys: CTRL_KEYS.map(k => (k ? k.slice() : null)) }));
   } catch(e) {}
 }
 function settingsLoad(){
@@ -10240,37 +10178,36 @@ function settingsLoad(){
   if (!v) return;
   if (typeof v.slowdown === 'boolean') loadSlowdown = v.slowdown;
   if (typeof v.method1 === 'number') frontend.optMethod[0] = v.method1 & 3;
-  if (typeof v.method2 === 'number') frontend.optMethod[1] = v.method2 & 3;
-  /* PLAYERS is NOT restored -- reported as a requirement: the screen always
-     starts on 1, every time, regardless of what a previous session left it
-     on.  frontend.players is already 1 fresh out of reset(); this is only
-     here so a future field does not get added above this comment and
-     accidentally restore it. */
-  if (Array.isArray(v.char) && v.char.length === 2 &&
-      v.char.every(n => typeof n === 'number') && v.char[0] !== v.char[1])
-    frontend.optChar = [v.char[0] & 3, v.char[1] & 3];
+  /* char: length 1 (this build) or 2 (a save from the two-local-player
+     era) -- either way only player 1's own pick is restorable now. */
+  if (Array.isArray(v.char) && (v.char.length === 1 || v.char.length === 2) &&
+      v.char.every(n => typeof n === 'number'))
+    frontend.optChar = [v.char[0] & 3];
   /* restore key lists SHAPE-CHECKED -- a stored blob from an older build must
      not be able to hand controlRead an undefined key name.  Length 5 OR 6:
      saves from before the POTION slot existed carry five keys per zone, and
      restoring those five over a six-wide in-memory zone leaves slot 5 at
-     its default (CAPS / N) -- the migration is that there is no migration.
+     its default (CAPS) -- the migration is that there is no migration.
      The j-bound guards the other direction too: a six-wide blob must not
      EXTEND a method row that is faithfully five keys wide. */
   if (Array.isArray(v.keys) && v.keys.length === CTRL_KEYS.length)
     v.keys.forEach((m, i) => {
-      if (!Array.isArray(m)) return;
-      m.forEach((k, w) => {
-        if (Array.isArray(k) && (k.length === 5 || k.length === 6) && CTRL_KEYS[i][w])
-          k.forEach((n, j) => {
-            if (typeof n === 'string' && j < CTRL_KEYS[i][w].length)
-              CTRL_KEYS[i][w][j] = n;
-          });
-      });
+      /* this build stores ONE zone per method; the two-local-player era
+         stored a PAIR of zones -- take player 1's own.  (A legacy
+         KEMPSTON pair is [null, null]: its m[0] is not an array, so it
+         falls through to the width check and is dropped exactly as a
+         plain null is.) */
+      const k = (Array.isArray(m) && Array.isArray(m[0])) ? m[0] : m;
+      if (Array.isArray(k) && (k.length === 5 || k.length === 6) && CTRL_KEYS[i])
+        k.forEach((n, j) => {
+          if (typeof n === 'string' && j < CTRL_KEYS[i].length)
+            CTRL_KEYS[i][j] = n;
+        });
     });
 }
 function settingsReset(){
-  CTRL_DEFAULTS.forEach((m, i) => m.forEach((k, w) => {
-    if (k && CTRL_KEYS[i][w]) k.forEach((n, j) => { CTRL_KEYS[i][w][j] = n; }); }));
+  CTRL_DEFAULTS.forEach((k, i) => {
+    if (k && CTRL_KEYS[i]) k.forEach((n, j) => { CTRL_KEYS[i][j] = n; }); });
   loadSlowdown = true;
   settingsSave();
 }
@@ -10278,14 +10215,14 @@ function settingsReset(){
 const UI_DIRS = ['UP', 'DOWN', 'LEFT', 'RIGHT', 'FIRE', 'POTION'];
 const UI_ATTR = 0x47;                // $8A28's own border ink, on a BLACK field
 
-/* ---- THE JOYSTICK(S).  controlRead's KEMPSTON arm already reads kb.kempston
-   (and, ADDED, kb.kempston2 -- see indepGamepads) and KEMPSTON_MAP already
-   names the bits ($01 right, $02 left, $04 down, $08 up, $10 fire) -- nothing
-   fed them.  A Gamepad does now, through the same port byte the original
-   reads, so choosing KEMPSTON in the options screen is choosing the joystick
-   and no other code changes.  Polled every frame, front end and in-game
-   alike: the options screen needs live pad state to know what it can offer,
-   and real play needs it to move the player. */
+/* ---- THE JOYSTICK.  controlRead's KEMPSTON arm already reads kb.kempston
+   and KEMPSTON_MAP already names the bits ($01 right, $02 left, $04 down,
+   $08 up, $10 fire) -- nothing fed it.  A Gamepad does now, through the
+   same port byte the original reads, so choosing KEMPSTON in the options
+   screen is choosing the joystick and no other code changes.  Polled every
+   frame, front end and in-game alike: the options screen needs live pad
+   state to know what it can offer, and real play needs it to move the
+   player. */
 function padBits(p){
   let v = 0;
   const ax = p.axes[0] || 0, ay = p.axes[1] || 0;
@@ -10309,7 +10246,7 @@ function padBits(p){
   return v;
 }
 /* THE latest poll -- read by the options screen (to know what it can
-   offer) and, through kb.kempston/kempston2, by real play alike.  A `let`
+   offer) and, through kb.kempston, by real play alike.  A `let`
    module global, not a return value a caller has to remember to store: the
    first cut of this had pollGamepads() only RETURN the result, with the
    page's own frame() loop doing `padStatus = pollGamepads()` as a second
@@ -10322,7 +10259,7 @@ let padStatus = {count: 0, names: [], bits: []};
    "pad 1" mean the first and second controller a player actually plugged
    in, not two fixed API slots most of which are usually empty. */
 function pollGamepads(){
-  keyboard.kempston = 0; keyboard.kempston2 = 0;
+  keyboard.kempston = 0;
   const connected = [];
   if (typeof navigator !== 'undefined' && navigator.getGamepads){
     let pads;
@@ -10330,7 +10267,6 @@ function pollGamepads(){
     for (const p of (pads || [])) if (p && p.connected) connected.push(p);
   }
   if (connected[0]) keyboard.kempston = padBits(connected[0]);
-  if (connected[1]) keyboard.kempston2 = padBits(connected[1]);
   return padStatus = {
     count: connected.length,
     names: connected.map(p => (p.id || 'PAD').slice(0, 11).toUpperCase()),
@@ -10519,7 +10455,6 @@ globalThis.__GAUNTLET__={
             renderScreen, feHandover, pollGamepads, liveKb:keyboard,
             drawCharPreview, PREVIEW_SCALE, CHAR_FRAMES, drawLogo, FE_LOGO_ROWS,
             get padStatus(){ return padStatus; },
-            get indepGamepads(){ return indepGamepads; },
             KB_HALFROWS, CTRL_KEYS, CTRL_MAGIC, KEMPSTON_MAP, KEMPSTON_POTION,
             controlRead, feDrawP2, CHAR_MENU_DEFAULT, GATE_CONFIG,
             PAGE_ROW_FRAMES, UI_DIRS,

@@ -6,14 +6,18 @@ standalone C++ Windows server, and online play for up to 4 players — keeping
 the original game's look, feel and rules while modernising how people reach
 it.
 
-Status: **fork point.** The client is the complete faithful port (one
-self-contained HTML file); nothing has been stripped or added yet.
+Status: **single-player client.** Local two-player has been stripped from
+the frontend and input layer.  The simulation deliberately keeps both
+player blocks and the join/leash/shove machinery -- the engine's join-in
+model (whoever presses FIRE is in) is exactly the drop-in shape online
+multiplayer needs, and `players[1].dir` is the marked network seam.  The
+C++ server is not started.
 
 ## Build & test
 
 ```
 python tools/build.py     # client/template.html -> client/gauntlet.html
-node tools/headless.js    # the test suite (1211/1211 at fork point)
+node tools/headless.js    # the test suite (1161/1161; 1211/1211 at fork)
 ```
 
 Open `client/gauntlet.html` in a browser to play.
