@@ -57,6 +57,26 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
   convention for engine code; it is how the code stays reviewable against
   `notes/NOTES-engine.md`.
 
+## C++ toolchain (verified working 2026-08-28)
+
+Visual Studio 18 (Community) is installed. Enter the x64 build environment
+with:
+
+```
+"E:\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
+```
+
+Verified end to end (compiled, linked ws2_32.lib, ran, WSAStartup OK):
+
+- MSVC `cl` 19.50.35726 for x64 (`/std:c++20` works; toolset v145)
+- CMake 4.2.3 and Ninja, both VS-bundled and on PATH once vcvars64 is
+  loaded — no separate installs needed.
+- Quirk: vcvars64.bat prints a harmless `'vswhere.exe' is not recognized`
+  warning; the environment still initialises correctly. Ignore it.
+- From Git Bash the quoting mangles; invoke the toolchain via the
+  PowerShell tool with `cmd /c` and backtick-escaped quotes, or from a
+  plain cmd shell.
+
 ## Workflow
 
 - git repo (branch `main`); first commit is the pristine fork point —
