@@ -1,0 +1,602 @@
+{
+ "mode": "beep",
+ "driver": "beeper",
+ "sample_rate": 44100,
+ "buffers": 178,
+ "seconds": 14.49095238095238,
+ "peak": 0.9999575018882751,
+ "frame_hz": 50.08,
+ "ay_clock": 1773400,
+ "cpu_hz": 3500000,
+ "audio_t0": 0.41333333333333333,
+ "frame_base": 12,
+ "resyncs": 1,
+ "frame_map": [
+  {
+   "base": 0,
+   "t0": 0.09666666666666666,
+   "at": 0
+  },
+  {
+   "base": 12,
+   "t0": 0.41333333333333333,
+   "at": 16
+  }
+ ],
+ "dropped": 0,
+ "marks": [
+  {
+   "id": 0,
+   "frame0": 16,
+   "passes": 4,
+   "rows": [],
+   "silent": false,
+   "noise": true,
+   "armedAt": 0.03,
+   "arm": "early",
+   "edges": 67,
+   "logSpanFrames": 0.7460636379331049,
+   "hz": []
+  },
+  {
+   "id": 0,
+   "frame0": 44,
+   "passes": 4,
+   "rows": [],
+   "silent": false,
+   "noise": true,
+   "armedAt": 0.86,
+   "arm": "late",
+   "edges": 72,
+   "logSpanFrames": 3.489554791929379,
+   "hz": []
+  },
+  {
+   "id": 1,
+   "frame0": 72,
+   "passes": 4,
+   "rows": [],
+   "silent": true,
+   "noise": false,
+   "armedAt": null,
+   "arm": null,
+   "edges": 0,
+   "logSpanFrames": 0,
+   "hz": []
+  },
+  {
+   "id": 2,
+   "frame0": 100,
+   "passes": 7,
+   "rows": [
+    [
+     10,
+     63
+    ],
+    [
+     10,
+     63
+    ],
+    [
+     20,
+     34
+    ],
+    [
+     30,
+     23
+    ],
+    [
+     60,
+     12
+    ],
+    [
+     200,
+     3
+    ]
+   ],
+   "silent": false,
+   "noise": false,
+   "armedAt": null,
+   "arm": null,
+   "edges": 0,
+   "logSpanFrames": 0,
+   "hz": [
+    1588.021778584392,
+    1588.021778584392,
+    2873.5632183908046,
+    4146.919431279621,
+    7446.808510638298,
+    21341.463414634145
+   ]
+  },
+  {
+   "id": 3,
+   "frame0": 140,
+   "passes": 4,
+   "rows": [],
+   "silent": true,
+   "noise": false,
+   "armedAt": null,
+   "arm": null,
+   "edges": 0,
+   "logSpanFrames": 0,
+   "hz": []
+  },
+  {
+   "id": 4,
+   "frame0": 168,
+   "passes": 4,
+   "rows": [],
+   "silent": false,
+   "noise": true,
+   "armedAt": 0.03,
+   "arm": "early",
+   "edges": 60,
+   "logSpanFrames": 0.555986307647288,
+   "hz": []
+  },
+  {
+   "id": 4,
+   "frame0": 196,
+   "passes": 4,
+   "rows": [],
+   "silent": false,
+   "noise": true,
+   "armedAt": 0.86,
+   "arm": "late",
+   "edges": 67,
+   "logSpanFrames": 3.5237355637873122,
+   "hz": []
+  },
+  {
+   "id": 5,
+   "frame0": 224,
+   "passes": 4,
+   "rows": [],
+   "silent": true,
+   "noise": false,
+   "armedAt": null,
+   "arm": null,
+   "edges": 0,
+   "logSpanFrames": 0,
+   "hz": []
+  },
+  {
+   "id": 6,
+   "frame0": 252,
+   "passes": 10,
+   "rows": [
+    [
+     10,
+     63
+    ],
+    [
+     20,
+     34
+    ],
+    [
+     30,
+     23
+    ],
+    [
+     40,
+     18
+    ],
+    [
+     50,
+     14
+    ],
+    [
+     60,
+     12
+    ],
+    [
+     70,
+     9
+    ],
+    [
+     80,
+     8
+    ],
+    [
+     100,
+     6
+    ]
+   ],
+   "silent": false,
+   "noise": false,
+   "armedAt": null,
+   "arm": null,
+   "edges": 0,
+   "logSpanFrames": 0,
+   "hz": [
+    1588.021778584392,
+    2873.5632183908046,
+    4146.919431279621,
+    5192.878338278932,
+    6505.576208178439,
+    7446.808510638298,
+    9510.869565217392,
+    10479.041916167665,
+    13157.894736842105
+   ]
+  },
+  {
+   "id": 7,
+   "frame0": 304,
+   "passes": 7,
+   "rows": [
+    [
+     20,
+     34
+    ],
+    [
+     20,
+     34
+    ],
+    [
+     10,
+     63
+    ],
+    [
+     10,
+     63
+    ],
+    [
+     20,
+     34
+    ],
+    [
+     20,
+     34
+    ]
+   ],
+   "silent": false,
+   "noise": false,
+   "armedAt": null,
+   "arm": null,
+   "edges": 0,
+   "logSpanFrames": 0,
+   "hz": [
+    2873.5632183908046,
+    2873.5632183908046,
+    1588.021778584392,
+    1588.021778584392,
+    2873.5632183908046,
+    2873.5632183908046
+   ]
+  },
+  {
+   "id": 8,
+   "frame0": 344,
+   "passes": 6,
+   "rows": [
+    [
+     60,
+     12
+    ],
+    [
+     50,
+     14
+    ],
+    [
+     40,
+     18
+    ],
+    [
+     50,
+     14
+    ],
+    [
+     60,
+     12
+    ]
+   ],
+   "silent": false,
+   "noise": false,
+   "armedAt": null,
+   "arm": null,
+   "edges": 0,
+   "logSpanFrames": 0,
+   "hz": [
+    7446.808510638298,
+    6505.576208178439,
+    5192.878338278932,
+    6505.576208178439,
+    7446.808510638298
+   ]
+  },
+  {
+   "id": 9,
+   "frame0": 380,
+   "passes": 4,
+   "rows": [],
+   "silent": true,
+   "noise": false,
+   "armedAt": null,
+   "arm": null,
+   "edges": 0,
+   "logSpanFrames": 0,
+   "hz": []
+  },
+  {
+   "id": 10,
+   "frame0": 408,
+   "passes": 5,
+   "rows": [
+    [
+     140,
+     5
+    ],
+    [
+     140,
+     5
+    ],
+    [
+     180,
+     3
+    ],
+    [
+     200,
+     3
+    ]
+   ],
+   "silent": false,
+   "noise": false,
+   "armedAt": null,
+   "arm": null,
+   "edges": 0,
+   "logSpanFrames": 0,
+   "hz": [
+    15086.206896551725,
+    15086.206896551725,
+    21341.463414634145,
+    21341.463414634145
+   ]
+  },
+  {
+   "id": 11,
+   "frame0": 440,
+   "passes": 12,
+   "rows": [
+    [
+     10,
+     63
+    ],
+    [
+     40,
+     18
+    ],
+    [
+     60,
+     12
+    ],
+    [
+     40,
+     18
+    ],
+    [
+     50,
+     14
+    ],
+    [
+     60,
+     12
+    ],
+    [
+     50,
+     14
+    ],
+    [
+     40,
+     18
+    ],
+    [
+     50,
+     14
+    ],
+    [
+     60,
+     12
+    ],
+    [
+     40,
+     18
+    ]
+   ],
+   "silent": false,
+   "noise": false,
+   "armedAt": null,
+   "arm": null,
+   "edges": 0,
+   "logSpanFrames": 0,
+   "hz": [
+    1588.021778584392,
+    5192.878338278932,
+    7446.808510638298,
+    5192.878338278932,
+    6505.576208178439,
+    7446.808510638298,
+    6505.576208178439,
+    5192.878338278932,
+    6505.576208178439,
+    7446.808510638298,
+    5192.878338278932
+   ]
+  },
+  {
+   "id": 12,
+   "frame0": 500,
+   "passes": 4,
+   "rows": [],
+   "silent": true,
+   "noise": false,
+   "armedAt": null,
+   "arm": null,
+   "edges": 0,
+   "logSpanFrames": 0,
+   "hz": []
+  },
+  {
+   "id": 13,
+   "frame0": 528,
+   "passes": 4,
+   "rows": [],
+   "silent": true,
+   "noise": false,
+   "armedAt": null,
+   "arm": null,
+   "edges": 0,
+   "logSpanFrames": 0,
+   "hz": []
+  },
+  {
+   "id": 14,
+   "frame0": 556,
+   "passes": 6,
+   "rows": [
+    [
+     40,
+     18
+    ],
+    [
+     30,
+     23
+    ],
+    [
+     20,
+     34
+    ],
+    [
+     10,
+     63
+    ],
+    [
+     10,
+     63
+    ]
+   ],
+   "silent": false,
+   "noise": false,
+   "armedAt": null,
+   "arm": null,
+   "edges": 0,
+   "logSpanFrames": 0,
+   "hz": [
+    5192.878338278932,
+    4146.919431279621,
+    2873.5632183908046,
+    1588.021778584392,
+    1588.021778584392
+   ]
+  },
+  {
+   "id": 15,
+   "frame0": 592,
+   "passes": 10,
+   "rows": [
+    [
+     10,
+     63
+    ],
+    [
+     20,
+     34
+    ],
+    [
+     30,
+     23
+    ],
+    [
+     40,
+     18
+    ],
+    [
+     50,
+     14
+    ],
+    [
+     60,
+     12
+    ],
+    [
+     70,
+     9
+    ],
+    [
+     80,
+     8
+    ],
+    [
+     100,
+     6
+    ]
+   ],
+   "silent": false,
+   "noise": false,
+   "armedAt": null,
+   "arm": null,
+   "edges": 0,
+   "logSpanFrames": 0,
+   "hz": [
+    1588.021778584392,
+    2873.5632183908046,
+    4146.919431279621,
+    5192.878338278932,
+    6505.576208178439,
+    7446.808510638298,
+    9510.869565217392,
+    10479.041916167665,
+    13157.894736842105
+   ]
+  },
+  {
+   "id": 16,
+   "frame0": 644,
+   "passes": 4,
+   "rows": [],
+   "silent": true,
+   "noise": false,
+   "armedAt": null,
+   "arm": null,
+   "edges": 0,
+   "logSpanFrames": 0,
+   "hz": []
+  },
+  {
+   "id": 17,
+   "frame0": 672,
+   "passes": 5,
+   "rows": [
+    [
+     10,
+     63
+    ],
+    [
+     20,
+     34
+    ],
+    [
+     30,
+     23
+    ],
+    [
+     10,
+     63
+    ]
+   ],
+   "silent": false,
+   "noise": false,
+   "armedAt": null,
+   "arm": null,
+   "edges": 0,
+   "logSpanFrames": 0,
+   "hz": [
+    1588.021778584392,
+    2873.5632183908046,
+    4146.919431279621,
+    1588.021778584392
+   ]
+  }
+ ]
+}

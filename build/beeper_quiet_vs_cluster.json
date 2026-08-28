@@ -1,0 +1,26 @@
+{
+ "sample_rate": 44100,
+ "marks": [
+  {
+   "tag": "1  QUIET DUNGEON, as shipped",
+   "at": 0,
+   "seconds": 4.432131519274376,
+   "hz": 12.523363431942789
+  },
+  {
+   "tag": "2  GENERATOR CLUSTER, as shipped",
+   "at": 5.332131519274377,
+   "seconds": 7.973968253968254,
+   "hz": 8.346666666666666
+  },
+  {
+   "tag": "3  GENERATOR CLUSTER, pre-slowdown flat 4-frame clock",
+   "at": 14.20609977324263,
+   "seconds": 5.3054648526077095,
+   "hz": 8.346666666666666
+  }
+ ],
+ "peak": 0.9999697208404541,
+ "what": "the same four effects (id 7 a key, id $0E a door, id $11 an item, then id 4 FIRE three times) played three times: in a quiet dungeon, at a generator cluster, and at the same cluster with the pass clock forced back to a flat four frames.  The chirp PITCHES are identical in all three (609 and 1102 T half-periods, 2,873.6 and 1,588.0 Hz); the CADENCE is not.",
+ "seconds": 20.41156462585034
+}

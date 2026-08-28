@@ -1,0 +1,214 @@
+{
+ "_source": "live_cs.bin, addresses from $8DE9..$8DF8",
+ "_geometry": {
+  "rows": 12,
+  "bytes_per_row": 2,
+  "width": 16,
+  "first_screen_row": 2
+ },
+ "_note": "12 source rows land on 10 screen rows: $8E8C and $8E9E are INC C where every sibling is INC D, so source rows 7+8 share a screen row and 9+10 share the next.",
+ "banks": {
+  "0": {
+   "tag": 0,
+   "ink": 66,
+   "inks": [
+    66,
+    66,
+    66,
+    66,
+    66,
+    66,
+    66,
+    66
+   ],
+   "addrs": [
+    "$D080",
+    "$D0A0",
+    "$D0C0",
+    "$D0E0",
+    "$D180",
+    "$D1A0",
+    "$D1C0",
+    "$D1E0"
+   ],
+   "frames": [
+    "AAAEIA/wD/AP8AWgAYABgAGAAYABgAAA",
+    "AQADgAeAA8AB8AP4B3AOIBwACAAAAAAA",
+    "AAAAAABwAPgAcB/wH/AAcAD4AHAAAAAA",
+    "AAAAAAgAHAAOIAdwA/gB8APAB4ADgAEA",
+    "AAABgAGAAYABgAGABaAP8A/wD/AEIAAA",
+    "AAAAAAAQADgEcA7gH8APgAPAAeABwACA",
+    "AAAAAA4AHwAOAA/wD/AOAB8ADgAAAAAA",
+    "AIABwAHgA8APgB/ADuAEcAA4ABAAAAAA"
+   ],
+   "uniform_ink": true
+  },
+  "8": {
+   "tag": 8,
+   "ink": 69,
+   "inks": [
+    69,
+    69,
+    69,
+    69,
+    69,
+    69,
+    69,
+    69
+   ],
+   "addrs": [
+    "$D280",
+    "$D2A0",
+    "$D2C0",
+    "$D2E0",
+    "$D380",
+    "$D3A0",
+    "$D3C0",
+    "$D3E0"
+   ],
+   "frames": [
+    "AQABgAGAAYABgAGAAYABgAfgAQABgAGA",
+    "AAAAEAAwAHAA4AnAB4AHAA0AHIAIAAAA",
+    "AAAAAAAABAAEAD/8N/gEAAQAAAAAAAAA",
+    "AAAIAByADwADAAeACcAA4ABwADgAAAAA",
+    "AYABgAEAB+ABgAGAAYABgAGAAYABgACA",
+    "AAAAEAE4APAAwAHgA5AHAA4ADAAIAAAA",
+    "AAAAAAAAACAAIB/8P+wAIAAgAAAAAAAA",
+    "AAAAABwADgAHAAOQAeAA4ACwATgAEAAA"
+   ],
+   "uniform_ink": true
+  },
+  "16": {
+   "tag": 16,
+   "ink": 70,
+   "inks": [
+    70,
+    70,
+    70,
+    70,
+    70,
+    70,
+    70,
+    70
+   ],
+   "addrs": [
+    "$D480",
+    "$D4A0",
+    "$D4C0",
+    "$D4E0",
+    "$D580",
+    "$D5A0",
+    "$D5C0",
+    "$D5E0"
+   ],
+   "frames": [
+    "AYADwAfgB+AHoAPAAsABgAEgAIABAACA",
+    "AAAAcAD4APgB+AOwAsAFAAqAAAAEAAAA",
+    "AAAAAAAAAHAF+Cv8FvwBqARwAAAAAAAA",
+    "AAAAAAQACgAHgAHAAvAB+AD4ALgAcAAA",
+    "AIABAACAAUABgALAA8AHoAfgB+ADwAGA",
+    "AAAAAAAgAFAB4AOAD0AdgB9AHQAOAAAA",
+    "AAAAAAAADgAfgD9oP9QdoA4AAAAAAAAA",
+    "AAAOAB8AHwAWgA/AAsABYABQACAAAAAA"
+   ],
+   "uniform_ink": true
+  },
+  "24": {
+   "tag": 24,
+   "ink": 68,
+   "inks": [
+    68,
+    68,
+    68,
+    68,
+    68,
+    68,
+    68,
+    68
+   ],
+   "addrs": [
+    "$D680",
+    "$D6A0",
+    "$D6C0",
+    "$D6E0",
+    "$D780",
+    "$D7A0",
+    "$D7C0",
+    "$D7E0"
+   ],
+   "frames": [
+    "AIAAgAHAAIAAgACAAIAAgACAAcABwAFA",
+    "AAAAAAAQAGAAYACAAQACAAwAHAAIAAAA",
+    "AAAAAAAAAAA4EB/8OBAAAAAAAAAAAAAA",
+    "AAAIABwADAACAAEAAIAAYABgABAAAAAA",
+    "AUABwAHAAIAAgACAAIAAgACAAcAAgACA",
+    "AAAAEAA4ADAAQACAAQAGAAYACAAAAAAA",
+    "AAAAAAAAAAAIHD/4CBwAAAAAAAAAAAAA",
+    "AAAAAAgABgAGAAEAAIAAQAAwADgAEAAA"
+   ],
+   "uniform_ink": true
+  },
+  "144": {
+   "tag": 144,
+   "ink": 70,
+   "inks": [
+    70,
+    70,
+    70,
+    70,
+    70,
+    70,
+    70,
+    70
+   ],
+   "addrs": [
+    "$D480",
+    "$D4A0",
+    "$D4C0",
+    "$D4E0",
+    "$D580",
+    "$D5A0",
+    "$D5C0",
+    "$D5E0"
+   ],
+   "frames": [
+    "AYADwAfgB+AHoAPAAsABgAEgAIABAACA",
+    "AAAAcAD4APgB+AOwAsAFAAqAAAAEAAAA",
+    "AAAAAAAAAHAF+Cv8FvwBqARwAAAAAAAA",
+    "AAAAAAQACgAHgAHAAvAB+AD4ALgAcAAA",
+    "AIABAACAAUABgALAA8AHoAfgB+ADwAGA",
+    "AAAAAAAgAFAB4AOAD0AdgB9AHQAOAAAA",
+    "AAAAAAAADgAfgD9oP9QdoA4AAAAAAAAA",
+    "AAAOAB8AHwAWgA/AAsABYABQACAAAAAA"
+   ],
+   "uniform_ink": true
+  }
+ },
+ "fireball": [
+  {
+   "addr": 56696,
+   "ink": 68,
+   "frame": "AAAAAAAAAAAGAA8ADQAGAAAAAAAAAAAA"
+  },
+  {
+   "addr": 56728,
+   "ink": 68,
+   "frame": "AAAAAB4APwA9AD0AMwAeAAAAAAAAAAAA"
+  },
+  {
+   "addr": 56760,
+   "ink": 68,
+   "frame": "PAB+AP8A/QD9APsAZgA8AAAAAAAAAAAA"
+  },
+  {
+   "addr": 56792,
+   "ink": 0,
+   "frame": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  }
+ ],
+ "explode": {
+  "addr": "$DD58",
+  "ink": 70,
+  "frame": "C2gWNC3aKuoXajdUNs46rh1sA9wduA5w"
+ }
+}

@@ -1,0 +1,35 @@
+{
+ "mode": "beepplay",
+ "driver": "beeper",
+ "sample_rate": 44100,
+ "buffers": 66,
+ "seconds": 7.004331065759637,
+ "peak": 0.9997850656509399,
+ "frame_hz": 50.08,
+ "ay_clock": 1773400,
+ "cpu_hz": 3500000,
+ "audio_t0": 0.41333333333333333,
+ "frame_base": 12,
+ "resyncs": 1,
+ "frame_map": [
+  {
+   "base": 0,
+   "t0": 0.09666666666666666,
+   "at": 0
+  },
+  {
+   "base": 12,
+   "t0": 0.41333333333333333,
+   "at": 16
+  }
+ ],
+ "dropped": 0,
+ "marks": [
+  {
+   "id": -1,
+   "frame0": 0,
+   "frames": 329.0693538232601,
+   "rows": []
+  }
+ ]
+}
