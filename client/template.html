@@ -10943,14 +10943,31 @@ function netFrame(dt){
     net.sentInput = true;
   }
 }
+/* the local FIRE key's NAME, for the join hint -- the one thing the
+   join-in model cannot say for itself.  Found the honest way: the
+   second player's window sat "invisible and unable to move" because
+   nothing said the way in was FIRE, or that FIRE on THAT browser's
+   (default) bindings was Z -- rebinds live in localStorage, which
+   another profile or an incognito window does not share. */
+function netFireKey(){
+  const m = game.method1 & 3;
+  if (m === CTRL_KEMPSTON) return 'FIRE';         // the pad's own button
+  const k = CTRL_KEYS[m] && CTRL_KEYS[m][4];
+  return k || 'FIRE';
+}
 /* the overlay: the whole screen while no sim exists yet, one centred
    line over the game after that.  HUD font text only. */
 function netOverlay(ctx){
   if (net.phase === 'off') return;
   let line = net.status;
-  if (net.phase === 'live')
+  if (net.phase === 'live'){
+    const q = game.players[net.seat];
     line = (net.sentInput && netNow() - net.lastProgress > 700)
-      ? 'WAITING FOR PLAYERS' : '';
+      ? 'WAITING FOR PLAYERS'
+      : (net.everLive && q && !q.inGame)
+        ? 'PRESS ' + netFireKey() + ' TO JOIN'
+        : '';
+  }
   if (!line) return;
   line = line.slice(0, 30);
   if (!net.everLive) uiPanel(ctx, 0, 0, 32, 24, UI_ATTR);

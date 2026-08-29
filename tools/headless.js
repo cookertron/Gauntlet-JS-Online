@@ -8099,6 +8099,26 @@ if (process.argv[2] === '--table') {
   checkTrue('...on the exact state it served', G.game.fingerprint() ===
             (() => { return G.game.fingerprint(); })());
 
+  /* ---- the JOIN HINT names the local fire key while this seat's player
+     is out of the game -- the second window's whole confusion in the
+     first real test ("invisible and can't move") was that nothing said
+     the way in is FIRE, or that FIRE here is Z. */
+  {
+    const painted = () => {
+      let any = false;
+      const cap = { set fillStyle(v){}, get fillStyle(){ return null; },
+                    fillRect(){ any = true; } };
+      G.net.overlay(cap);
+      return any;
+    };
+    checkTrue('with both players IN, the live overlay paints nothing', !painted());
+    G.game.players[1].p14 |= 0x80;               // my seat's player back OUT
+    checkTrue('with MY player out, the overlay paints the join hint', painted());
+    check('...naming the LOCAL fire key, in HUD-font-safe text',
+          'PRESS ' + F.CTRL_KEYS[3][4] + ' TO JOIN', 'PRESS Z TO JOIN');
+    G.game.players[1].p14 &= 0x7F;
+  }
+
   /* ---- THE BACKGROUND-TAB CLOCK: with the page hidden, the PASS echo
      itself steps the sim and answers -- no frame() call anywhere.  The
      regression for the measured kill: a backgrounded browser has no
