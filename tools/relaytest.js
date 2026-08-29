@@ -36,105 +36,15 @@ const checkTrue = (label, v, extra) => {
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-/* ---- a WebSocket client small enough to trust ------------------------ */
-class Ws {
-  constructor(){ this.q = []; this.waiters = []; this.buf = Buffer.alloc(0);
-                 this.closed = false; this.sock = null; }
-  connect(port){
-    return new Promise((resolve, reject) => {
-      const key = crypto.randomBytes(16).toString('base64');
-      const want = crypto.createHash('sha1')
-        .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
-        .digest('base64');
-      const s = this.sock = net.connect(port, '127.0.0.1');
-      s.on('error', e => reject(e));
-      let hs = '';
-      const onHs = d => {
-        hs += d.toString('latin1');
-        const end = hs.indexOf('\r\n\r\n');
-        if (end < 0) return;
-        s.off('data', onHs);
-        if (!/ 101 /.test(hs) || hs.indexOf(want) < 0)
-          return reject(new Error('handshake refused: ' + hs.slice(0, 120)));
-        const rest = Buffer.from(hs.slice(end + 4), 'latin1');
-        s.on('data', d => this.onData(d));
-        s.on('close', () => { this.closed = true; this.wake(); });
-        if (rest.length) this.onData(rest);
-        resolve(this);
-      };
-      s.on('data', onHs);
-      s.on('connect', () => {
-        s.write('GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n' +
-                'Upgrade: websocket\r\nConnection: Upgrade\r\n' +
-                'Sec-WebSocket-Key: ' + key + '\r\n' +
-                'Sec-WebSocket-Version: 13\r\n\r\n');
-      });
-    });
-  }
-  onData(d){
-    this.buf = Buffer.concat([this.buf, d]);
-    for (;;){
-      const b = this.buf;
-      if (b.length < 2) return;
-      const op = b[0] & 0x0F;
-      let len = b[1] & 0x7F, off = 2;
-      if (len === 126){ if (b.length < 4) return; len = b.readUInt16BE(2); off = 4; }
-      else if (len === 127){ if (b.length < 10) return;
-        len = Number(b.readBigUInt64BE(2)); off = 10; }
-      if (b.length < off + len) return;
-      const pay = b.subarray(off, off + len);
-      this.buf = b.subarray(off + len);
-      if (op === 0x8){ this.closed = true; this.wake(); continue; }
-      if (op === 0x9){ this.frame(pay, 0xA); continue; }      // ping -> pong
-      if (op === 0xA) continue;
-      this.q.push(Buffer.from(pay));
-      this.wake();
-    }
-  }
-  wake(){ const ws = this.waiters.splice(0); for (const w of ws) w(); }
-  frame(pay, op){
-    const mask = crypto.randomBytes(4);
-    const head = [0x80 | op];
-    if (pay.length < 126) head.push(0x80 | pay.length);
-    else if (pay.length < 65536){ head.push(0x80 | 126, pay.length >> 8, pay.length & 0xFF); }
-    else {
-      head.push(0x80 | 127);
-      for (let i = 7; i >= 0; i--) head.push(Number((BigInt(pay.length) >> BigInt(8 * i)) & 0xFFn));
-    }
-    const masked = Buffer.from(pay);
-    for (let i = 0; i < masked.length; i++) masked[i] ^= mask[i & 3];
-    this.sock.write(Buffer.concat([Buffer.from(head), mask, masked]));
-  }
-  send(pay){ this.frame(Buffer.from(pay), 0x2); }
-  msg(type, ...parts){
-    const bufs = [Buffer.from([type])];
-    for (const p of parts){
-      if (typeof p === 'number'){                       // u8
-        bufs.push(Buffer.from([p & 0xFF]));
-      } else if (p && p.u32 !== undefined){
-        const b = Buffer.alloc(4); b.writeUInt32LE(p.u32 >>> 0); bufs.push(b);
-      } else bufs.push(Buffer.from(p));                 // raw bytes
-    }
-    this.send(Buffer.concat(bufs));
-  }
-  /* next protocol message; SEATS broadcasts are skipped unless asked
-     for, because they interleave with everything */
-  async next(timeout, keepSeats){
-    const t0 = Date.now();
-    for (;;){
-      while (this.q.length){
-        const m = this.q.shift();
-        if (m[0] === M.SEATS && !keepSeats) continue;
-        return m;
-      }
-      if (this.closed) return null;
-      const left = timeout - (Date.now() - t0);
-      if (left <= 0) return null;
-      await new Promise(r => { this.waiters.push(r); setTimeout(r, left); });
-    }
-  }
+/* ---- the WebSocket client lives in tools/wsmini.js, shared with the
+   end-to-end test; here it grows the protocol-conversation helpers
+   (SEATS broadcasts interleave with everything, so expect() drops them
+   unless SEATS is what the test wants). */
+const { Ws: WsBase } = require('./wsmini');
+class Ws extends WsBase {
   async expect(type, timeout){
-    const m = await this.next(timeout || 3000);
+    const m = await this.next(timeout || 3000,
+                              type === M.SEATS ? undefined : M.SEATS);
     if (!m) throw new Error('timed out waiting for type ' + type +
                             (this.closed ? ' (closed)' : ''));
     if (m[0] !== type) throw new Error('expected type ' + type + ', got ' + m[0] +
@@ -142,10 +52,9 @@ class Ws {
     return m;
   }
   async silent(ms){
-    const m = await this.next(ms);
+    const m = await this.next(ms, M.SEATS);
     if (m) throw new Error('expected silence, got type ' + m[0]);
   }
-  close(){ if (this.sock) this.sock.destroy(); this.closed = true; }
 }
 
 /* ---- helpers over the message shapes --------------------------------- */
@@ -170,24 +79,48 @@ async function main(){
   checkTrue('the server starts and listens', /RELAY LISTENING 33913 seats=2/.test(out));
 
   try {
+    /* ---- the page is the server: plain GET / ------------------------ */
+    await new Promise((resolve, reject) => {
+      const s = net.connect(PORT, '127.0.0.1');
+      let got = Buffer.alloc(0);
+      s.on('data', d => { got = Buffer.concat([got, d]); });
+      s.on('close', () => {
+        const txt = got.toString('latin1');
+        checkTrue('GET / serves the game page (200, >100 KB, the built html)',
+                  / 200 OK/.test(txt) && got.length > 100000 &&
+                  txt.indexOf('GENERATED by tools/build.py') > 0,
+                  'len ' + got.length);
+        resolve();
+      });
+      s.on('error', reject);
+      s.on('connect', () =>
+        s.write('GET / HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n'));
+    });
+
     /* ---- seating and the fresh boot -------------------------------- */
     const c0 = await new Ws().connect(PORT);
-    c0.msg(M.HELLO, P.version);
+    c0.msg(M.HELLO, P.version, 3);                    // the elf
     const w0 = rdWelcome(await c0.expect(M.WELCOME));
     check('first client seats at 0, fresh, pass 0',
           [w0.seat, w0.seats, w0.mode, w0.pass], [0, 2, MODE.FRESH, 0]);
     checkTrue('...with a nonzero buildSeed', w0.seed !== 0);
+    check('...and CHARS carries his pick, other seats unset',
+          Array.from((await c0.expect(M.CHARS)).subarray(1)), [3, 255, 255, 255]);
 
     const c1 = await new Ws().connect(PORT);
-    c1.msg(M.HELLO, P.version);
+    c1.msg(M.HELLO, P.version, 3);                    // the SAME pick
     const w1 = rdWelcome(await c1.expect(M.WELCOME));
     check('second client seats at 1, still fresh (pass 0)',
           [w1.seat, w1.mode, w1.pass], [1, MODE.FRESH, 0]);
     check('...and both clients share the ONE buildSeed', w1.seed, w0.seed);
+    check('a clashing pick is BUMPED past the earlier seat (the engine never fields two of one)',
+          Array.from((await c1.expect(M.CHARS)).subarray(1)), [3, 0, 255, 255]);
+    check('...and the first client hears the new table too',
+          Array.from((await c0.expect(M.CHARS)).subarray(1)), [3, 0, 255, 255]);
 
     /* the wrong protocol version is refused */
     const cv = await new Ws().connect(PORT);
-    cv.msg(M.HELLO, P.version + 9);
+    cv.msg(M.HELLO, P.version + 9, 0);
     const ev = await cv.expect(M.ERROR);
     check('a wrong HELLO version gets ERROR VERSION', ev[1], E.VERSION);
     cv.close();
@@ -246,7 +179,7 @@ async function main(){
 
     /* ---- FULL -------------------------------------------------------- */
     const c2 = await new Ws().connect(PORT);
-    c2.msg(M.HELLO, P.version);
+    c2.msg(M.HELLO, P.version, 0);
     const e2 = await c2.expect(M.ERROR);
     check('a third client is refused: ERROR FULL (seats=2)', e2[1], E.FULL);
     c2.close();
@@ -262,7 +195,7 @@ async function main(){
 
     /* ---- late join: WELCOME(SNAPSHOT), 20 KB forwarded verbatim ------ */
     const c3 = await new Ws().connect(PORT);
-    c3.msg(M.HELLO, P.version);
+    c3.msg(M.HELLO, P.version, 2);      // ignored: his character is in the snapshot
     const w3 = rdWelcome(await c3.expect(M.WELCOME));
     check('a late joiner takes the freed seat in SNAPSHOT mode at the live pass',
           [w3.seat, w3.mode, w3.pass], [1, MODE.SNAPSHOT, pass]);
@@ -291,10 +224,12 @@ async function main(){
     c0.close(); c3.close();
     await sleep(300);
     const c4 = await new Ws().connect(PORT);
-    c4.msg(M.HELLO, P.version);
+    c4.msg(M.HELLO, P.version, 1);
     const w4 = rdWelcome(await c4.expect(M.WELCOME));
     check('with every seat emptied the session reset: next client is FRESH at pass 0',
           [w4.seat, w4.mode, w4.pass], [0, MODE.FRESH, 0]);
+    check('...and the character table reset with it',
+          Array.from((await c4.expect(M.CHARS)).subarray(1)), [1, 255, 255, 255]);
     c4.close();
   } finally {
     proc.kill();

@@ -2796,6 +2796,8 @@ class FrontEnd {
     this.optBindReady = false;
     this.optEdge = {};                // previous-frame nav state, for edge detection
     this.zoneOut = false;             // see optFinish() / zonePotion
+    this.netOn = true;                // the SERVER row -- ONLINE by default
+    this.netOut = false;              // what optFinish decided -- see feHandover
     this.enter(FAITHFUL_TAPE_PROMPTS ? 'stoptape' : 'loading');
   }
   /* ---- the screen helpers, all block A's own -------------------------- */
@@ -3169,6 +3171,12 @@ class FrontEnd {
     };
     push(0);
     rows.push({k: 'slow', group: 'misc', label: 'SLOWDOWN', value: () => (loadSlowdown ? 'ON' : 'OFF')});
+    /* ONLINE: offered only when a server is discoverable (the page came
+       from a relay, or ?server= names one) -- see serverUrl().  Opening
+       the file directly never shows the row and plays offline. */
+    if (netAvailable())
+      rows.push({k: 'net', group: 'misc', label: 'SERVER',
+                 value: () => (this.netOn ? 'ONLINE' : 'LOCAL')});
     rows.push({k: 'reset', group: 'misc', label: 'DEFAULTS', value: () => ''});
     rows.push({k: 'start', group: 'start', label: '', value: () => 'START GAME'});
     return rows;
@@ -3185,6 +3193,7 @@ class FrontEnd {
     if (r.k === 'char'){ this.optChar[0] = (this.optChar[0] + d + 4) & 3; return; }
     if (r.k === 'input'){ this.optToggleInput(); return; }
     if (r.k === 'slow'){ loadSlowdown = !loadSlowdown; return; }
+    if (r.k === 'net'){ this.netOn = !this.netOn; return; }
   }
   optActivate(r){
     if (r.k === 'rebind'){
@@ -3267,6 +3276,7 @@ class FrontEnd {
        potion wiring -- see zonePotion.  The faithful front end never sets
        this, so its handover keeps the faithful CAPS/SPACE reads. */
     this.zoneOut = true;
+    this.netOut = this.netOn && netAvailable();   // see feHandover()
     settingsSave();
     this.enter('pressplay');
   }
@@ -4524,6 +4534,18 @@ class Game{
      that path is byte-for-byte what the five differentials were measured
      against.                                                            */
   readKeys(input){
+    /* THE NETWORK SEAM, CLOSED.  A lockstep session hands EVERY player's
+       byte in together -- the local player's own included, because the
+       byte that drives him must be the byte the relay echoed, identical
+       on every client (see the NET section / shared/PROTOCOL.md).  The
+       local read below still exists: it BUILDS the byte the client
+       sends; it never drives the sim in a session. */
+    if (input && input.netDirs){
+      this.symHeld = false;
+      for (let n = 0; n < this.players.length; n++)
+        this.players[n].dir = (input.netDirs[n] | 0) & 0xFF;
+      return;
+    }
     /* $A84D/$A87B/$A8A9/$A8D7 BIT 1,(IY+7) -- SYMBOL SHIFT, and it is the
        WALK-THROUGH-WALLS CHEAT.  (IY+7) is $8486, the $7FFE half-row, and
        the game stores the row RAW: every reader is BIT n / JR nz / OR bit
@@ -8910,28 +8932,71 @@ class Game{
      advances in PASS_SECONDS and `over` advances in VIDEO FRAMES -- and the
      pass counter $8491 is not touched while the game is over, which is what
      the original does ($8491 advanced 0 over 100 video frames of $B3B9).   */
-  advance(dt,input){
-    this.acc += dt;
-    if (this.acc > 0.25) this.acc = 0.25;
-    if (this.mode === 'over'){
-      while (this.acc >= 1/FRAME_HZ){
-        this.acc -= 1/FRAME_HZ; this.simT += 1/FRAME_HZ;
-        if (this.overTick(input)) break;
-      }
-      return;
-    }
+  /* THE TICK is the unit the clocks -- and, ONLINE, the relay -- agree
+     on: one video frame of $B3B9/$B470/$B494 in `over`/`attract`/
+     `rewind`, one whole pass of $8503 in `play`.  Both advance() (the
+     offline wall clock) and stepNet() (the wire) step through the SAME
+     body below, so the two paths cannot drift apart. */
+  tickSeconds(){ return this.mode === 'play' ? PASS_SECONDS : 1/FRAME_HZ; }
+  /* one tick of whichever clock the mode runs on; debits acc/simT for
+     the tick and its blocking charges; returns true when the caller's
+     loop should yield the frame (a level change, or the over-loop's own
+     break). */
+  stepTick(input){
+    const s = this.tickSeconds();
+    this.acc -= s; this.simT += s;
+    if (this.mode === 'over') return this.overTick(input);
     /* $B470 and $B494 are VIDEO-FRAME loops with no HALT in them and no
        passes at all -- the third and fourth clocks in this file.  $8491 is
        not touched while either runs, exactly as it is not during $B3B9. */
-    if (this.mode === 'attract' || this.mode === 'rewind'){
-      while (this.acc >= 1/FRAME_HZ){
-        this.acc -= 1/FRAME_HZ; this.simT += 1/FRAME_HZ;
-        if (this.mode === 'attract') this.attractTick(input);
-        else this.rewindTick(input);
-        if (this.mode === 'play') break;
-      }
-      return;
+    if (this.mode === 'attract'){ this.attractTick(input); return false; }
+    if (this.mode === 'rewind'){ this.rewindTick(input); return false; }
+    /* the held level change: the panel has had its pause, now make it */
+    if (this.levelHold){
+      this.levelHold = false;
+      this.bannerShow = null;
+      this.levelOver();
+      return true;
     }
+    this.onePass(input);
+    /* THE BLOCK IS REAL TIME AND IS CHARGED TO THE SAME CLOCK.  A banner
+       pass is 104 video frames on the original, not 4, and the game is
+       genuinely stopped for the other 100 -- so the accumulator is debited
+       for them and the port stands still for 2.0 s exactly as the original
+       does.  Without this the sound would be right and the game would run
+       through the pause. */
+    const extra = (this.passFrames - FRAMES_PER_PASS)/FRAME_HZ;
+    if (extra){ this.acc -= extra; this.simT += extra; }
+    /* $8556's RET comes AFTER $8550's blit and its pause, so a panel
+       raised on the last pass of a level is ON SCREEN, over the room it was
+       earned in, for the whole of its own tune -- and the level changes
+       only then.  Calling levelOver() in the same breath built the next
+       level and raised its entry screen in the same frame, so the pay-out
+       panel and the entry screen were drawn on top of each other. */
+    if (this.levelDone){
+      if (this.bannerShow !== null){ this.levelHold = true; return true; }
+      this.levelOver(); return true;
+    }
+    return false;
+  }
+  advance(dt,input){
+    this.acc += dt;
+    if (this.acc > 0.25) this.acc = 0.25;
+    this.serveIntroPause();
+    while (this.acc >= this.tickSeconds()){
+      if (this.stepTick(input)) break;
+    }
+  }
+  /* ONLINE: one lockstep tick, the wire's bytes in.  game.acc is not the
+     clock here (the NET layer paces itself on what simT consumed --
+     the tick plus any blocking pause it triggered), so it is pinned. */
+  stepNet(dirs){
+    this.serveIntroPause();
+    this.stepTick({ netDirs: dirs });
+    this.acc = 0;
+  }
+  serveIntroPause(){
+    if (this.mode !== 'play') return;
     /* $8B98's CALL $9CD7 BLITS THE LEVEL-ENTRY SCREEN AND ITS TAIL PAUSES,
        and both happen BEFORE the level's first pass ($B391 CALL $8503 comes
        after $B38E CALL $8B27).  startLevel() runs BETWEEN passes here, so
@@ -8979,38 +9044,6 @@ class Game{
            game sat still for half a minute.  Capping the debt makes a jump
            cost exactly one pause, however many arrive. */
         if (this.acc < -px) this.acc = -px;
-      }
-    }
-    while (this.acc >= PASS_SECONDS){
-      this.acc -= PASS_SECONDS; this.simT += PASS_SECONDS;
-      /* the held level change: the panel has had its pause, now make it */
-      if (this.levelHold){
-        this.levelHold = false;
-        this.bannerShow = null;
-        this.levelOver();
-        break;
-      }
-      this.onePass(input);
-      /* THE BLOCK IS REAL TIME AND IS CHARGED TO THE SAME CLOCK.  A banner
-         pass is 104 video frames on the original, not 4, and the game is
-         genuinely stopped for the other 100 -- so the accumulator is debited
-         for them and the port stands still for 2.0 s exactly as the original
-         does.  Without this the sound would be right and the game would run
-         through the pause. */
-      const extra = (this.passFrames - FRAMES_PER_PASS)/FRAME_HZ;
-      if (extra){ this.acc -= extra; this.simT += extra; }
-      /* $8556's RET.  The level is over: $B3AB decides whether that is the
-         next dungeon or the game-over chain, and both happen between two
-         passes of the main loop rather than inside one. */
-      /* $8556's RET comes AFTER $8550's blit and its pause, so a panel
-         raised on the last pass of a level is ON SCREEN, over the room it was
-         earned in, for the whole of its own tune -- and the level changes
-         only then.  Calling levelOver() in the same breath built the next
-         level and raised its entry screen in the same frame, so the pay-out
-         panel and the entry screen were drawn on top of each other. */
-      if (this.levelDone){
-        if (this.bannerShow !== null){ this.levelHold = true; break; }
-        this.levelOver(); break;
       }
     }
   }
@@ -9243,6 +9276,19 @@ class Game{
                               pos: s.tape.pos, loads: s.tape.loads,
                               stash: s.tape.stash.slice()});
     for (const k in s.sound) if (k in this.sound) this.sound[k] = s.sound[k];
+    /* DISPLAY REPAIR.  feScr -- the attract/rewind shadow screen -- is
+       display state and rightly not on the wire, but the TICKS of those
+       modes draw into it: a joiner landing mid-lobby redraws it from the
+       restored page counter.  (attractPage stores 1,2,3,0 for a drawn
+       1,2,3,4 -- $8767's RES 2 -- so 0 redraws page 4.) */
+    this.feScr = null;
+    if (this.mode === 'attract'){
+      this.feScr = new SpecScreen();
+      hsDrawPage(this.feScr, this.attractPage === 0 ? 4 : this.attractPage);
+    } else if (this.mode === 'rewind'){
+      this.feScr = new SpecScreen();
+      hsDrawRewind(this.feScr);
+    }
     return this;
   }
 }
@@ -10439,6 +10485,18 @@ const frontend = new FrontEnd();
 let feRunning = !!FE;          // no front-end assets -> boot straight to play
 let feAcc = 0;
 function feHandover(){
+  /* ONLINE: the screen chose a session, so the game boots from the
+     server's WELCOME/CHARS instead of the five bytes -- the character
+     pick rides HELLO, the method and potion wiring stay this client's
+     own (see netBoot).  Everything below this arm is the offline path,
+     exactly as it always was. */
+  if (frontend.netOut && netAvailable()){
+    netStart(serverUrl(), { char: frontend.FFFF & 3,
+                            method1: frontend.FFFC & 3,
+                            zonePotion: frontend.zoneOut });
+    feRunning = false;
+    return;
+  }
   /* $FF38 JP $8400 -- the game starts with block A gone and five bytes left.
      $BE53/$BE64 read the two characters and $8560/$8589 the two methods; the
      sound branch is SOUND_MODE here.  Then $BEE2 JP $B358 falls into $B35A,
@@ -10605,6 +10663,252 @@ function pollGamepads(){
   };
 }
 
+/* =======================================================================
+   ONLINE -- THE CLIENT SIDE OF THE WIRE (shared/PROTOCOL.md).
+   =======================================================================
+   Decisions, as agreed with Anthony:
+     * THE PAGE IS THE SERVER.  gauntlet-relay serves this file over the
+       port it relays on, so the address is the page's own origin --
+       serverUrl().  `?server=host:port` overrides; a file:// open with
+       no override plays offline exactly as before.
+     * THE ATTRACT SCREEN IS THE LOBBY.  Lockstep begins the moment the
+       session boots: attract frames are exchanged like play passes (the
+       exchange unit is one TICK -- Game.stepTick), and the first FIRE
+       byte to cross the relay materialises its player through $9440,
+       the engine's own join-in model, untouched.
+     * The relay owner is whoever runs the exe; no seat has powers.
+   The unit on the wire is the engine's own per-tick direction byte.  The
+   LOCAL keyboard builds the byte this client SENDS; the byte that drives
+   the sim -- every seat's, this client's included -- is the one the
+   relay echoes, so every client steps identical input (readKeys' netDirs
+   arm).  v1 paces one tick per round trip: INPUT goes out when the local
+   clock is due a tick, the tick steps when PASS comes back.  A LAN round
+   trip is far under a tick; input pipelining is a later change to THIS
+   layer alone.                                                         */
+const NETP = A.protocol || null;
+function serverUrl(){
+  try {
+    if (typeof location === 'undefined') return null;
+    const q = new URLSearchParams(location.search || '').get('server');
+    if (q) return q.indexOf('://') >= 0 ? q : 'ws://' + q;
+    if (location.protocol === 'http:' || location.protocol === 'https:')
+      return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/';
+  } catch(e) {}
+  return null;
+}
+function netAvailable(){ return !!NETP && (net.forceAvailable || !!serverUrl()); }
+/* manual UTF-8 -- the headless sandbox has no TextEncoder */
+function utf8Enc(s){
+  const out = [];
+  for (let i = 0; i < s.length; i++){
+    let c = s.codePointAt(i);
+    if (c > 0xFFFF) i++;
+    if (c < 0x80) out.push(c);
+    else if (c < 0x800) out.push(0xC0|(c>>6), 0x80|(c&63));
+    else if (c < 0x10000) out.push(0xE0|(c>>12), 0x80|((c>>6)&63), 0x80|(c&63));
+    else out.push(0xF0|(c>>18), 0x80|((c>>12)&63), 0x80|((c>>6)&63), 0x80|(c&63));
+  }
+  return out;
+}
+function utf8Dec(b, off){
+  let s = '';
+  for (let i = off; i < b.length; ){
+    const c = b[i];
+    if (c < 0x80){ s += String.fromCharCode(c); i++; }
+    else if (c < 0xE0){ s += String.fromCharCode(((c&31)<<6)|(b[i+1]&63)); i += 2; }
+    else if (c < 0xF0){ s += String.fromCharCode(((c&15)<<12)|((b[i+1]&63)<<6)|(b[i+2]&63)); i += 3; }
+    else { s += String.fromCodePoint(((c&7)<<18)|((b[i+1]&63)<<12)|((b[i+2]&63)<<6)|(b[i+3]&63)); i += 4; }
+  }
+  return s;
+}
+const net = {
+  phase: 'off',        // off | hello | boot | snap | live | ended
+  status: '',          // the overlay line -- HUD font: A-Z, digits, space
+  everLive: false,     // a sim exists; overlays stop owning the screen
+  tp: null,            // {send(bytes), close()}
+  cfgLocal: null,      // {char, method1, zonePotion} -- this client's own
+  seat: -1, seats: 0, buildSeed: 0, welcomed: false,
+  chars: null,         // the session character table (CHARS)
+  step: 0,             // the next tick to exchange
+  sentInput: false, pendDirs: null,
+  acc: 0, lastProgress: 0, desyncs: 0, seatMask: 0,
+  forceAvailable: false,   // tests: offer the SERVER row with no location
+};
+function netNow(){
+  return (typeof performance !== 'undefined' && performance.now)
+    ? performance.now() : Date.now();
+}
+function netSend(type, bytes){
+  if (!net.tp) return;
+  net.tp.send(Uint8Array.from([type].concat(bytes || [])));
+}
+const netU32 = v => [v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF];
+const netRdU32 = (b, o) => (b[o] | (b[o+1] << 8) | (b[o+2] << 16) | (b[o+3] << 24)) >>> 0;
+/* the default transport is a browser WebSocket; tests hand netStart a
+   factory of their own instead -- anything with the same three wires. */
+function netWsTransport(url, h){
+  const ws = new WebSocket(url);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => h.open();
+  ws.onmessage = ev => h.message(new Uint8Array(ev.data));
+  ws.onclose = () => h.close();
+  return { send: b => ws.send(b), close: () => ws.close() };
+}
+function netStart(url, cfgLocal, tpFactory){
+  net.phase = 'hello'; net.status = 'CONTACTING SERVER';
+  net.cfgLocal = cfgLocal || { char: GATE_CONFIG.char & 3, method1: 3, zonePotion: false };
+  net.everLive = false; net.welcomed = false; net.chars = null;
+  net.step = 0; net.sentInput = false; net.pendDirs = null;
+  net.acc = 0; net.desyncs = 0;
+  const h = {
+    open(){ netSend(NETP.msgs.HELLO, [NETP.version & 0xFF, net.cfgLocal.char & 3]); },
+    message(b){ netOnMessage(b); },
+    close(){ if (net.phase !== 'ended'){ net.status = 'DISCONNECTED'; net.phase = 'ended'; } },
+  };
+  net.tp = (tpFactory || netWsTransport)(url, h);
+  return h;                            // tests drive the handlers directly
+}
+function netBoot(){
+  /* every client resets IDENTICALLY where the sim can see: the seed and
+     both characters are the SESSION's (WELCOME + CHARS).  The method and
+     the potion wiring are this client's own -- they only shape the byte
+     it sends, never the sim. */
+  const chars = net.chars || [];
+  const c1 = (chars[0] !== undefined && chars[0] !== 0xFF) ? chars[0] & 3
+           : net.cfgLocal.char & 3;
+  const c2 = (chars[1] !== undefined && chars[1] !== 0xFF) ? chars[1] & 3
+           : feDrawP2(c1, CHAR2_INDEX);
+  game.reset({ online: true, buildSeed: net.buildSeed,
+               char: c1, char2: c2,
+               method1: net.cfgLocal.method1 & 3,
+               zonePotion: !!net.cfgLocal.zonePotion });
+  game.localIdx = net.seat;
+  game.enterAttract();
+  net.step = 0; net.sentInput = false; net.pendDirs = null;
+  net.everLive = true; net.lastProgress = netNow();
+  netSend(NETP.msgs.READY, netU32(0));
+  net.phase = 'live'; net.status = '';
+}
+function netOnMessage(b){
+  if (!b || b.length < 1 || !NETP) return;
+  const M = NETP.msgs, t = b[0];
+  if (t === M.WELCOME){
+    net.seat = b[1]; net.seats = b[2];
+    net.buildSeed = netRdU32(b, 3);
+    const mode = b[7], pass = netRdU32(b, 8);
+    net.welcomed = true;
+    if (net.seats > 2){
+      /* the sim carries two player blocks today; a wider session needs
+         the four-block pass first (CLAUDE.md, planned work) */
+      net.status = 'SERVER SEATS UNSUPPORTED'; net.phase = 'ended';
+      if (net.tp) net.tp.close();
+      return;
+    }
+    if (mode === NETP.welcomeModes.SNAPSHOT){
+      net.phase = 'snap'; net.status = 'WAITING FOR SNAPSHOT'; net.step = pass;
+    } else {
+      /* boot happens on CHARS, which the server sends right behind */
+      net.phase = 'boot'; net.status = 'WAITING FOR PLAYERS';
+    }
+    return;
+  }
+  if (t === M.CHARS){
+    /* pre-start only.  TCP ordering puts every CHARS before PASS 0, so a
+       re-boot here can never rewind a sim that has stepped. */
+    net.chars = Array.from(b.subarray(1));
+    if ((net.phase === 'boot' || net.phase === 'live') && net.step === 0) netBoot();
+    return;
+  }
+  if (t === M.PASS){
+    const n = netRdU32(b, 1), count = b[5];
+    if (n !== net.step) return;        // a stale echo; the wire is ordered
+    const dirs = [];
+    for (let i = 0; i < count; i++) dirs.push(b[6 + i] | 0);
+    net.pendDirs = dirs;               // stepped by netFrame, on the clock
+    return;
+  }
+  if (t === M.SNAP){
+    if (net.phase !== 'snap') return;
+    const pass = netRdU32(b, 1);
+    let snap = null;
+    try { snap = JSON.parse(utf8Dec(b, 5)); } catch(e){}
+    if (!snap){ net.status = 'BAD SNAPSHOT'; net.phase = 'ended'; return; }
+    game.localIdx = net.seat;          // restore preserves the receiver's own
+    game.restore(snap);
+    net.step = pass; net.sentInput = false; net.pendDirs = null;
+    net.everLive = true; net.lastProgress = netNow();
+    netSend(NETP.msgs.READY, netU32(pass));
+    net.phase = 'live'; net.status = '';
+    return;
+  }
+  if (t === M.SNAPREQ){
+    /* serve the joiner: land on the boundary first (a PASS can be in
+       flight), then hand the whole game over -- verbatim on the far side */
+    if (net.pendDirs){ const d = net.pendDirs; net.pendDirs = null; netApply(d); }
+    netSend(NETP.msgs.SNAP,
+            netU32(net.step).concat(utf8Enc(JSON.stringify(game.snapshot()))));
+    return;
+  }
+  if (t === M.DESYNC){
+    net.desyncs++;
+    net.phase = 'snap'; net.status = 'RESYNCING';
+    net.sentInput = false; net.pendDirs = null;
+    return;
+  }
+  if (t === M.SEATS){ net.seatMask = b[1] | 0; return; }
+  if (t === M.ERROR){
+    const E = NETP.errors, code = b[1] | 0;
+    net.status = code === E.FULL ? 'SERVER FULL'
+               : code === E.VERSION ? 'VERSION MISMATCH'
+               : code === E.ORPHANED ? 'SESSION ENDED  RELOAD TO REJOIN'
+               : 'PROTOCOL ERROR';
+    net.phase = 'ended';
+    return;
+  }
+}
+function netLocalDir(){ return controlRead(game.method1, keyboard) & 0xFF; }
+function netApply(dirs){
+  const t0 = game.simT;
+  game.stepNet(dirs);
+  /* pace on what the tick CONSUMED -- a level pause charges simT its
+     whole 4.2 s, and the wire sits out exactly that long with it */
+  net.acc -= (game.simT - t0);
+  if (net.acc < -5) net.acc = -5;
+  const done = net.step;
+  net.step++; net.sentInput = false; net.lastProgress = netNow();
+  if (((done + 1) % NETP.fpEvery) === 0)
+    netSend(NETP.msgs.FP, netU32(done).concat(netU32(game.fingerprint())));
+}
+function netFrame(dt){
+  if (net.phase !== 'live') return;
+  net.acc += dt;
+  if (net.acc > 0.25) net.acc = 0.25;
+  while (net.pendDirs){
+    const d = net.pendDirs; net.pendDirs = null;
+    netApply(d);
+  }
+  if (!net.sentInput && net.acc >= game.tickSeconds()){
+    netSend(NETP.msgs.INPUT, netU32(net.step).concat([netLocalDir()]));
+    net.sentInput = true;
+  }
+}
+/* the overlay: the whole screen while no sim exists yet, one centred
+   line over the game after that.  HUD font text only. */
+function netOverlay(ctx){
+  if (net.phase === 'off') return;
+  let line = net.status;
+  if (net.phase === 'live')
+    line = (net.sentInput && netNow() - net.lastProgress > 700)
+      ? 'WAITING FOR PLAYERS' : '';
+  if (!line) return;
+  line = line.slice(0, 30);
+  if (!net.everLive) uiPanel(ctx, 0, 0, 32, 24, UI_ATTR);
+  else {
+    const w = Math.min(32, line.length + 2);
+    uiPanel(ctx, (32 - w) >> 1, 10, w, 3, UI_ATTR);
+  }
+  uiText(ctx, line, (32 - line.length) >> 1, 11, UI_ATTR);
+}
 
 let last=null;
 function frame(t){
@@ -10632,6 +10936,19 @@ function frame(t){
       requestAnimationFrame(frame);
       return;
     }
+  }
+  /* ONLINE: the wire is the simulation clock -- netFrame sends the local
+     byte when a tick is due and steps when the relay echoes it.  The
+     overlay owns the whole screen until a sim exists (boot or snapshot),
+     then rides above the game for stalls and status. */
+  if (net.phase !== 'off'){
+    netFrame(dt);
+    sound.flush(game.sound.log, game.simFrame);
+    if (net.everLive) render(ctx, game);
+    else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 256, 192); }
+    netOverlay(ctx);
+    requestAnimationFrame(frame);
+    return;
   }
   game.advance(dt,input);          // simulation clock
   /* THE BRIDGE, and note what it is handed: the driver's event log and the
@@ -10679,6 +10996,9 @@ requestAnimationFrame(frame);
 
 globalThis.__GAUNTLET__={
   Game,game,render,assets:A,
+  net:{ state:net, start:netStart, frame:netFrame, overlay:netOverlay,
+        onMessage:netOnMessage, apply:netApply, boot:netBoot,
+        localDir:netLocalDir, serverUrl, netAvailable, utf8Enc, utf8Dec },
   /* SETTINGS persistence -- the WIDGETS and the SCREEN that edits them are
      under `frontend` below (optRows()/optFrame()/optRender() on the live
      instance), same reasoning as tapePrompts: an options screen no test can

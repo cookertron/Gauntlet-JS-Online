@@ -71,6 +71,7 @@ constexpr uint8_t  MSG_SNAP            = 8;
 constexpr uint8_t  MSG_READY           = 9;
 constexpr uint8_t  MSG_SEATS           = 10;
 constexpr uint8_t  MSG_ERROR           = 11;
+constexpr uint8_t  MSG_CHARS           = 12;
 constexpr uint8_t  ERR_FULL            = 1;
 constexpr uint8_t  ERR_VERSION         = 2;
 constexpr uint8_t  ERR_PROTOCOL        = 3;
@@ -179,6 +180,13 @@ struct Relay {
   uint32_t pass = 0;
   uint32_t buildSeed = 0;
   uint64_t passStartMs = 0;       // when the current pass began waiting
+  /* CHARACTERS ARE SIM STATE (shot/fight/magic/armour tables), so the
+     session owns one table of them: a fresh HELLO's pick lands here --
+     bumped past any earlier seat's, the engine never fields two of one
+     character -- and CHARS broadcasts it.  Frozen once the first PASS
+     goes out; a late joiner's arrive inside the snapshot instead. */
+  uint8_t charBySeat[MAX_SEATS];
+  std::string htmlPath;           // what GET / serves; empty = 404
   /* the one pause state: a snapshot in flight, for a joiner or a
      desynced client.  While syncing the loop holds; inputs already
      received keep their slots. */
@@ -188,7 +196,7 @@ struct Relay {
   uint64_t syncStartMs = 0;
   std::deque<int> joinQueue;      // conn indices waiting for a sync slot
 
-  Relay(){ for (int i=0;i<MAX_SEATS;i++) seat[i] = -1; }
+  Relay(){ for (int i=0;i<MAX_SEATS;i++){ seat[i] = -1; charBySeat[i] = 0xFF; } }
   uint64_t now(){ return GetTickCount64(); }
 
   /* ---- socket plumbing ---- */
@@ -233,6 +241,12 @@ struct Relay {
     for (auto& c : conns) if (c->open && c->state == Conn::UP && c->seat >= 0)
       queueMsg(*c, m);
   }
+  void broadcastChars(){
+    std::vector<uint8_t> m; m.push_back(MSG_CHARS);
+    for (int i=0;i<MAX_SEATS;i++) m.push_back(charBySeat[i]);
+    for (auto& c : conns) if (c->open && c->state == Conn::UP && c->seat >= 0)
+      queueMsg(*c, m);
+  }
   void sendError(Conn& c, uint8_t code){
     std::vector<uint8_t> m; m.push_back(MSG_ERROR); m.push_back(code);
     queueMsg(c, m);
@@ -245,7 +259,11 @@ struct Relay {
     closesocket(c.s);
     printf("[relay] drop seat=%d (%s)\n", c.seat, why); fflush(stdout);
     int idx = indexOf(c);
-    if (c.seat >= 0){ seat[c.seat] = -1; c.seat = -1; }
+    if (c.seat >= 0){
+      /* pre-start, a leaver's character pick leaves with him */
+      if (pass == 0){ charBySeat[c.seat] = 0xFF; broadcastChars(); }
+      seat[c.seat] = -1; c.seat = -1;
+    }
     if (syncing){
       for (size_t i=0;i<targets.size();i++)
         if (targets[i] == idx){ targets.erase(targets.begin()+i); break; }
@@ -266,6 +284,7 @@ struct Relay {
       fflush(stdout);
       pass = 0; syncing = false; provider = -1;
       buildSeed = freshSeed();
+      for (int i=0;i<MAX_SEATS;i++) charBySeat[i] = 0xFF;
       orphanTargets();
       while (!joinQueue.empty()){
         int j = joinQueue.front(); joinQueue.pop_front();
@@ -414,7 +433,7 @@ struct Relay {
     uint8_t t = p[0]; p++; n--;
     switch (t){
       case MSG_HELLO: {
-        if (n < 1 || p[0] != PROTO_VERSION){ sendError(c, ERR_VERSION); return; }
+        if (n < 2 || p[0] != PROTO_VERSION){ sendError(c, ERR_VERSION); return; }
         if (c.seat >= 0){ drop(c, "double HELLO"); return; }
         int s = -1;
         for (int i=0;i<seatsN;i++) if (seat[i] < 0){ s = i; break; }
@@ -430,8 +449,21 @@ struct Relay {
                mode == MODE_FRESH ? "fresh" : "snapshot", pass);
         fflush(stdout);
         if (mode == MODE_SNAPSHOT){
+          /* his pick does not apply -- the block's character arrives
+             inside the snapshot */
           joinQueue.push_back(indexOf(c));
           startSyncIfDue();
+        } else {
+          uint8_t ch = p[1] & 3;
+          for (int guard=0; guard<4; guard++){
+            bool clash = false;
+            for (int i=0;i<MAX_SEATS;i++)
+              if (i != s && charBySeat[i] == ch) clash = true;
+            if (!clash) break;
+            ch = (ch + 1) & 3;                    // the engine never fields
+          }                                       // two of one character
+          charBySeat[s] = ch;
+          broadcastChars();
         }
         broadcastSeats();
         break;
@@ -484,6 +516,48 @@ struct Relay {
     }
   }
 
+  /* ---- plain HTTP: THE PAGE IS THE SERVER ------------------------------
+     A GET without the Upgrade header is a browser asking for the game:
+     the owner runs this exe and shares http://host:port/, and the page
+     that comes back connects to its own origin -- the address needs no
+     UI, which the HUD font (no '.' or ':' glyphs) could not have drawn
+     anyway.  Read per request, so a rebuilt client ships without
+     restarting the relay. */
+  void serveHttp(Conn& c, const std::string& req){
+    std::string path = "/";
+    size_t sp1 = req.find(' ');
+    if (sp1 != std::string::npos){
+      size_t sp2 = req.find(' ', sp1 + 1);
+      if (sp2 != std::string::npos) path = req.substr(sp1 + 1, sp2 - sp1 - 1);
+    }
+    size_t qm = path.find('?');
+    if (qm != std::string::npos) path = path.substr(0, qm);
+    std::string body, head;
+    if ((path == "/" || path == "/index.html") && !htmlPath.empty()){
+      FILE* f = fopen(htmlPath.c_str(), "rb");
+      if (f){
+        fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+        if (sz > 0){ body.resize((size_t)sz);
+                     if (fread(&body[0], 1, (size_t)sz, f) != (size_t)sz) body.clear(); }
+        fclose(f);
+      }
+    }
+    if (!body.empty()){
+      head = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+             "Cache-Control: no-store\r\nConnection: close\r\n"
+             "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
+    } else {
+      body = "NOT FOUND\n";
+      head = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n"
+             "Connection: close\r\nContent-Length: " +
+             std::to_string(body.size()) + "\r\n\r\n";
+    }
+    c.tx.insert(c.tx.end(), head.begin(), head.end());
+    c.tx.insert(c.tx.end(), body.begin(), body.end());
+    c.closeAfterTx = true;
+    flushTx(c);
+  }
+
   /* ---- RFC 6455 ---- */
   void onHandshakeData(Conn& c){
     if (c.hsBuf.size() > LIM_HANDSHAKE_MAX){ drop(c, "handshake too long"); return; }
@@ -492,6 +566,11 @@ struct Relay {
     /* find Sec-WebSocket-Key, case-insensitively */
     std::string low; low.reserve(c.hsBuf.size());
     for (char ch : c.hsBuf) low += (char)tolower((unsigned char)ch);
+    if (low.find("upgrade: websocket") == std::string::npos &&
+        low.find("upgrade:websocket") == std::string::npos){
+      serveHttp(c, c.hsBuf.substr(0, end));
+      return;
+    }
     size_t k = low.find("sec-websocket-key:");
     if (k == std::string::npos || k > end){ drop(c, "no websocket key"); return; }
     size_t vs = k + 18;
@@ -694,10 +773,36 @@ int main(int argc, char** argv){
       if (s < 1) s = 1; if (s > MAX_SEATS) s = MAX_SEATS;
       R.seatsN = s;
     }
+    else if (!strcmp(argv[i], "--html") && i+1 < argc) R.htmlPath = argv[++i];
+  }
+  /* the page (GET /): --html wins; otherwise look beside the cwd and the
+     exe for client/gauntlet.html, the built single file */
+  if (R.htmlPath.empty()){
+    std::vector<std::string> cand = {
+      "client\\gauntlet.html", "..\\client\\gauntlet.html",
+      "..\\..\\client\\gauntlet.html" };
+    char exe[MAX_PATH];
+    if (GetModuleFileNameA(nullptr, exe, MAX_PATH)){
+      std::string d(exe);
+      size_t cut = d.find_last_of('\\');
+      if (cut != std::string::npos){
+        d = d.substr(0, cut);
+        cand.push_back(d + "\\..\\..\\client\\gauntlet.html");
+        cand.push_back(d + "\\gauntlet.html");
+      }
+    }
+    for (const auto& p : cand){
+      FILE* f = fopen(p.c_str(), "rb");
+      if (f){ fclose(f); R.htmlPath = p; break; }
+    }
   }
   WSADATA wsa;
   if (WSAStartup(MAKEWORD(2,2), &wsa) != 0){ printf("WSAStartup failed\n"); return 1; }
   if (!R.listenOn()){ printf("bind/listen failed on %u\n", (unsigned)R.port); return 1; }
+  printf(R.htmlPath.empty()
+           ? "[relay] no client page found -- GET / will 404 (use --html)\n"
+           : "[relay] serving %s\n",
+         R.htmlPath.c_str());
   R.run();
   return 0;
 }

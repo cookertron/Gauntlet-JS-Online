@@ -201,6 +201,15 @@ def main():
         'the title tune is 103 played ticks a channel'
     assets['frontend'] = fe
 
+    # THE WIRE (shared/PROTOCOL.md).  The client speaks the relay protocol,
+    # and its constants come from the same shared/protocol.json the C++
+    # mirrors -- tools/protocheck.py holds that side to it; inlining this
+    # side makes JS drift impossible outright.
+    proto_path = os.path.join(ROOT, 'shared', 'protocol.json')
+    if not os.path.exists(proto_path):
+        sys.exit('BUILD FAILED: shared/protocol.json missing')
+    assets['protocol'] = json.load(open(proto_path, encoding='utf-8'))
+
     # The engine reads these unconditionally -- fail the build rather than ship
     # an artifact that throws on load (they are written by tools/extract.py).
     for k in ('pass_ctr', 'hp', 'ghost_damage', 'dirmask', 'deflect',

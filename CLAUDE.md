@@ -20,9 +20,13 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
 - `shared/PROTOCOL.md` + `shared/protocol.json` — the wire contract, v1.
   The JSON is the source of truth; `python tools/protocheck.py` holds
   the C++ constants block to it (28 constants, both directions).
-- `tools/relaytest.js` — the relay's empirical gate (24 checks): spawns
+- `tools/relaytest.js` — the relay's empirical gate (29 checks): spawns
   the exe, speaks real WebSocket at it (own client, every frame byte
   controlled), plays the full protocol conversation.
+- `tools/e2etest.js` — the full stack (18 checks): two real client sims
+  (vm sandboxes on the BUILT file) through the real relay; the proof
+  that two browser windows play.  `tools/wsmini.js` is the shared WS
+  client both tests use.
 - `tools/build.py` — `python tools/build.py` regenerates the client.
 - `tools/headless.js` — `node tools/headless.js`, the test suite
   (1211/1211 at fork point). Boots the BUILT file in a vm sandbox.
@@ -63,10 +67,35 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
    orphaned-session reset.  The PROTOCOL allows 4 seats; the server
    defaults `--seats 2` because the sim carries two player blocks —
    growing the sim to four blocks is its own later pass.
-   **Remaining for step 2:** the client side (speak the protocol from
-   the browser: drive `players[n].dir` off PASS, send INPUT/FP/SNAP,
-   restore on join) — the NETWORK SEAM in `readKeys()` is where it
-   lands.
+   **Client side BUILT 2026-08-29 — THE GAME IS PLAYABLE ONLINE**
+   (headless 1213/1213 incl. a mock-transport section; e2e 18/18 —
+   `tools/e2etest.js` runs TWO real sims in vm sandboxes through the
+   real relay over real WebSocket: lobby lockstep, FIRE-join on both
+   sims at once, movement, disconnect, a LATE JOIN restoring off the
+   live snapshot, fingerprints equal at every barrier, zero desyncs).
+   How it fits together, as agreed with Anthony:
+   - **The page is the server**: the relay answers plain `GET /` with
+     `client/gauntlet.html`, so the address is the page's own origin
+     (`serverUrl()`); `?server=host:port` overrides; file:// = offline.
+     Owner = whoever runs the exe; no seat has powers.
+   - **The attract screen is the lobby**: lockstep starts at boot; the
+     exchange unit is one TICK (`Game.stepTick` — one video frame in
+     attract/rewind/over, one pass in play; `advance()` was refactored
+     to share that body, behaviour-identical, and `stepNet()` is the
+     wire's entry).  The NETWORK SEAM in `readKeys()` is closed by the
+     `netDirs` arm: EVERY player's byte — the local player's included —
+     comes from the relay's echo (mutation-verified: local-byte
+     shortcut fails the suite).
+   - **Characters are sim state**: HELLO carries the pick, CHARS locks
+     the table before the first PASS (server bumps clashes — the engine
+     never fields two of one character); in practice the first fresh
+     boot fixes it and later joiners inherit blocks via snapshot.
+   - `restore()` now repairs `feScr` (attract/rewind shadow screen) —
+     found by the e2e: a mid-lobby joiner crashed the page redraw.
+   - v1 paces one tick per round trip (LAN-ideal).  **Later polish:**
+     input pipelining (net layer only); a join-time character pick (the
+     dir byte has two spare bits); growing the sim to four player
+     blocks, which is what unlocks `--seats 3/4`.
 3. Netcode design — **SETTLED with Anthony 2026-08-29:**
    - **LOCKSTEP RELAY.**  Every client runs the JS sim it already has; the
      C++ server relays one direction byte per player per pass, owns the

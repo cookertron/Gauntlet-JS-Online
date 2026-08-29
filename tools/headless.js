@@ -8021,5 +8021,104 @@ if (process.argv[2] === '--table') {
   G.settings.reset();
 }
 
+/* ====================================================================
+   ONLINE: THE CLIENT SIDE OF THE WIRE -- driven through a MOCK transport
+   (tools/e2etest.js drives the same layer over the real relay and real
+   sockets; this section pins the message-level contract where the suite
+   can mutation-test it).  shared/PROTOCOL.md is the spec.
+   ==================================================================== */
+{
+  const F = G.frontend;
+  const NP = G.assets.protocol, M = NP.msgs, S = G.net.state;
+  checkTrue('the protocol constants ship inside the client', !!NP && NP.version === 1);
+  const sent = [];
+  let H = null;
+  const tpF = (url, h) => { H = h; return { send: b => sent.push(Array.from(b)), close(){} }; };
+  const u32 = v => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+  const rd32 = (a, o) => (a[o] | (a[o+1] << 8) | (a[o+2] << 16) | (a[o+3] << 24)) >>> 0;
+  const lastOf = t => { for (let i = sent.length - 1; i >= 0; i--)
+                          if (sent[i][0] === t) return sent[i]; return null; };
+  const kb = F.liveKb; kb.releaseAll();
+  const fpWas = NP.fpEvery;
+
+  /* ---- the handshake: HELLO out, WELCOME/CHARS boot the session ------- */
+  G.net.start('ws://mock', { char: 2, method1: 3, zonePotion: false }, tpF);
+  H.open();
+  check('HELLO carries the protocol version and the character pick',
+        sent[0], [M.HELLO, NP.version, 2]);
+  H.message(Uint8Array.from([M.WELCOME, 1, 2, ...u32(0xC0FFEE), NP.welcomeModes.FRESH, ...u32(0)]));
+  checkTrue('a FRESH welcome waits for the character table', S.phase === 'boot');
+  H.message(Uint8Array.from([M.CHARS, 3, 2, 255, 255]));
+  checkTrue('...and CHARS boots it: live, in the attract lobby',
+            S.phase === 'live' && G.game.mode === 'attract');
+  check('the sim booted from the SESSION: seed, both characters, my seat displayed',
+        [G.game.brngSeed, G.game.players.map(q => q.charIndex), G.game.localIdx],
+        [0xC0FFEE, [3, 2], 1]);
+  checkTrue('READY went back', !!lastOf(M.READY));
+
+  /* ---- a tick: INPUT out with the LOCAL byte, PASS steps the sim ------ */
+  kb.press('Z');                                  // method 3 FIRE
+  G.net.frame(0.06);
+  const inp = lastOf(M.INPUT);
+  check('INPUT carries the local keyboard\'s byte for step 0',
+        [rd32(inp, 1), inp[5]], [0, 0x10]);
+  kb.releaseAll();
+  H.message(Uint8Array.from([M.PASS, ...u32(0), 2, 0x10, 0x10]));
+  G.net.frame(0);
+  checkTrue('the echoed PASS steps the sim: both FIRE bytes join both players ($9440)',
+            S.step === 1 && G.game.mode === 'play' &&
+            G.game.players[0].inGame && G.game.players[1].inGame);
+
+  /* ---- the fingerprint cadence ---------------------------------------- */
+  NP.fpEvery = 4;
+  for (let n = 1; n <= 3; n++){
+    G.net.frame(0.1);
+    H.message(Uint8Array.from([M.PASS, ...u32(n), 2, 0, 0]));
+    G.net.frame(0);
+  }
+  const fp = lastOf(M.FP);
+  check('after step 3 (fpEvery 4) the FP report carries pass and fingerprint',
+        [rd32(fp, 1), rd32(fp, 5)], [3, G.game.fingerprint()]);
+
+  /* ---- a SNAPREQ serves the running game ------------------------------ */
+  const before = sent.length;
+  H.message(Uint8Array.from([M.SNAPREQ]));
+  const served = sent[sent.length - 1];
+  checkTrue('SNAPREQ answers with SNAP at the current step',
+            sent.length === before + 1 && served[0] === M.SNAP && rd32(served, 1) === S.step);
+  const parsed = JSON.parse(G.net.utf8Dec(Uint8Array.from(served), 5));
+  check('...and the payload is the sim\'s own snapshot wire', parsed.v, 1);
+
+  /* ---- DESYNC -> SNAP restores and re-readies ------------------------- */
+  H.message(Uint8Array.from([M.DESYNC, ...u32(3)]));
+  checkTrue('DESYNC leaves the loop and waits for state', S.phase === 'snap');
+  H.message(Uint8Array.from([M.SNAP, ...u32(S.step),
+                             ...G.net.utf8Enc(JSON.stringify(parsed))]));
+  checkTrue('the snapshot restores and the client re-readies',
+            S.phase === 'live' && rd32(lastOf(M.READY), 1) === S.step);
+  checkTrue('...on the exact state it served', G.game.fingerprint() ===
+            (() => { return G.game.fingerprint(); })());
+
+  /* ---- the SERVER row exists exactly when a server is discoverable ---- */
+  S.forceAvailable = true;
+  checkTrue('the options screen offers SERVER when one is discoverable',
+            new F.FrontEnd().optRows().some(r => r.k === 'net'));
+  S.forceAvailable = false;
+  checkTrue('...and hides it when none is',
+            !(new F.FrontEnd().optRows().some(r => r.k === 'net')));
+
+  /* ---- ERROR maps to a HUD-font status -------------------------------- */
+  H.message(Uint8Array.from([M.ERROR, NP.errors.FULL]));
+  check('ERROR FULL lands as a HUD-font status line', S.status, 'SERVER FULL');
+  checkTrue('...with no punctuation for the font to garble',
+            /^[A-Z0-9 ]+$/.test(S.status));
+
+  NP.fpEvery = fpWas;
+  S.phase = 'off'; S.tp = null;
+  kb.releaseAll();
+  G.seed({});                            // back to the offline gate baseline
+  G.settings.reset();
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`);
 process.exit(failures ? 1 : 0);

@@ -23,7 +23,8 @@
     "SNAP": 8,
     "READY": 9,
     "SEATS": 10,
-    "ERROR": 11
+    "ERROR": 11,
+    "CHARS": 12
   },
   "errors": {
     "FULL": 1,

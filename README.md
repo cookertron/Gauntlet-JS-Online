@@ -20,7 +20,21 @@ python tools/build.py     # client/template.html -> client/gauntlet.html
 node tools/headless.js    # the client test suite (1195/1195)
 ```
 
-Open `client/gauntlet.html` in a browser to play.
+Open `client/gauntlet.html` in a browser to play offline.
+
+## Play online
+
+The relay serves the game itself: run it, share the address, done.
+
+```
+server\build\gauntlet-relay.exe          # builds below; --port/--seats/--html
+```
+
+Everyone opens `http://<host-ip>:33792/`, picks a character, and STARTs
+with SERVER ONLINE — the attract screen is the lobby, and FIRE drops you
+into the dungeon exactly as it always did.  Opening the page from disk
+(or setting SERVER LOCAL) plays offline; `?server=host:port` joins a
+relay from a page hosted elsewhere.
 
 The C++ relay server (`server/relay.cpp`, protocol in
 `shared/PROTOCOL.md`) builds inside the VS x64 environment:

@@ -40,7 +40,7 @@ One message = `u8 type` then the fields.  C→S / S→C marks direction.
 
 | type | name    | dir | payload                                            |
 |-----:|---------|-----|----------------------------------------------------|
-| 1    | HELLO   | C→S | `u8 protoVersion`                                  |
+| 1    | HELLO   | C→S | `u8 protoVersion, u8 char` (0..3, the character pick) |
 | 2    | WELCOME | S→C | `u8 seat, u8 seats, u32 buildSeed, u8 mode, u32 pass` |
 | 3    | INPUT   | C→S | `u32 pass, u8 dir`                                 |
 | 4    | PASS    | S→C | `u32 pass, u8 seats, seats × u8 dir`               |
@@ -51,6 +51,7 @@ One message = `u8 type` then the fields.  C→S / S→C marks direction.
 | 9    | READY   | C→S | `u32 pass`                                         |
 | 10   | SEATS   | S→C | `u8 occupiedBitmask`                               |
 | 11   | ERROR   | S→C | `u8 code` — then the server closes                 |
+| 12   | CHARS   | S→C | `maxSeats × u8` character per seat, `0xFF` unset   |
 
 `dir` is the engine's own per-pass direction byte
 (up/down/left/right/fire/potion — the unit the sim always read).
@@ -65,6 +66,22 @@ One message = `u8 type` then the fields.  C→S / S→C marks direction.
 * **Boot.**  `WELCOME.mode` is FRESH while the session is at pass 0:
   the client boots `reset({online:true, buildSeed})` and sends READY.
   The buildSeed is the server's one die roll, shared by everyone.
+* **Characters are sim state** (they pick shot/fight/magic/armour), so
+  every client must boot every block identically.  A fresh HELLO's
+  `char` is stored per seat — bumped `(c+1)&3` past any earlier seat's
+  pick, since the engine never fields two of one character — and CHARS
+  is broadcast to everyone seated.  On CHARS at pass 0 a booted client
+  simply resets again (TCP ordering puts every CHARS before PASS 0, so
+  nobody has stepped).  The table freezes at the first PASS; an unset
+  seat's block derives its character deterministically (the client's
+  own default rule), and a late joiner takes characters from the
+  snapshot, where they already live.
+* **The page is the server.**  A plain HTTP `GET /` (no `Upgrade`
+  header) on the same port answers with `client/gauntlet.html`, so the
+  server's address is the page's own origin and the client needs no
+  configuration: the owner runs the exe and shares
+  `http://host:33792/`.  `?server=host:port` on the page URL overrides;
+  a page opened from `file://` with no override plays offline.
 * **The pass loop.**  Pure lockstep.  The loop advances only when every
   seated, READY client has sent INPUT for the current pass; the server
   then broadcasts one PASS with a byte per seat — an empty or
