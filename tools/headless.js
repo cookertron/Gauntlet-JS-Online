@@ -7603,5 +7603,275 @@ if (process.argv[2] === '--table') {
   }
 }
 
+/* ====================================================================
+   ONLINE: PER-PLAYER CAMERA WINDOWS -- ADDED (this fork; CLAUDE.md's
+   netcode design).  The camera is SIMULATION state ($A1DA's actor
+   freeze, $B0FE's recycle cull, $8D97's shot removal, $B156's pad
+   census all read it), so per-client display generalizes the RULES from
+   the camera to per-player windows.  Proven three ways here:
+     * DEGENERACY -- one player online is the tested sim, pass for pass,
+       by state digest (the strongest check: every generalized rule
+       collapses to the module-camera rule with one window);
+     * each rule's own new behaviour, driven with a second window;
+     * lockstep safety -- localIdx (which window THIS client displays)
+       never reaches the fingerprint.
+   ==================================================================== */
+{
+  /* a mode-NEUTRAL digest: what fingerprint() mixes, minus the camera
+     pair (online deliberately mixes the windows in, so fingerprints
+     cannot be compared across modes), plus the camera AS EXPERIENCED --
+     the module camera offline, player 1's window online. */
+  const digest = (g, online) => JSON.stringify([
+    g.players.map(q => [q.x, q.y, q.dir, q.health, q.score, q.keys,
+                        q.potions, q.timer, q.f11, q.p14, q.levelOwn,
+                        q.animCtl & 0x0F]),
+    g.actors.map(a => [a.x, a.y, a.state, a.flags & 0x3F]),
+    online ? [g.players[0].camX, g.players[0].camY,
+              g.players[0].camTgtX, g.players[0].camTgtY]
+           : [g.camX, g.camY, g.camTgtX, g.camTgtY],
+    g.passCtr, g.frameCtr, g.level, g.mshots.length
+  ]);
+  /* a deterministic solo walk: right, down, left, up in 20-pass legs,
+     firing every 7th pass -- enough to wake actors, fire shots and move
+     the window through all four step directions. */
+  const script = i => {
+    const t = i % 80;
+    return { right: t < 20, down: t >= 20 && t < 40,
+             left: t >= 40 && t < 60, up: t >= 60,
+             fire: (i % 7) === 0 };
+  };
+  /* both runs under slowdown OFF: passTicks feeds frameCtr (the drain's
+     clock), and online FORCES the cap -- so the offline leg must cap too
+     or a heavy pass would tick the two clocks apart.  (Cross-CLIENT
+     equality, the thing lockstep needs, is unaffected: every online
+     client forces the same cap.) */
+  const run = (online, jump, passes) => {
+    G.settings.slowdown = false;
+    G.game.reset(online ? { online: true } : {});
+    const g = G.game;
+    if (jump) g.jumpToLevel(jump);
+    const out = [];
+    for (let i = 0; i < passes; i++){
+      g.onePass(script(i));
+      out.push(digest(g, online));
+    }
+    return out;
+  };
+  {
+    const a = run(false, 0, 260), b = run(true, 0, 260);
+    let same = 0;
+    for (let i = 0; i < a.length; i++) if (a[i] === b[i]) same++;
+    check('DEGENERACY: 260 passes of dungeon 1, online (1 player) === offline',
+          same, a.length);
+  }
+  {
+    const a = run(false, 2, 120), b = run(true, 2, 120);
+    let same = 0;
+    for (let i = 0; i < a.length; i++) if (a[i] === b[i]) same++;
+    check('...and 120 passes of dungeon 2 (through jumpToLevel\'s own settle)',
+          same, a.length);
+  }
+  G.settings.reset();
+
+  /* shared helpers for the two-window tests */
+  const winSees = (q, x, y) =>          // $A1DA's window, per-player form
+    ((x + 3 - q.camX) & 0x7F) <= 0x42 && ((y + 3 - q.camY) & 0x7F) <= 0x2A;
+  const joinP2 = g => {
+    g.onePass({ p2: { fire: true } });               // $9440 -- one FIRE bit
+    for (let i = 0; i < 7; i++) g.onePass({});       // the six-pass materialise
+  };
+
+  /* --- $A1DA generalized: an actor updates when visible to ANY window.
+     The control is the SAME mode with the second window absent, so the
+     only variable is the window itself. */
+  {
+    G.game.reset({ online: true });
+    const g = G.game, p1 = g.players[0];
+    g.onePass({});                                    // camLive, windows up
+    const far = g.actors.find(a => !(a.flags & 0x04) && !winSees(p1, a.x, a.y));
+    checkTrue('a far actor exists to test with', !!far);
+    const t0 = JSON.stringify([far.x, far.y, far.state]);
+    for (let i = 0; i < 6; i++) g.onePass({});
+    check('one window: an actor no window sees is FROZEN ($A1DA, generalized)',
+          JSON.stringify([far.x, far.y, far.state]), t0);
+    joinP2(g);
+    const p2 = g.players[1];
+    p2.x = (far.x + 8) & 0x7F; p2.y = far.y;          // park him beside it
+    g.vcamConverge(p2);
+    checkTrue('...player 2\'s window now sees it', winSees(p2, far.x, far.y));
+    for (let i = 0; i < 10; i++) g.onePass({});
+    checkTrue('...and the SECOND window WAKES it: it moved or changed state',
+              JSON.stringify([far.x, far.y, far.state]) !== t0);
+  }
+
+  /* --- $8D97 generalized: a shot lives against its OWNER's window.
+     Player 2 fires 60 units from player 1; against the owner's window the
+     shot flies its full screen range, against any other camera it would
+     be removed at spawn. */
+  {
+    G.game.reset({ online: true });
+    const g = G.game, p1 = g.players[0];
+    joinP2(g);
+    const p2 = g.players[1];
+    p2.x = (p1.x + 60) & 0x7F; p2.y = p1.y;
+    g.vcamConverge(p2);
+    let alive = 0;
+    for (let i = 0; i < 30; i++){
+      g.onePass({ p2: { right: true, fire: true } });
+      if (p2.shot.state !== 0xFF) alive++;
+    }
+    checkTrue('a shot fired FAR from player 1 lives against ITS OWNER\'s window',
+              alive >= 8, 'alive ' + alive + ' of 30 passes');
+  }
+
+  /* --- $B0FE generalized: the recycle cull measures to the NEAREST
+     window.  A generator-spawned actor parked at player 2's window centre
+     survives while that window exists and is recycled when it does not. */
+  {
+    G.game.reset({ online: true });
+    const g = G.game, p1 = g.players[0];
+    joinP2(g);
+    const p2 = g.players[1];
+    /* +88 across: far enough that the two window CENTRES end up >= $38
+       (56) apart on x -- the recycle distance -- once player 2's camera
+       has clamped at its own edge.  At +60 the centres sit only ~40
+       apart and the actor legitimately survives against EITHER window. */
+    p2.x = (p1.x + 88) & 0x7F; p2.y = (p1.y + 40) & 0x7F;
+    g.vcamConverge(p2);
+    const gx = (p2.camX + 0x20) & 0x7F, gy = (p2.camY + 0x14) & 0x7F;
+    g.actors.push({x: gx, y: gy, state: 0x10, flags: 0x04,
+                   drawX: gx, drawY: gy});
+    const n0 = g.actors.length;
+    g.offScreenCull();
+    check('a spawned actor at window 2\'s centre SURVIVES the cull (nearest window)',
+          g.actors.length, n0);
+    p2.camLive = false;
+    g.offScreenCull();
+    check('...and is recycled the moment that window is gone',
+          g.actors.length, n0 - 1);
+  }
+
+  /* --- the leash is OFF online -- the same geometry the SYM test measured
+     the clamp with (player 1 at x=112 against player 2 at 44, holding
+     LEFT) now walks free. */
+  {
+    G.game.reset({ online: true });
+    const g = G.game;
+    joinP2(g);
+    g.players[0].x = 112; g.players[0].y = 40;
+    g.players[1].x = 44;  g.players[1].y = 40;
+    const held = g.players[0].x;
+    for (let i = 0; i < 4; i++) g.onePass({ left: true });
+    checkTrue('the leash does not clamp online: x=112 against 44 walks LEFT',
+              g.players[0].x < held,
+              'x ' + held + ' -> ' + g.players[0].x);
+  }
+
+  /* --- load slowdown is FORCED off online, regardless of the setting --
+     the cost model reads the (frozen) module camera. */
+  {
+    G.settings.slowdown = true;
+    G.game.reset({ online: true });
+    const g = G.game;
+    const px = g.x, py = g.y;
+    g.actors.length = 0;
+    for (let k = 0; k < 140; k++)
+      g.actors.push({x: (px + ((k % 12) - 6) * 4) & 0x7F,
+                     y: (py + (Math.floor(k / 12) - 5) * 4) & 0x7F,
+                     state: 0x10, flags: 0x04, drawn: false});
+    let worst = 0;
+    for (let i = 0; i < 30; i++){ g.onePass({}); worst = Math.max(worst, g.passFrames); }
+    checkTrue('online forces the pass cap with SLOWDOWN still set ON',
+              worst <= 5.0001, 'worst pass ' + worst.toFixed(2) + ' frames');
+    G.settings.reset();
+  }
+
+  /* --- a window OUTLIVES its player's death (camLive holds), exactly as
+     the module camera holds its last position once $A3E6 stops writing. */
+  {
+    G.game.reset({ online: true });
+    const g = G.game, p1 = g.players[0];
+    for (let i = 0; i < 4; i++) g.onePass({});
+    const cx = p1.camX, cy = p1.camY;
+    const wx = (p1.camX + 0x20) & 0x7F, wy = (p1.camY + 0x14) & 0x7F;
+    p1.f11 |= 0x80;                                   // dead
+    for (let i = 0; i < 3; i++) g.onePass({});
+    checkTrue('a dead player\'s window persists (camLive holds)...',
+              p1.camLive === true);
+    check('...and stops moving (the target is stale, as $A3F6\'s no-write)',
+          [p1.camX, p1.camY], [cx, cy]);
+    checkTrue('...and still gates actors',
+              g.actorVisible({x: wx, y: wy}));
+    p1.camLive = false;
+    checkTrue('...until camLive is gone, when nothing does',
+              !g.actorVisible({x: wx, y: wy}));
+  }
+
+  /* --- LOCKSTEP SAFETY: localIdx is display, never simulation.  Two
+     runs differing ONLY in localIdx must fingerprint identically on
+     every pass -- this is exactly the property that lets four clients
+     display four windows off one lockstep state. */
+  {
+    const fpRun = idx => {
+      G.game.reset({ online: true });
+      const g = G.game;
+      g.localIdx = idx;
+      const fps = [];
+      for (let i = 0; i < 40; i++){
+        g.onePass(script(i));
+        fps.push(g.fingerprint());
+      }
+      return fps.join(',');
+    };
+    checkTrue('localIdx never reaches the fingerprint: 40 passes agree',
+              fpRun(0) === fpRun(1));
+  }
+
+  /* --- the JOIN SNAP: a joining player's window arrives settled ($B447's
+     converge), not walking in from wherever it last stood. */
+  {
+    G.game.reset({ online: true });
+    const g = G.game;
+    for (let i = 0; i < 30; i++) g.onePass({ right: true });
+    const before = [g.players[1].camX, g.players[1].camY].join(',');
+    g.onePass({ p2: { fire: true } });
+    const p2 = g.players[1];
+    checkTrue('the joining window is LIVE on the join pass', p2.camLive === true);
+    checkTrue('...and it moved to him (not the stale boot value)',
+              [p2.camX, p2.camY].join(',') !== before);
+    const cx = p2.camX, cy = p2.camY;
+    g.vcamConverge(p2);
+    check('...already SETTLED: converging again does not move it',
+          [p2.camX, p2.camY], [cx, cy]);
+  }
+
+  /* --- the DISPLAY camera: localIdx picks whose window this client
+     renders.  With the two players far apart, the two choices paint
+     different pictures. */
+  {
+    G.game.reset({ online: true });
+    const g = G.game;
+    g.mode = 'play'; g.introShow = null; g.bannerShow = null;
+    joinP2(g);
+    const p2 = g.players[1];
+    p2.x = (g.players[0].x + 60) & 0x7F; p2.y = (g.players[0].y + 40) & 0x7F;
+    g.vcamConverge(p2);
+    const shoot = () => {
+      const calls = [];
+      const cap = { set fillStyle(v){ this._f = v; }, get fillStyle(){ return this._f; },
+        fillRect(x, y, w, h){ calls.push(x + ',' + y + ',' + w + ',' + h + ',' + this._f); } };
+      G.render(cap, g);
+      return calls.join(';');
+    };
+    g.localIdx = 0; const shot0 = shoot();
+    g.localIdx = 1; const shot1 = shoot();
+    checkTrue('localIdx=0 and localIdx=1 render DIFFERENT windows',
+              shot0 !== shot1);
+  }
+
+  G.seed({});                            // back to the offline gate baseline
+  G.settings.reset();
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`);
 process.exit(failures ? 1 : 0);

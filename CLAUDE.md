@@ -52,7 +52,22 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
      counters are all mixed in).  The server never runs the sim — that is
      what keeps it a small standalone C++ program.  Late join = state
      snapshot transfer (serializer still to be written).
-   - **PER-CLIENT CAMERA**, with the measured consequence understood: the
+   - **PER-CLIENT CAMERA — BUILT 2026-08-29** (suite 1161 -> 1181, all
+     green): the sim carries one virtual camera per player behind a
+     `cfg.online` flag (`vcamPass()` beside `camera()`), every
+     camera-read rule generalized — actor gate any-window, generator
+     cull nearest, shots owner-window, monster shots any-window, sweep
+     union deduped, pad census union deduped — plus leash off, slowdown
+     cap forced, `localIdx` display-only (mutation-verified it never
+     reaches `fingerprint()`).  Proven by DEGENERACY: 260 passes of
+     dungeon 1 + 120 of dungeon 2, online(1P) === offline by per-pass
+     state digest.  Found on the way: the sound bridges' substitute
+     `LD A,R` streams (`sound.rng`) survived `game.reset()`, and noise
+     toggles are charged to the pass cost -> passTicks -> $8497 -> the
+     DRAIN, so a second seeded run in one process drifted its drain
+     clock by pass 128.  reset() now reseeds them (`rngSeed`); lockstep
+     REQUIRES that every client boots this stream from the constant.
+     The original design note, kept for the record: the
      camera is SIM STATE, not a lens.  camX/camY are in `fingerprint()`,
      and they gate real rules — actors off-camera are FROZEN ($A1DA's
      culls gate the update callback; "nothing in the first dungeon stirs

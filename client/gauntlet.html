@@ -1319,8 +1319,9 @@ class SfxDriver{
        inside the sound dispatcher, so letting it share the gameplay
        generator would make the sound perturb the simulation.  Sound must
        never feed back into gameplay, which is also why it is not in
-       fingerprint(). */
-    this.rng = 0x1D2A6F3B;
+       fingerprint().  `rngSeed` is what reset() restores -- see the
+       reseed beside `sound.frame = 0` there. */
+    this.rng = this.rngSeed = 0x1D2A6F3B;
     this.silence();                                        // $BA01
   }
   /* $BA01 -- R7 = $38, R8/R9/R10 = 0, then $BDB1..$BDC1 zeroed (LD (HL),0 +
@@ -1601,8 +1602,10 @@ class BeeperDriver{
        branch.  $B8CC's draw is `LD A,R`; this is a SEPARATE stream from
        rand8() so that sound can never perturb the simulation, exactly as
        the AY driver's id-0 coin was.  Its seed is a constant, so the port's
-       noise texture is the same every run where the original's is not. */
-    this.rng = 0x5F3759DF;
+       noise texture is the same every run where the original's is not.
+       `rngSeed` is what reset() restores -- see the reseed beside
+       `sound.frame = 0` there. */
+    this.rng = this.rngSeed = 0x5F3759DF;
   }
   /* $BA01 is patched to a RET on this branch: NOTHING SILENCES THE BEEPER.
      An effect in flight survives a level change, a death and a game over --
@@ -3812,6 +3815,22 @@ class Game{
        `this.x` is writing player 1's block because `p` names him. */
     this.players = [new Player(0), new Player(1)];
     this.p = this.players[0];
+    /* ---- ONLINE (this fork): PER-PLAYER CAMERA WINDOWS ---------------
+       See vcamPass() beside camera().  Each player carries his own
+       camX/camY/camTgt -- initialised exactly as the module camera below
+       -- plus camLive, "this window exists".  `online` gates every
+       generalized rule; false is the faithful default and what every gate
+       and headless check outside the online section runs with.
+       `localIdx` is DISPLAY ONLY -- which window THIS CLIENT shows.  It
+       is never fingerprinted and never read by a rule: two clients in the
+       same session differ in it by construction. */
+    this.online = !!cfg.online;
+    this.localIdx = 0;
+    for (const q of this.players){
+      q.camX = A.player.cam_x; q.camY = A.player.cam_y;
+      q.camTgtX = 0; q.camTgtY = 0;
+      q.camLive = false;
+    }
     this.tape = new Tape();
     this.level = 1;                 // $8403
     this.treasure = false;          // $847E bit 6
@@ -3934,6 +3953,18 @@ class Game{
     } else this.sound.silence();
     this.simFrame = 0;
     this.sound.frame = 0; this.sound.log.length = 0;
+    /* THE SUBSTITUTE `LD A,R` STREAM RESEEDS WITH THE MACHINE.  Its own
+       declaration is "the same every run", and a reset IS a new run --
+       but the driver object outlives reset(), so without this a second
+       seeded game continued the first one's stream.  That was not only
+       cosmetic: the noise toggles are charged to the pass cost (real
+       $B8CC T-states), cost feeds passTicks feeds $8497, the drain's
+       clock -- so one run's noise texture could shift the next run's
+       DRAIN by a frame.  Measured, not supposed: two identical seeded
+       runs diverged at pass 128 through exactly this chain.  Online it
+       is load-bearing twice over: every client in a lockstep session
+       must boot this stream from the same constant. */
+    if ('rngSeed' in this.sound) this.sound.rng = this.sound.rngSeed;
     if (this.sound.blocks) this.sound.blocks.length = 0;
     /* $84B9, the BANNER CODE, and $847D bit 2 / bit 5, the pause request and
        its long form.  See bannerPass() and blockingPause(). */
@@ -4337,6 +4368,13 @@ class Game{
       const cx=this.camX, cy=this.camY; this.camera();
       if(cx===this.camX && cy===this.camY) break;
     }
+    /* ONLINE: each in-game player's window settles on HIM the same way;
+       camLive is re-derived here, so a fallen player's stale window ends
+       at the level boundary. */
+    if (this.online) for (const q of this.players){
+      q.camLive = q.inGame;
+      if (q.inGame) this.vcamConverge(q);
+    }
     /* $B38E CALL $8B27 -- THE LEVEL-ENTRY SCREEN, and it is the last thing
        before $B391 CALL $8503 hands over to the main loop.  $8B84's tail
        arms the LONG pause ($847D bits 5 and 2), which is what holds the
@@ -4572,6 +4610,10 @@ class Game{
     this.shot.x = 0xFF;                                  // $9484 -- see above
     this.p14 &= 0x80;                                    // $948C AND $80
     this.installArmour();       // the inventory bit moved: $AB6F's row again
+    /* ONLINE: a joining window SNAPS ($B447's settle) rather than walking
+       across the dungeon from wherever it last stood -- a walking window
+       would wake every actor on its path, which no faithful join did. */
+    if (this.online){ this.p.camLive = true; this.vcamConverge(this.p); }
   }
 
   /* ====================================================================
@@ -4720,27 +4762,39 @@ class Game{
   }
   padCensusDraw(){
     if (!this.players.some(q => q.animCtl & 2)) return;   // $B159
-    const cx0 = (this.camX >> 2) & (MAP_W-1);
-    const cy0 = (this.camY >> 2) & (MAP_H-1);
-    const c0 = (this.camX & 2) ? 1 : 0, r0 = (this.camY & 2) ? 1 : 0;
+    /* ONLINE: the pads PAINTED are the pads on the LIVE WINDOWS -- the
+       census walks each in player order, ONE entry per pad (a pad two
+       windows both show must not appear twice), same eight-entry cap. */
+    if (this.online){
+      for (const q of this.vcamWins()) this.padCensusWindow(q.camX, q.camY, true);
+      return;
+    }
+    this.padCensusWindow(this.camX, this.camY, false);
+  }
+  padCensusWindow(camX, camY, dedupe){
+    const cx0 = (camX >> 2) & (MAP_W-1);
+    const cy0 = (camY >> 2) & (MAP_H-1);
+    const c0 = (camX & 2) ? 1 : 0, r0 = (camY & 2) ? 1 : 0;
     const seen = (dc, dr) => {
       const col = (cx0 + dc) & (MAP_W-1), row = (cy0 + dr) & (MAP_H-1);
       if (this.map[row][col] !== 0x30) return;            // $B156 CP $30
       if (this.padList.length >= 8) return;               // $B164 cap
+      if (dedupe &&
+          this.padList.some(p => p.x === col*4 && p.y === row*4)) return;
       const mask = this.padMask(col, row);                // $B175 CALL $B2B6
       if (mask === 0) return;                             // $B181 OR A / JR z
       this.padList.push({x: col*4, y: row*4, mask});      // $B17C..$B18A
     };
     for (let dr=r0; dr<10; dr++) for (let dc=c0; dc<16; dc++) seen(dc,dr);
-    if (this.camY & 2){
+    if (camY & 2){
       for (let dc=c0; dc<16; dc++) seen(dc, 0);           // $9FF7
       for (let dc=c0; dc<16; dc++) seen(dc, 10);          // $A05F
     }
-    if (this.camX & 2){
+    if (camX & 2){
       for (let dr=r0; dr<10; dr++) seen(0, dr);           // $A0B7
       for (let dr=r0; dr<10; dr++) seen(16, dr);          // $A120
     }
-    if ((this.camX & 2) && (this.camY & 2)){
+    if ((camX & 2) && (camY & 2)){
       seen(0,0); seen(16,0); seen(16,10); seen(0,10);     // $A179..$A1D7
     }
   }
@@ -4777,6 +4831,10 @@ class Game{
      screen x 0 and 240 and screen y 0 and 144, one playfield exactly.
      Partner absent: carry 0 on entry carry 0 AND 1.                     */
   leash(cand, horiz){
+    /* ONLINE: no leash.  Remote players roam the whole dungeon -- the
+       per-player windows (vcamPass) are what replace the shared screen
+       the leash existed to keep both players inside. */
+    if (this.online) return false;
     const o = this.other(this.p);
     if (!(o.f11 & F_DEAD)) {                             // $A92A BIT 7 -- in play
       const d = wrapAbs(((horiz ? o.x : o.y) - (horiz ? cand.x : cand.y)) & 0xFF);
@@ -6235,16 +6293,36 @@ class Game{
      MEASURED on the original over the 62-pass down run: 22 rolls reached, ONE
      spawn, at (32,104) with state $00 and flags $04. */
   generatorSweep(){
-    const cols = (this.camX & 3) ? 17 : 16;              // $A9CA..$A9D4
-    const rows = (this.camY & 3) ? 11 : 10;              // $A9D7..$A9E0
+    if (this.online){
+      /* ONLINE: the sweep walks the UNION of the live windows -- each
+         cell AT MOST ONCE a pass, or overlapping windows would double a
+         generator's roll rate.  Player order, then the original scan
+         order inside each window: deterministic, and with one window it
+         IS the original scan (the dedupe set never fires). */
+      const seen = new Set();
+      this.clk.gcells = 0;
+      for (const q of this.vcamWins()) this.sweepWindow(q.camX, q.camY, seen);
+      return;
+    }
+    this.clk.gcells = 0;
+    this.sweepWindow(this.camX, this.camY, null);
+  }
+  sweepWindow(camX, camY, dedupe){
+    const cols = (camX & 3) ? 17 : 16;                   // $A9CA..$A9D4
+    const rows = (camY & 3) ? 11 : 10;                   // $A9D7..$A9E0
     /* the sweep window is gated on camX&3 / camY&3 -- a DIFFERENT pair of
        bits from the painters' camX&2 / camY&2 -- and it costs 86 T a cell
        swept, 531 T more for each generator found and 4,202 T for a spawn. */
-    this.clk.gcells = cols * rows;
-    let r0 = (this.camY >> 2) & (MAP_H-1);
+    this.clk.gcells += cols * rows;
+    let r0 = (camY >> 2) & (MAP_H-1);
     for (let rr=0; rr<rows; rr++){
-      let c = (this.camX >> 2) & (MAP_W-1), r = r0;
+      let c = (camX >> 2) & (MAP_W-1), r = r0;
       for (let cc=0; cc<cols; cc++){
+        if (dedupe){
+          const key = (r << 5) | c;
+          if (dedupe.has(key)){ const sk = curRight(c,r); c = sk[0]; r = sk[1]; continue; }
+          dedupe.add(key);
+        }
         const v = this.map[r][c];
         if (v >= GEN_LO && v <= GEN_HI){
           this.clk.ngen++;
@@ -6338,6 +6416,10 @@ class Game{
     if (b === 0) return;                                 // $B102 RET z
     const ex = (this.camX + CULL_CX) & 0xFF;             // $B107 ADD A,$20
     const ey = (this.camY + CULL_CY) & 0xFF;             // $B10D ADD A,$14
+    /* ONLINE: the recycle distance is measured to the NEAREST window's
+       centre -- an actor is recycled only once EVERY player has left it
+       behind.  Same fold, same limits, per window. */
+    const wins = this.online ? this.vcamWins() : null;
     let c = CULL_BUDGET, i = 0;                          // $B113 LD C,5
     while (b > 0 && i < this.actors.length){
       const a = this.actors[i];
@@ -6346,8 +6428,11 @@ class Game{
          SHORT way round the 128-unit world.  With a plain subtraction an
          actor at x=4 and a camera centre at x=124 reads 120 units away
          instead of 8, and gets culled through the wrap. */
-      const dx = wrapAbs(a.x - ex), dy = wrapAbs(a.y - ey);
-      if (dx < CULL_DX && dy < CULL_DY){ i++; b--; continue; }   // in range
+      const near = wins
+        ? wins.some(q => wrapAbs(a.x - ((q.camX + CULL_CX) & 0xFF)) < CULL_DX &&
+                         wrapAbs(a.y - ((q.camY + CULL_CY) & 0xFF)) < CULL_DY)
+        : (wrapAbs(a.x - ex) < CULL_DX && wrapAbs(a.y - ey) < CULL_DY);
+      if (near){ i++; b--; continue; }                   // in range
       if (!(a.flags & 0x04)){ i++; b--; continue; }      // $B130 BIT 2,(HL)
       this.actorRemove(i);                               // $B134..$B148 swap
       if (--b === 0) return;                             // $B150 DEC B / RET z
@@ -6416,6 +6501,17 @@ class Game{
   /* $A1DA, read to its RET nc's.  The window is the visible playfield plus a
      3-unit margin: 0..$42 across (67 units) and 0..$2A down (43 units). */
   actorVisible(a){
+    /* ONLINE: awake if visible to ANY live window -- same arithmetic,
+       same 3-unit margin, per window (see vcamPass). */
+    if (this.online){
+      for (const q of this.players){
+        if (!q.camLive) continue;
+        if (((a.x + 3 - q.camX) & 0x7F) > ACT_CULL_X) continue;
+        if (((a.y + 3 - q.camY) & 0x7F) > ACT_CULL_Y) continue;
+        return true;
+      }
+      return false;
+    }
     if (((a.x + 3 - this.camX) & 0x7F) > ACT_CULL_X) return false;
     if (((a.y + 3 - this.camY) & 0x7F) > ACT_CULL_Y) return false;
     return true;
@@ -6813,6 +6909,24 @@ class Game{
     if (!this.shotBody(this.shot, this.p)) this.shot.state = 0xFF;  // $8C4C
   }
 
+  /* $8D97/$8DA1's cull, window-aware.  ONLINE a player's shot lives
+     against its OWNER's window -- shot range IS the screen, so online it
+     is the owner's screen -- and a MONSTER shot (no owner) lives while
+     ANY window still shows it, the same rule its firer's wake-up follows.
+     The fold and the Y-then-X order are the original's. */
+  shotCulled(cx, cy, owner){
+    if (!this.online)
+      return wrap7((cy - this.camY) & 0xFF) >= SHOT_CULL_Y ||
+             wrap7((cx - this.camX) & 0xFF) >= SHOT_CULL_X;
+    if (owner)
+      return wrap7((cy - owner.camY) & 0xFF) >= SHOT_CULL_Y ||
+             wrap7((cx - owner.camX) & 0xFF) >= SHOT_CULL_X;
+    for (const q of this.vcamWins())
+      if (wrap7((cy - q.camY) & 0xFF) < SHOT_CULL_Y &&
+          wrap7((cx - q.camX) & 0xFF) < SHOT_CULL_X) return false;
+    return true;
+  }
+
   /* $8C5D..$8DB6 -- the shared updater.  Returns the CARRY: true = keep. */
   shotBody(s, owner){
     /* `owner` is the player whose block supplies the SPAWN gates -- the
@@ -6908,8 +7022,7 @@ class Game{
         s.x = C; s.y = B;                                // $8D2B the commit
       }
       if (expired){                                      // $8D31 JP c,$8D97
-        if (wrap7((B - this.camY) & 0xFF) >= SHOT_CULL_Y) return false;
-        if (wrap7((C - this.camX) & 0xFF) >= SHOT_CULL_X) return false;
+        if (this.shotCulled(C, B, owner)) return false;
         this.shotDraw(C, B, s); return true;
       }
       /* BC is NOT the record from here on.  $8F36 pushes BC, applies the
@@ -6954,8 +7067,7 @@ class Game{
       if (expire){ s.state = 0x20; s.flags &= ~0x40; }   // $8D8F / $8D93
       /* $8D97/$8DA1 -- the cull.  $AD37 FOLDS but does not ABS, so one unit
          above or left of the camera origin already reads >= the limit. */
-      if (wrap7((cy - this.camY) & 0xFF) >= SHOT_CULL_Y) return false;
-      if (wrap7((cx - this.camX) & 0xFF) >= SHOT_CULL_X) return false;
+      if (this.shotCulled(cx, cy, owner)) return false;
       if (s.state === 0x20){ this.shotDraw(cx, cy, s); return true; } // $8DAB
       if (--steps === 0){ this.shotDraw(cx, cy, s); return true; }    // $8DB2
     }
@@ -7666,6 +7778,15 @@ class Game{
     this.cameraTarget();                // $A3E6 -- the midpoint, into $848D
     this.passPhase = 0.12;
     this.camera();                      // $850C CALL $B58C
+    /* ONLINE: the per-player windows step HERE, beside the module camera.
+       The module pair keeps running online because it is the pass-cost
+       model's clock (the painter census indexes off it, and cost feeds
+       passTicks feeds $8497, the drain's clock) -- freeze it and the two
+       modes' clocks drift apart on any pass whose cost differs below the
+       cap.  Every generalized RULE reads the windows, never it; with one
+       player the two are value-identical, which is the degeneracy the
+       suite checks by digest. */
+    if (this.online) this.vcamPass();
     /* the four painters' cell census, taken AFTER $B58C has stepped the
        camera -- $850F..$8518 read $848B/$848C as $850C left them, and taking
        the pass-top camera instead silently costs the model ten points. */
@@ -8100,7 +8221,11 @@ class Game{
        animations at a different rate from the game.
        Default ON.  The gates never see this: they drive onePass() directly
        and `loadSlowdown` is only ever written by the menu. */
-    if (typeof loadSlowdown !== 'undefined' && !loadSlowdown){
+    /* ONLINE forces the cap regardless of the setting: there is no shared
+       screen for a bog-down to be faithful to, and the cap is the same on
+       every client, so the clocks stay in lockstep. */
+    if (this.online ||
+        (typeof loadSlowdown !== 'undefined' && !loadSlowdown)){
       this.passFrames = Math.min(this.passFrames, SMOOTH_CAP);
       this.passTicks  = Math.max(3, Math.min(this.passTicks, SMOOTH_CAP));
     }
@@ -8655,6 +8780,67 @@ class Game{
     this.camY = camStep(this.camY, this.camTgtY, CAM_OFF_Y, CAM_MAX_Y);
   }
 
+  /* ====================================================================
+     ONLINE: ONE VIRTUAL CAMERA PER PLAYER (this fork -- see CLAUDE.md).
+     ====================================================================
+     The camera is SIMULATION state, not a lens: $A1DA's culls freeze
+     off-camera actors, $B0FE recycles generator spawn by camera distance,
+     $8D97/$8DA1 end a shot at the screen edge, and $B156's pad census --
+     the teleport destinations -- is the cells the painters walked.  So a
+     per-client display cannot simply point elsewhere; the RULES
+     generalize from THE camera to THE WINDOWS:
+       * actor gate ($A1DA)      awake if visible to ANY window
+       * generator cull ($B0FE)  recycle only when far from ALL windows
+       * a shot ($8D97)          lives against its OWNER's window
+       * a monster shot          lives while ANY window shows it
+       * the sweep ($A9C2)       walks the UNION, each cell once
+       * pad census ($B156)      one entry per pad on any window
+     Each window is target-tracked by the $A3E6 SOLO arm (camTargetFor)
+     and stepped by the same $B58C camStep, so with one player in game
+     every definition above collapses to the module camera's behaviour --
+     the degeneracy tools/headless.js checks by state digest.  A window
+     OUTLIVES its player's death (camLive holds until the level boundary),
+     exactly as the module camera holds its last position once $A3E6
+     stops writing; a player never yet live contributes nothing. */
+  camTargetFor(q){
+    if (q.f11 & F_DEAD) return;                          // $A3F6 -- no write
+    let L = (q.x + 2) & 0xFF, H = (q.y + 2) & 0xFF;      // $A3F7 +2
+    const Cc = H, Aa = L;                                // $A3FB
+    L &= 0xFE; H &= 0xFE;                                // $A410 RES 0
+    /* the wrap fix, inert against your own centre but kept: this is
+       $A414..$A435 verbatim, not a new formula */
+    let a = (Aa - L) & 0xFF;
+    if (a & 0x80) a = (-a) & 0xFF;
+    if ((a & 0x7F) >= 0x21) L ^= 0x40;
+    L &= 0x7F;
+    a = (Cc - H) & 0xFF;
+    if (a & 0x80) a = (-a) & 0xFF;
+    if ((a & 0x7F) >= 0x21) H ^= 0x40;
+    H &= 0x7F;
+    q.camTgtX = L; q.camTgtY = H;
+  }
+  vcamPass(){
+    for (const q of this.players){
+      if (!(q.f11 & F_DEAD)){ this.camTargetFor(q); q.camLive = true; }
+      if (!q.camLive) continue;
+      q.camX = camStep(q.camX, q.camTgtX, CAM_OFF_X, CAM_MAX_X);
+      q.camY = camStep(q.camY, q.camTgtY, CAM_OFF_Y, CAM_MAX_Y);
+    }
+  }
+  /* $B447's settle, per window: step until it stops moving. */
+  vcamConverge(q){
+    this.camTargetFor(q);
+    for (let i = 0; i < 256; i++){
+      const cx = q.camX, cy = q.camY;
+      q.camX = camStep(q.camX, q.camTgtX, CAM_OFF_X, CAM_MAX_X);
+      q.camY = camStep(q.camY, q.camTgtY, CAM_OFF_Y, CAM_MAX_Y);
+      if (cx === q.camX && cy === q.camY) break;
+    }
+  }
+  /* the live windows, in player order -- the one iteration order every
+     generalized rule uses, so all clients agree byte for byte */
+  vcamWins(){ return this.players.filter(q => q.camLive); }
+
   /* The sprite's compass slot and walk phase, both READ rather than guessed.
        $A47B  LD A,(IX+7) / AND 15 / JR z,$A48D      ; the RAW input bits pick
        $A480  ... LD A,($7D0C+bits) / LD (IX+13),A   ; the pose, and zero keeps
@@ -8841,6 +9027,15 @@ class Game{
     mix(this.camX);mix(this.camY);mix(this.camTgtX);mix(this.camTgtY);
     mix(this.pass);mix(this.pass>>8);
     for(const q of this.players){ mix(q.x);mix(q.y);mix(q.dir); }
+    /* ONLINE: the per-player windows are SIMULATION state -- they gate
+       the actor freeze, both culls, the sweep and the pad census -- so
+       they are mixed per player.  localIdx is NOT mixed: it is which
+       window THIS CLIENT displays, and clients in one session must
+       fingerprint identically. */
+    if (this.online) for (const q of this.players){
+      mix(q.camX); mix(q.camY); mix(q.camTgtX); mix(q.camTgtY);
+      mix(q.camLive ? 1 : 0);
+    }
     for(const row of this.map) for(const v of row) mix(v);
     /* The actors are SIMULATION state -- they gate the player's move -- so
        they are fingerprinted, along with the pass counter and the entropy
@@ -9695,7 +9890,13 @@ function render(ctx,g){
     drawHud(ctx,g);
     return;
   }
-  const ox=g.camX*PXU, oy=g.camY*PXU;
+  /* THE DISPLAY CAMERA.  ONLINE each client shows its OWN player's window
+     (localIdx) -- a display choice only: the sim reads the windows
+     themselves, never localIdx.  Offline it is the module camera, as
+     always. */
+  const dcam = g.online ? g.players[g.localIdx & 1] : g;
+  const dcamX = dcam.camX, dcamY = dcam.camY;
+  const ox=dcamX*PXU, oy=dcamY*PXU;
   const c0=Math.floor(ox/CELL), r0=Math.floor(oy/CELL);
   for(let rr=0; rr<=Math.ceil(PLAYFIELD_H/CELL); rr++){
     for(let cc=0; cc<=Math.ceil(256/CELL); cc++){
@@ -9733,16 +9934,16 @@ function render(ctx,g){
      it is honoured here, but nothing in this dungeon ever sets it. */
   for (const a of g.actors){
     if (a.flags & 0x08) continue;                       // $AD15
-    if (((a.drawX + 3 - g.camX) & 0x7F) > ACT_CULL_X) continue;   // $A1DA
-    if (((a.drawY + 3 - g.camY) & 0x7F) > ACT_CULL_Y) continue;
+    if (((a.drawX + 3 - dcamX) & 0x7F) > ACT_CULL_X) continue;   // $A1DA
+    if (((a.drawY + 3 - dcamY) & 0x7F) > ACT_CULL_Y) continue;
     const set = ACTOR_FRAMES[(a.state >> 5) & 7];
     if (!set) continue;
     const bmp = set.frames[(a.state & 7) + 8*actorPhase(a.flags)];
     if (!bmp) continue;
     const pal2 = (set.ink & 0x40) ? PAL_BRT : PAL_DIM;
     const ink2 = pal2[set.ink & 7], paper2 = pal2[(set.ink >> 3) & 7];
-    const ax = (((a.drawX - g.camX) & 0x7E) >> 1) * 8;
-    const ay = (((a.drawY - g.camY) & 0x7E) >> 1) * 8;
+    const ax = (((a.drawX - dcamX) & 0x7E) >> 1) * 8;
+    const ay = (((a.drawY - dcamY) & 0x7E) >> 1) * 8;
     for (let yy=0; yy<16; yy++){
       const py = ay + yy; if (py < 0 || py >= PLAYFIELD_H) continue;
       for (let bx=0; bx<2; bx++)
@@ -9783,8 +9984,8 @@ function render(ctx,g){
     if (q.animCtl & 4) continue;                         // $A491 BIT 2
     if (q.timer !== 0 && (g.passCtr & 1) &&              // $A457 / $A45D
         (q.timer >= 0x32 || (g.passCtr & 2))) continue;  // $A467 / $A46A
-    const psx=(((q.x-g.camX)&0x7E)>>1)*8+SPRITE_DX,
-          psy=(((q.y-g.camY)&0x7E)>>1)*8+SPRITE_DY;
+    const psx=(((q.x-dcamX)&0x7E)>>1)*8+SPRITE_DX,
+          psy=(((q.y-dcamY)&0x7E)>>1)*8+SPRITE_DY;
     /* The bank follows the CHARACTER, not the player slot.  Both players draw
        from the set the menu chose for each of them ($FFFF / $FFFE), which is
        why picking the warrior now shows the warrior.  PLAYER_FRAMES is the
@@ -9863,8 +10064,8 @@ function render(ctx,g){
     if (rec && rec.frame){
       const pal3 = (rec.ink & 0x40) ? PAL_BRT : PAL_DIM;
       const ink3 = pal3[rec.ink & 7];
-      const sx = (((SH.drawX - g.camX) & 0x7E) >> 1) * 8;
-      const sy = (((SH.drawY - g.camY) & 0x7E) >> 1) * 8;
+      const sx = (((SH.drawX - dcamX) & 0x7E) >> 1) * 8;
+      const sy = (((SH.drawY - dcamY) & 0x7E) >> 1) * 8;
       for (let r = 0; r < SHOT_ROWS.length; r++){
         const py = sy + SHOT_ROWS[r];
         if (py < 0 || py >= PLAYFIELD_H) continue;
@@ -9895,8 +10096,8 @@ function render(ctx,g){
     if (!(rec && rec.frame)) continue;
     const palM = (rec.ink & 0x40) ? PAL_BRT : PAL_DIM;
     const inkM = palM[rec.ink & 7];
-    const sx = (((SH.drawX - g.camX) & 0x7E) >> 1) * 8;
-    const sy = (((SH.drawY - g.camY) & 0x7E) >> 1) * 8;
+    const sx = (((SH.drawX - dcamX) & 0x7E) >> 1) * 8;
+    const sy = (((SH.drawY - dcamY) & 0x7E) >> 1) * 8;
     for (let r = 0; r < SHOT_ROWS.length; r++){
       const py = sy + SHOT_ROWS[r];
       if (py < 0 || py >= PLAYFIELD_H) continue;
