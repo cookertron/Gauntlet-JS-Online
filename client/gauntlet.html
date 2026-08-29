@@ -9143,7 +9143,137 @@ class Game{
     mix(this.mode==='attract'?1:0);mix(this.mode==='rewind'?1:0);
     return h>>>0;
   }
+
+  /* ====================================================================
+     THE STATE SNAPSHOT -- ADDED (this fork): LATE JOIN under lockstep.
+     ====================================================================
+     A joining client cannot replay the session from pass 0; the server
+     hands it the running game instead.  snapshot() is that wire payload
+     -- plain JSON-safe data, versioned -- and restore() rebuilds a Game
+     from it: reset(s.cfg) first, so everything reset() derives (assets,
+     the dungeon-1 build, the sound driver) exists, then every field the
+     sim carries across a pass boundary is overwritten.  SNAP_GAME /
+     SNAP_PLAYER (below the class) ARE the format: one manifest, walked
+     by both directions, so a field cannot be saved and not restored.
+     Taken BETWEEN passes only -- nothing mid-pass is representable, and
+     the relay hands inputs out per pass, so that is the only boundary a
+     joiner can arrive on.
+     DELIBERATELY ABSENT:
+       * localIdx -- which window a client DISPLAYS is that client's
+         own; restore() preserves the receiver's (same lockstep rule
+         that keeps it out of fingerprint()).
+       * per-pass transients (clk, padBest/padTies, passFrames/
+         passTicks, beepWalked, the drawX/drawY pairs) -- rebuilt whole
+         by the next pass.
+       * the ranked tables -- module state shared by every Game, as the
+         original's block C RAM survives $B35A.
+       * the sound driver's TONE voice (steps/rows) -- `rows` is a
+         reference into the BEEP tables, and the tone's pass cost is a
+         constant ($B901's delay, charged on both branches), so unlike
+         the NOISE state it cannot shift the clock; a joiner simply
+         starts that voice silent.
+     The NOISE state and its substitute LD A,R stream ARE carried: their
+     toggles are charged to the pass cost, cost feeds passTicks feeds
+     $8497, the drain's clock (see the reseed note in reset()). */
+  snapshot(){
+    const P = q => {
+      const o = {};
+      for (const k of SNAP_PLAYER) o[k] = q[k];
+      o.shot = {x: q.shot.x, y: q.shot.y, state: q.shot.state};
+      o.name = q.name.slice();
+      o.dmgRow = q.dmgRow.slice();
+      o.ghostDmg = q.ghostDmg.slice();
+      o.foeDmg = q.foeDmg.slice();
+      return o;
+    };
+    const s = {v: 1, cfg: Object.assign({}, this.cfg), game: {}};
+    for (const k of SNAP_GAME) s.game[k] = this[k];
+    s.map = this.map.map(r => r.slice());
+    s.actors = this.actors.map(a => ({x: a.x, y: a.y, state: a.state,
+                                      flags: a.flags}));
+    s.mshots = this.mshots.map(a => ({x: a.x, y: a.y, state: a.state,
+                                      flags: a.flags}));
+    s.ring = Array.from(this.ring);
+    /* $B195 reads the PREVIOUS pass's pad census, so the list crosses
+       the pass boundary and belongs on the wire. */
+    s.padList = this.padList.map(p => ({x: p.x, y: p.y, mask: p.mask}));
+    s.doorA = this.doorA.slice(); s.doorB = this.doorB.slice();
+    s.levelStart = this.levelStart.slice();
+    s.drain = this.drain.slice();
+    s.hoard = this.hoard.map(r => r.slice());
+    s.players = this.players.map(P);
+    s.tape = {mask: this.tape.mask, want: this.tape.want,
+              pos: this.tape.pos, loads: this.tape.loads,
+              stash: this.tape.stash.slice()};
+    s.sound = {};
+    for (const k of ['rng', 'level', 'ramp', 'ticks', 'armPhase'])
+      if (k in this.sound) s.sound[k] = this.sound[k];
+    return s;
+  }
+  restore(s){
+    if (!s || s.v !== 1) throw new Error('SNAPSHOT V' + (s && s.v));
+    const li = this.localIdx | 0;       // the receiver's own display choice
+    this.reset(s.cfg);
+    this.localIdx = li;
+    for (const k of SNAP_GAME) this[k] = s.game[k];
+    this.scal = difficulty(this.level); // derived, as levelInit derives it
+    this.map = s.map.map(r => r.slice());
+    this.actors = s.actors.map(a => ({x: a.x, y: a.y, state: a.state,
+                                      flags: a.flags, drawX: a.x, drawY: a.y,
+                                      drawn: false}));
+    this.mshots = s.mshots.map(a => ({x: a.x, y: a.y, state: a.state,
+                                      flags: a.flags, drawX: a.x, drawY: a.y,
+                                      drawn: false}));
+    this.ring = Uint8Array.from(s.ring);
+    this.padList = s.padList.map(p => ({x: p.x, y: p.y, mask: p.mask}));
+    this.doorA = s.doorA.slice(); this.doorB = s.doorB.slice();
+    this.levelStart = s.levelStart.slice();
+    this.drain = s.drain.slice();
+    this.hoard = s.hoard.map(r => r.slice());
+    s.players.forEach((sp, i) => {
+      const q = this.players[i];
+      for (const k of SNAP_PLAYER) q[k] = sp[k];
+      q.shot.x = sp.shot.x; q.shot.y = sp.shot.y; q.shot.state = sp.shot.state;
+      q.shot.drawX = sp.shot.x; q.shot.drawY = sp.shot.y; q.shot.drawn = false;
+      q.name = sp.name.slice();
+      q.dmgRow = sp.dmgRow.slice();
+      q.ghostDmg = sp.ghostDmg.slice();
+      q.foeDmg = sp.foeDmg.slice();
+    });
+    Object.assign(this.tape, {mask: s.tape.mask, want: s.tape.want,
+                              pos: s.tape.pos, loads: s.tape.loads,
+                              stash: s.tape.stash.slice()});
+    for (const k in s.sound) if (k in this.sound) this.sound[k] = s.sound[k];
+    return this;
+  }
 }
+
+/* THE SNAPSHOT MANIFEST -- see snapshot()/restore() above.  Scalar fields
+   only; everything structured (map, actors, players' own arrays, tape,
+   sound) is handled explicitly beside it.  SNAP_GAME names must be the
+   Game's OWN fields, never the IX proxies (x, health, pend...) -- those
+   belong to a player and travel in SNAP_PLAYER. */
+const SNAP_GAME = [
+  'level', 'hurry', 'ff', 'frameCtr', 'drainPhase', 'spawnBase',
+  'doorState', 'b3', 'hoardCount', 'levelDone', 'gameOver', 'forcedOver',
+  'tcd', 'treasure', 'mirrorBits', 'treasureTimer', 'treasureDiv',
+  'brngState', 'rngState', 'srngState', 'simFrame', 'clockPhaseT',
+  'pass', 'passCtr', 'camX', 'camY', 'camTgtX', 'camTgtY',
+  'animCtr', 'animPend', 'animTick', 'f847E_bit0',
+  'potionArmed', 'potionK', 'potionT', 'potionBy',
+  'bannerCode', 'bannerBy', 'bannerShow', 'levelHold', 'pauseReq',
+  'pauseLong', 'introShow', 'introPotion', 'tileBank', 'tileColour',
+  'hurryDoors', 'hurryExits', 'overFrames', 'attractPage', 'attractT',
+  'packHeld', 'mode', 'online',
+];
+const SNAP_PLAYER = [
+  'x', 'y', 'dir', 'health', 'score', 'keys', 'potions', 'timer', 'f11',
+  'levelOwn', 'bannerBonus', 'frameSlot', 'animCtl', 'shotTag', 'p14',
+  'p15', 'exitCtr', 'exitFrames', 'dead', 'millions', 'hoardKey',
+  'charIndex', 'eBits', 'nameCol', 'nameStamp',
+  'camX', 'camY', 'camTgtX', 'camTgtY', 'camLive',
+  'pend', 'pendCol', 'pendRow',
+];
 
 /* ---- renderer --------------------------------------------------------
    ONLY fillRect with a solid fillStyle (manual 7.5).  No drawImage, no

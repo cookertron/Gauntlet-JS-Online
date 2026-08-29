@@ -51,7 +51,19 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
      via the engine's own `fingerprint()` (players, camera, actors, tape
      counters are all mixed in).  The server never runs the sim — that is
      what keeps it a small standalone C++ program.  Late join = state
-     snapshot transfer (serializer still to be written).
+     snapshot transfer — **serializer BUILT 2026-08-29** (suite 1181 ->
+     1195): `game.snapshot()` -> versioned JSON wire -> `restore()` into
+     a reset machine.  One manifest (SNAP_GAME/SNAP_PLAYER) walked by
+     both directions.  Proven: fingerprint equal at handover and over
+     150/120/60-pass replays (offline busy, online two-window with a
+     shot in flight, mid-materialise); tamper diverges; wrong version
+     refused; localIdx never crosses the wire (the receiver's display
+     choice survives restore).  The noise stream (sound.rng + live
+     burst) IS carried — it is clock state (cost -> passTicks -> $8497
+     -> drain) — and asserted directly at handover, because a mutation
+     run proved 150-pass replays can miss a dropped carry.  Snapshots
+     are taken BETWEEN passes only; the tone voice deliberately restarts
+     silent (its cost is constant, its table is a reference).
    - **PER-CLIENT CAMERA — BUILT 2026-08-29** (suite 1161 -> 1181, all
      green): the sim carries one virtual camera per player behind a
      `cfg.online` flag (`vcamPass()` beside `camera()`), every

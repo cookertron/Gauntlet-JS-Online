@@ -7873,5 +7873,153 @@ if (process.argv[2] === '--table') {
   G.settings.reset();
 }
 
+/* ====================================================================
+   THE STATE SNAPSHOT -- ADDED (this fork): LATE JOIN under lockstep.
+   snapshot() -> JSON wire -> restore() into a RESET machine must land a
+   joining client on the running game exactly: same fingerprint at the
+   handover, and fingerprint-identical evolution under the same input
+   bytes from then on.  Driven offline (busy solo play) and online
+   (two windows, a shot in flight, and mid-materialise), plus the guard
+   rails: a tampered wire diverges (the test CAN fail), a wrong version
+   refuses, and the receiver's localIdx survives -- the snapshot must
+   never say which window a client displays.
+   ==================================================================== */
+{
+  const script = i => {
+    const t = i % 80;
+    return { right: t < 20, down: t >= 20 && t < 40,
+             left: t >= 40 && t < 60, up: t >= 60,
+             fire: (i % 7) === 0 };
+  };
+  const fps = (g, n, off, p2held) => {
+    const out = [];
+    for (let i = 0; i < n; i++){
+      const inp = script(off + i);
+      if (p2held) inp.p2 = p2held;
+      g.onePass(inp);
+      out.push(g.fingerprint());
+    }
+    return out;
+  };
+
+  /* --- offline: 220 busy passes, snapshot, continue 150 -- then restore
+     the wire into a fresh reset and drive the same 150 bytes. */
+  {
+    G.settings.slowdown = false;
+    G.game.reset({});
+    const g = G.game;
+    for (let i = 0; i < 220; i++) g.onePass(script(i));
+    const wire = JSON.stringify(g.snapshot());
+    checkTrue('the snapshot is pure JSON of real size',
+              typeof wire === 'string' && wire.length > 2000);
+    const fpAt = g.fingerprint();
+    /* the noise stream is NOT in fingerprint() (sound never is), but it
+       IS clock state -- toggles feed pass cost feeds $8497, the drain
+       (measured; see reset()'s reseed note).  The replay windows below
+       only catch a dropped carry when a burst straddles a frame
+       boundary, which 150 passes are not guaranteed to produce -- a
+       mutation run proved they can miss it -- so the carry is asserted
+       DIRECTLY at the handover. */
+    const srcSound = { rng: g.sound.rng, level: g.sound.level,
+                       ramp: g.sound.ramp, ticks: g.sound.ticks };
+    checkTrue('the wire carries the noise stream', 'rng' in JSON.parse(wire).sound);
+    const cont = fps(g, 150, 220);
+    G.game.reset({});                    // the joining client's fresh boot
+    g.restore(JSON.parse(wire));
+    check('restore lands EXACTLY on the source state (fingerprint at handover)',
+          g.fingerprint(), fpAt);
+    check('...and the LD A,R noise stream position crossed the wire',
+          [g.sound.rng, g.sound.level, g.sound.ramp, g.sound.ticks],
+          [srcSound.rng, srcSound.level, srcSound.ramp, srcSound.ticks]);
+    const rep = fps(g, 150, 220);
+    let same = 0;
+    for (let i = 0; i < 150; i++) if (cont[i] === rep[i]) same++;
+    check('...and the next 150 passes replay fingerprint-identical', same, 150);
+  }
+
+  /* --- online: two windows apart, player 2 firing (a shot in flight at
+     the snapshot), 120 passes each side of the wire. */
+  {
+    G.game.reset({ online: true });
+    const g = G.game;
+    g.onePass({ p2: { fire: true } });               // the join
+    for (let i = 0; i < 7; i++) g.onePass({});       // the materialise
+    const p2 = g.players[1];
+    p2.x = (g.players[0].x + 60) & 0x7F; p2.y = g.players[0].y;
+    g.vcamConverge(p2);
+    const P2HELD = { right: true, fire: true };
+    for (let i = 0; i < 40; i++){
+      const inp = script(i); inp.p2 = P2HELD; g.onePass(inp);
+    }
+    checkTrue('the online scenario has a live second window at the snapshot',
+              g.players[1].camLive === true);
+    const wire = JSON.stringify(g.snapshot());
+    const fpAt = g.fingerprint();
+    const cont = fps(g, 120, 40, P2HELD);
+    G.game.reset({ online: true });
+    g.restore(JSON.parse(wire));
+    check('online restore lands exactly on the source state',
+          g.fingerprint(), fpAt);
+    const rep = fps(g, 120, 40, P2HELD);
+    let same = 0;
+    for (let i = 0; i < 120; i++) if (cont[i] === rep[i]) same++;
+    check('...and 120 two-window passes replay fingerprint-identical', same, 120);
+  }
+
+  /* --- mid-MATERIALISE: snapshot two passes into a join, while the
+     six-pass swirl still owns the new player ($9694's bit 0). */
+  {
+    G.game.reset({ online: true });
+    const g = G.game;
+    for (let i = 0; i < 20; i++) g.onePass(script(i));
+    g.onePass({ p2: { fire: true } });
+    g.onePass({}); g.onePass({});
+    checkTrue('player 2 is mid-materialise at the snapshot',
+              (g.players[1].animCtl & 1) === 1);
+    const wire = JSON.stringify(g.snapshot());
+    const cont = fps(g, 60, 23);
+    G.game.reset({ online: true });
+    g.restore(JSON.parse(wire));
+    const rep = fps(g, 60, 23);
+    let same = 0;
+    for (let i = 0; i < 60; i++) if (cont[i] === rep[i]) same++;
+    check('a mid-materialise snapshot replays fingerprint-identical', same, 60);
+  }
+
+  /* --- the guard rails ------------------------------------------------ */
+  {
+    G.game.reset({});
+    const g = G.game;
+    for (let i = 0; i < 80; i++) g.onePass(script(i));
+    const wire = JSON.stringify(g.snapshot());
+    /* a tampered wire DIVERGES -- proves the equivalence tests can fail */
+    const cont = fps(g, 60, 80);
+    const bad = JSON.parse(wire);
+    bad.game.rngState = (bad.game.rngState ^ 1) >>> 0;
+    G.game.reset({});
+    g.restore(bad);
+    const rep = fps(g, 60, 80);
+    checkTrue('a tampered wire (rngState^1) DIVERGES within 60 passes',
+              cont.join(',') !== rep.join(','));
+    /* a wrong version refuses */
+    let threw = false;
+    try { g.restore(Object.assign(JSON.parse(wire), { v: 2 })); }
+    catch (e){ threw = true; }
+    checkTrue('a snapshot with the wrong version is REFUSED', threw);
+    /* localIdx is the receiver's own -- the wire neither carries it nor
+       overwrites it */
+    checkTrue('the wire does not carry localIdx',
+              !('localIdx' in JSON.parse(wire).game));
+    G.game.reset({});
+    g.localIdx = 1;
+    g.restore(JSON.parse(wire));
+    check('...and restore preserves the receiver\'s own localIdx',
+          g.localIdx, 1);
+  }
+
+  G.seed({});                            // back to the offline gate baseline
+  G.settings.reset();
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`);
 process.exit(failures ? 1 : 0);
