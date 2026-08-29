@@ -8099,6 +8099,23 @@ if (process.argv[2] === '--table') {
   checkTrue('...on the exact state it served', G.game.fingerprint() ===
             (() => { return G.game.fingerprint(); })());
 
+  /* ---- THE BACKGROUND-TAB CLOCK: with the page hidden, the PASS echo
+     itself steps the sim and answers -- no frame() call anywhere.  The
+     regression for the measured kill: a backgrounded browser has no
+     requestAnimationFrame, went silent, starved the relay's 10 s input
+     timeout, and the session was orphan-reset under the player. */
+  {
+    sandbox.document.hidden = true;
+    const stepWas = S.step;
+    H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
+    checkTrue('a hidden tab steps on the echo alone (no frame loop at all)',
+              S.step === stepWas + 1);
+    const inp2 = lastOf(M.INPUT);
+    check('...and answers with the NEXT step\'s byte at once',
+          rd32(inp2, 1), S.step);
+    sandbox.document.hidden = false;
+  }
+
   /* ---- the SERVER row exists exactly when a server is discoverable ---- */
   S.forceAvailable = true;
   checkTrue('the options screen offers SERVER when one is discoverable',

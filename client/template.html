@@ -10534,6 +10534,16 @@ addEventListener('keydown',e=>{ if(inField(e))return; unlockAudio();
   const k=KEYMAP[e.code]; if(k){keyboard.press(k);e.preventDefault();}});
 addEventListener('keyup',e=>{ if(inField(e))return;
   const k=KEYMAP[e.code]; if(k){keyboard.release(k);e.preventDefault();}});
+/* A TAB LEAVING THE FOREGROUND loses its keyups -- a key held across the
+   switch would stay in `held` for ever and walk the player into a wall
+   until the tab came back.  And a HIDDEN tab loses its frame loop, which
+   online would starve the relay -- netPump() (see the NET section) takes
+   over as the clock the moment the page hides. */
+addEventListener('visibilitychange', () => {
+  keyboard.releaseAll();
+  netPump();
+});
+addEventListener('blur', () => keyboard.releaseAll());
 
 const el=id=>document.getElementById(id);
 
@@ -10732,6 +10742,7 @@ const net = {
   step: 0,             // the next tick to exchange
   sentInput: false, pendDirs: null,
   acc: 0, lastProgress: 0, desyncs: 0, seatMask: 0,
+  pumpTimer: null,         // the hidden-tab pacer -- see netPump()
   forceAvailable: false,   // tests: offer the SERVER row with no location
 };
 function netNow(){
@@ -10825,6 +10836,7 @@ function netOnMessage(b){
     const dirs = [];
     for (let i = 0; i < count; i++) dirs.push(b[6 + i] | 0);
     net.pendDirs = dirs;               // stepped by netFrame, on the clock
+    netPump();                         // -- or by THIS, when the tab is hidden
     return;
   }
   if (t === M.SNAP){
@@ -10878,6 +10890,45 @@ function netApply(dirs){
   net.step++; net.sentInput = false; net.lastProgress = netNow();
   if (((done + 1) % NETP.fpEvery) === 0)
     netSend(NETP.msgs.FP, netU32(done).concat(netU32(game.fingerprint())));
+}
+/* THE BACKGROUND-TAB CLOCK.  A hidden tab gets no requestAnimationFrame
+   at all, so the frame loop -- and with it every INPUT -- simply stops,
+   and ten seconds of that got the client dropped for input starvation
+   and the session orphan-reset (MEASURED: exactly the sequence that
+   killed the first browser while the second was being set up).  But
+   WebSocket messages still fire in hidden tabs, so when the page is
+   hidden the ECHO ITSELF is the clock: apply the pass the moment it
+   lands and answer with the next byte at once.  The hidden player just
+   stands -- his keys were released on the way out (see the visibility
+   listeners by the key handlers) -- and the session runs on at the
+   VISIBLE players' pace, nobody dropped, nothing desynced. */
+function netHidden(){
+  return typeof document !== 'undefined' && !!document.hidden;
+}
+function netPump(){
+  if (net.phase !== 'live' || !netHidden()) return;
+  while (net.pendDirs){
+    const d = net.pendDirs; net.pendDirs = null;
+    netApply(d);
+  }
+  if (net.sentInput) return;
+  /* HIDDEN PACING: answer at the sim's own tick rate, never the wire's.
+     With a visible player in the session, their paced inputs govern the
+     loop and this floor never binds; alone (every participant hidden)
+     it stops the exchange free-running at round-trip speed -- measured
+     13,800 steps a second, the sim fast-forwarding by minutes while
+     nobody watched.  Browsers clamp hidden-tab timers to about 1 Hz,
+     which is exactly the idle pace wanted; where setTimeout does not
+     exist (the test sandboxes) the answer is immediate and the TESTS
+     pace the wire themselves. */
+  const wait = (net.lastProgress + game.tickSeconds() * 1000) - netNow();
+  if (wait > 0 && typeof setTimeout !== 'undefined'){
+    if (net.pumpTimer === null)
+      net.pumpTimer = setTimeout(() => { net.pumpTimer = null; netPump(); }, wait);
+    return;
+  }
+  netSend(NETP.msgs.INPUT, netU32(net.step).concat([netLocalDir()]));
+  net.sentInput = true;
 }
 function netFrame(dt){
   if (net.phase !== 'live') return;
@@ -10997,7 +11048,7 @@ requestAnimationFrame(frame);
 globalThis.__GAUNTLET__={
   Game,game,render,assets:A,
   net:{ state:net, start:netStart, frame:netFrame, overlay:netOverlay,
-        onMessage:netOnMessage, apply:netApply, boot:netBoot,
+        onMessage:netOnMessage, apply:netApply, boot:netBoot, pump:netPump,
         localDir:netLocalDir, serverUrl, netAvailable, utf8Enc, utf8Dec },
   /* SETTINGS persistence -- the WIDGETS and the SCREEN that edits them are
      under `frontend` below (optRows()/optFrame()/optRender() on the live

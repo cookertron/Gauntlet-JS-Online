@@ -92,6 +92,16 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
      boot fixes it and later joiners inherit blocks via snapshot.
    - `restore()` now repairs `feScr` (attract/rewind shadow screen) —
      found by the e2e: a mid-lobby joiner crashed the page redraw.
+   - **The background-tab clock** (found by Anthony's first real test):
+     a hidden tab has NO requestAnimationFrame, so the client went
+     silent, the relay's 10 s input timeout dropped it and the session
+     orphan-reset — the second browser then got a "totally separate
+     game".  Fixed: when `document.hidden`, the PASS echo itself is the
+     clock (`netPump()` — WebSocket messages still fire in hidden
+     tabs), floor-paced at the sim's own tick rate so a hidden-solo
+     session cannot free-run (measured 13,800 steps/s before the
+     floor).  Tab-out also releases all keys (`visibilitychange`/
+     `blur`) — a hidden tab never receives its keyups.
    - v1 paces one tick per round trip (LAN-ideal).  **Later polish:**
      input pipelining (net layer only); a join-time character pick (the
      dir byte has two spare bits); growing the sim to four player
