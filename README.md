@@ -17,10 +17,21 @@ C++ server is not started.
 
 ```
 python tools/build.py     # client/template.html -> client/gauntlet.html
-node tools/headless.js    # the test suite (1161/1161; 1211/1211 at fork)
+node tools/headless.js    # the client test suite (1195/1195)
 ```
 
 Open `client/gauntlet.html` in a browser to play.
+
+The C++ relay server (`server/relay.cpp`, protocol in
+`shared/PROTOCOL.md`) builds inside the VS x64 environment:
+
+```
+vcvars64 && cmake -S server -B server\build -G Ninja
+         && ninja -C server\build
+python tools/protocheck.py                 # protocol constants in sync
+node tools/relaytest.js                    # the relay's own gate (24 checks)
+server\build\gauntlet-relay.exe            # run it (--port 33792 --seats 2)
+```
 
 ## Provenance
 

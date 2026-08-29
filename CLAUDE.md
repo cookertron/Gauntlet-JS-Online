@@ -14,8 +14,15 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
 - `client/template.html` — the engine SOURCE (~10.6k lines). Never edit
   `client/gauntlet.html`; it is generated.
 - `client/gauntlet.html` — the built, playable single file.
-- `server/` — the C++ server (not started).
-- `shared/` — client/server protocol definitions (not started).
+- `server/relay.cpp` — the C++ lockstep relay (one file, ws2_32 only;
+  speaks RFC 6455 itself).  Build inside vcvars64:
+  `cmake -S server -B server\build -G Ninja && ninja -C server\build`.
+- `shared/PROTOCOL.md` + `shared/protocol.json` — the wire contract, v1.
+  The JSON is the source of truth; `python tools/protocheck.py` holds
+  the C++ constants block to it (28 constants, both directions).
+- `tools/relaytest.js` — the relay's empirical gate (24 checks): spawns
+  the exe, speaks real WebSocket at it (own client, every frame byte
+  controlled), plays the full protocol conversation.
 - `tools/build.py` — `python tools/build.py` regenerates the client.
 - `tools/headless.js` — `node tools/headless.js`, the test suite
   (1211/1211 at fork point). Boots the BUILT file in a vm sandbox.
@@ -44,6 +51,22 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
    are untouched: unreachable in the shipped build, they go with the
    STREAMLINED_FRONTEND collapse, a separate pass.)
 2. C++ Windows server; online sessions of up to 4 players.
+   **Relay BUILT 2026-08-29** (protocheck 28/28, relaytest 24/24,
+   mutation-verified: seat-order swap and advance-without-waiting each
+   fail their own checks): seating, fresh boot with one shared
+   buildSeed, the pure-lockstep pass loop (advances only when every
+   seated READY client delivered its byte; empty seats substitute 0x00
+   — the sim's own stand-still), fingerprint arbitration
+   (majority, tie to lowest seat) with resync-through-snapshot, late
+   join via verbatim snapshot forwarding, input/handshake/sync
+   timeouts, seat reuse (= the engine's join-in model), and
+   orphaned-session reset.  The PROTOCOL allows 4 seats; the server
+   defaults `--seats 2` because the sim carries two player blocks —
+   growing the sim to four blocks is its own later pass.
+   **Remaining for step 2:** the client side (speak the protocol from
+   the browser: drive `players[n].dir` off PASS, send INPUT/FP/SNAP,
+   restore on join) — the NETWORK SEAM in `readKeys()` is where it
+   lands.
 3. Netcode design — **SETTLED with Anthony 2026-08-29:**
    - **LOCKSTEP RELAY.**  Every client runs the JS sim it already has; the
      C++ server relays one direction byte per player per pass, owns the

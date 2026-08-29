@@ -1,0 +1,13 @@
+# gauntlet-relay -- the lockstep relay (see shared/PROTOCOL.md).
+# Build (toolchain notes in CLAUDE.md -- run inside vcvars64):
+#   cmake -S server -B server/build -G Ninja
+#   ninja -C server/build
+cmake_minimum_required(VERSION 3.20)
+project(gauntlet_relay CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_executable(gauntlet-relay relay.cpp)
+target_link_libraries(gauntlet-relay ws2_32)
+if(MSVC)
+  target_compile_options(gauntlet-relay PRIVATE /W4 /permissive-)
+endif()

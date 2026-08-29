@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "port": 33792,
+  "maxSeats": 4,
+  "defaultSeats": 2,
+  "fpEvery": 32,
+  "limits": {
+    "frameMax": 262144,
+    "messageMax": 1048576,
+    "handshakeMax": 8192,
+    "inputTimeoutMs": 10000,
+    "handshakeTimeoutMs": 5000,
+    "syncTimeoutMs": 15000
+  },
+  "msgs": {
+    "HELLO": 1,
+    "WELCOME": 2,
+    "INPUT": 3,
+    "PASS": 4,
+    "FP": 5,
+    "DESYNC": 6,
+    "SNAPREQ": 7,
+    "SNAP": 8,
+    "READY": 9,
+    "SEATS": 10,
+    "ERROR": 11
+  },
+  "errors": {
+    "FULL": 1,
+    "VERSION": 2,
+    "PROTOCOL": 3,
+    "ORPHANED": 4
+  },
+  "welcomeModes": {
+    "FRESH": 0,
+    "SNAPSHOT": 1
+  }
+}
