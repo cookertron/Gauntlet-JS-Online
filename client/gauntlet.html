@@ -3041,6 +3041,7 @@ class FrontEnd {
     this.zoneOut = false;             // see optFinish() / zonePotion
     this.netOn = true;                // the SERVER row -- ONLINE by default
     this.netOut = false;              // what optFinish decided -- see feHandover
+    this.playersOut = 0;              // see optFinish() / Game.autoJoin
     this.enter(FAITHFUL_TAPE_PROMPTS ? 'stoptape' : 'loading');
   }
   /* ---- the screen helpers, all block A's own -------------------------- */
@@ -3520,6 +3521,13 @@ class FrontEnd {
        this, so its handover keeps the faithful CAPS/SPACE reads. */
     this.zoneOut = true;
     this.netOut = this.netOn && netAvailable();   // see feHandover()
+    /* START MEANS START -- the one local player joins outright on the
+       OFFLINE handover (see Game.autoJoin); landing on the ranked table
+       to press FIRE would be asking for a decision the player has just
+       made.  The faithful front end never sets this and keeps $B374's
+       attract-until-FIRE, as does the ONLINE path, where the attract
+       screen is the lobby. */
+    this.playersOut = 1;
     settingsSave();
     this.enter('pressplay');
   }
@@ -4878,6 +4886,28 @@ class Game{
        across the dungeon from wherever it last stood -- a walking window
        would wake every actor on its path, which no faithful join did. */
     if (this.online){ this.p.camLive = true; this.vcamConverge(this.p); }
+  }
+  /* ADDED -- START MEANS START (upstream f23d538, adapted).  The
+     streamlined options screen ends on a button that says START GAME, so
+     the OFFLINE handover (feHandover) joins the local player HERE -- by
+     pressing FIRE on his behalf through the REAL join above
+     ($9440..$948C: placement, stat reset, armour row, refusal semantics
+     and all) -- instead of landing on the ranked table to ask, via PRESS
+     FIRE, for a decision the player has just made.  Player 2 still drops
+     in mid-game through joinPass exactly as $9432 always allowed.
+     Dungeon 1 never refuses a placement ($945A DEC A / JR z), so a
+     boot-time join cannot bounce.  The faithful front end never reaches
+     this (it sets no playersOut): its handover still lands on the
+     attract loop and waits for FIRE, exactly as $B374 does.  And the
+     ONLINE path never reaches it either, on purpose: there the attract
+     screen is the LOBBY, and joining is the wire's own FIRE byte. */
+  autoJoin(n){
+    for (const q of this.players.slice(0, n & 3)){
+      const save = this.p, saveDir = q.dir;
+      this.p = q; q.dir = DIR_FIRE;                      // the $944C gate, satisfied
+      this.joinOne();                                    // the real join
+      q.dir = saveDir; this.p = save;
+    }
   }
 
   /* ====================================================================
@@ -10756,6 +10786,12 @@ function feHandover(){
               buildSeed: freshBuildSeed(),
               zonePotion: frontend.zoneOut});
   game.enterAttract();
+  /* START MEANS START -- see Game.autoJoin.  The streamlined screen named
+     its player (playersOut 1); he joins here through the real join, and
+     the first attractTick's own $B47E arm carries him straight into the
+     dungeon -- the ranked table never draws.  The faithful front end
+     sets no playersOut and keeps the original flow: attract until FIRE. */
+  if (frontend.playersOut) game.autoJoin(frontend.playersOut);
   feRunning = false;
 }
 /* Any gesture will do, and a CLICK must count: with the tape prompts

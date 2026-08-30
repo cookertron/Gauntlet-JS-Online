@@ -35,14 +35,18 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
 - `notes/NOTES-engine.md` — the 4700-line reverse-engineering log of the
   engine. The map. Search it before re-deriving anything.
 
-## Upstream changes waiting to be cherry-picked
+## Upstream cherry-picks — DONE 2026-08-30
 
-`notes/UPSTREAM-CHANGES.md` — Anthony's handover of everything the
-faithful port changed after the fork point (its suite is now 1268/1268).
-Headline: the ENTIRE audio stack here is pre-fork vintage and five
-upstream audio changes apply nearly clean, worklet FIFO transport above
-all; the join-flow changes are design decisions, not mechanical ports.
-Read it before touching sound or the join/lobby flow.
+`notes/UPSTREAM-CHANGES.md` (see its STATUS note): the five audio
+changes are IN — adaptive lead, playback latencyHint, the 4.2 kHz
+speaker model, the AudioWorklet FIFO transport, the `data:` module
+fallback with `info()`/`wk=` diagnostics — plus the fork-specific piece:
+the hidden-tab clock (`netPump`) feeds the transport, or a hidden tab's
+FIFO would drain dry mid-session.  "START means start" is adapted:
+`Game.autoJoin` joins the local player on the OFFLINE handover only;
+the faithful path and the ONLINE lobby keep attract-until-FIRE.
+`deviceJoin` declined — `players[1].dir` is the wire's seam.  The
+`faithful` git remote stays wired for future picks.
 
 ## Planned work (agreed with Anthony, in order of intent)
 

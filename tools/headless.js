@@ -8214,6 +8214,56 @@ if (process.argv[2] === '--table') {
 }
 
 /* ====================================================================
+   START MEANS START -- upstream f23d538, ADAPTED (playersOut/autoJoin).
+   The streamlined START joins the ONE local player through the REAL
+   join ($9440..$948C); the faithful path -- and the ONLINE lobby, where
+   joining is the wire's own FIRE byte -- keep attract-until-FIRE.
+   (deviceJoin, the other half of that upstream commit, is DECLINED
+   here: local player 2 is stripped and players[1].dir is the network
+   seam -- a local pad must never claim a wire seat.)
+   ==================================================================== */
+{
+  const F = G.frontend;
+  F.live.reset();
+  const kb = F.liveKb; kb.releaseAll();
+  let n = 0;
+  while (n < 6000 && F.live.phase !== 'options'){
+    if (n % 16 < 6) kb.press('SPACE'); else kb.releaseAll();
+    F.live.frame(kb, [], n); n++;
+  }
+  kb.releaseAll(); F.live.frame(kb, [], n++);
+  F.live.optSel = F.live.optRows().findIndex(r => r.k === 'start');
+  for (let i = 0; i < 2; i++){ kb.press('ENTER'); F.live.frame(kb, [], n++); }
+  for (let i = 0; i < 3; i++){ kb.releaseAll(); F.live.frame(kb, [], n++); }
+  while (n < 6200 && !F.live.done) F.live.frame(kb, [], n++);
+  checkTrue('the screen finished', F.live.done);
+  check('START names the one local player for the handover', F.live.playersOut, 1);
+  F.feHandover();
+  const g = G.game;
+  checkTrue('START MEANS START: player 1 is IN before any FIRE',
+            g.players[0].inGame === true);
+  check('...through the REAL join: health BCD 2000, the $9440 reset',
+        [g.players[0].health, g.players[0].score], [0x2000, 0]);
+  checkTrue('...and REALLY placed ($9689): standing on a live cell, not (0,0)',
+            (g.players[0].x | g.players[0].y) !== 0);
+  checkTrue('...player 2 still ships OUT -- free to drop in as always',
+            !g.players[1].inGame);
+  g.advance(0.03, {});
+  check('the first tick carries him into the dungeon -- the table never draws',
+        g.mode, 'play');
+  g.onePass({ p2: { fire: true } });
+  checkTrue('...and the abstract p2.fire drop-in still joins player 2',
+            g.players[1].inGame === true);
+  /* the FAITHFUL flow is untouched: no playersOut, attract until FIRE */
+  F.live.reset();
+  check('a fresh front end names nobody', F.live.playersOut, 0);
+  F.feHandover();
+  checkTrue('with no playersOut the handover keeps attract-until-FIRE',
+            G.game.mode === 'attract' && !G.game.players[0].inGame);
+  G.seed({});
+}
+
+/* ====================================================================
    THE BRIDGE'S ADAPTIVE LEAD -- ADDED, see SoundOut's own comment.
    Reported from play on an Acer Nitro 5: "the sound is really choppy".
    The fixed 80 ms head start was the whole jitter budget, and a machine

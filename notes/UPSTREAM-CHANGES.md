@@ -1,5 +1,17 @@
 # Upstream changes since the fork point — for cherry-picking
 
+**STATUS 2026-08-30 — ACTIONED.**  Items 1–5 ported (the five upstream
+patches applied nearly clean; one test hunk re-anchored), plus the
+fork-specific requirement item 5 flagged: the hidden-tab clock
+(`netPump`) now feeds the audio transport too.  Item 6 adapted as
+designed below: `autoJoin` on the OFFLINE handover only; the faithful
+path and the ONLINE lobby keep attract-until-FIRE.  Item 7 declined:
+local P2 is stripped and `players[1].dir` is the wire's seam — a local
+device must never claim it.  Suite 1218 → 1258; e2e 18/18; spot
+mutations re-verified in this tree (restart-branch ratchet, autoJoin
+state-poke).  The faithful remote stays wired for future picks
+(`git fetch faithful`).
+
 The faithful port (`E:/Software/Gauntlet`, GitHub `cookertron/Gauntlet-JS`)
 kept moving after this fork was cut (fork point `9c66f25`, 2026-08-28,
 1211/1211 checks).  Its suite now stands at **1268/1268**, and every change
