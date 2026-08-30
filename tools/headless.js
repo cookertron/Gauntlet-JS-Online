@@ -8372,9 +8372,9 @@ if (process.argv[2] === '--table') {
     checkTrue('...recording WHY blob was refused for info()',
               S3.workletErr.indexOf('blob:AbortError') === 0 &&
               S3.info().indexOf('wk=on') > 0);
-    checkTrue('...and the node got its refill gate on arrival',
+    checkTrue('...and the node got its refill gate on arrival -- the FIFO\'s own 50 ms',
               S3.node.port.posted.length === 1 &&
-              S3.node.port.posted[0].min === Math.floor(0.08 * 48000));
+              S3.node.port.posted[0].min === Math.floor(0.05 * 48000));
 
     sandbox.AudioContext = mkCtx(() => false);       // nothing loads
     const S4 = new G.sound.SoundOut();
@@ -8447,14 +8447,24 @@ if (process.argv[2] === '--table') {
     const posted = [];
     S.ctx = { sampleRate: sr };
     S.node = { port: { postMessage(m){ posted.push(m); } } };
+    /* FORK DEVIATION from the upstream figures: the FIFO gate is its own
+       field with a 30 ms base (SND_LEAD_FIFO) -- a FIFO recovers inside
+       one gap, so it opens tighter than the scheduler's 80 ms and the
+       ratchet buys more only where a machine proves the need.  The
+       SCHEDULER's own lead must stay untouched by FIFO reports. */
     S.ratchetSamples(Math.round(0.05*sr));
-    checkTrue('an underrun report ratchets lead to episode + margin',
-              S.underruns === 1 && Math.abs(S.lead - 0.13) < 1e-3);
-    checkTrue('...and posts the worklet its new refill gate',
-              posted.length === 1 &&
-              posted[0].min === Math.floor(S.lead*sr));
+    checkTrue('an underrun report ratchets the FIFO gate to episode + its margin',
+              S.underruns === 1 && Math.abs(S.fifoLead - 0.10) < 1e-3);
+    S.ratchetSamples(1);                     // a TINY episode still escalates
+    checkTrue('...and even a tiny episode grows the gate a whole frame',
+              Math.abs(S.fifoLead - 0.116) < 1e-3);
+    checkTrue('...and posts the worklet its new refill gate each time',
+              posted.length === 2 &&
+              posted[1].min === Math.floor(S.fifoLead*sr));
+    checkTrue('...while the SCHEDULER lead is not touched by a FIFO report',
+              S.lead === 0.08);
     S.ratchetSamples(sr * 2);
-    checkTrue('...and a huge episode caps at SND_LEAD_MAX', S.lead === 0.24);
+    checkTrue('...and a huge episode caps at SND_LEAD_MAX', S.fifoLead === 0.24);
   }
 
   /* --- the processor itself, eval'd from the SAME source string the page
@@ -8535,13 +8545,15 @@ if (process.argv[2] === '--table') {
   /* the drained tail opened an episode; resume must wait for the gate,
      then report -- and the report must RATCHET, same policy as the
      worklet's own wire */
-  const lead0 = S.lead;
+  const lead0 = S.fifoLead;
   S.node.port.postMessage({ chunk: Float32Array.from([7]) });
   check('an episode refuses to resume below the gate', pull(2), [0, 0]);
   S.node.port.postMessage({ chunk: Float32Array.from([8, 9, 10]) });
   check('...then plays on cleanly once the queue refills', pull(4), [7, 8, 9, 10]);
-  checkTrue('...and the episode report ratcheted the lead through the shim',
-            S.lead > lead0, 'lead ' + S.lead);
+  checkTrue('...and the episode report ratcheted the FIFO gate through the shim',
+            S.fifoLead > lead0, 'fifoLead ' + S.fifoLead);
+  checkTrue('the FIFO gate OPENS at its own 50 ms, not the scheduler 80',
+            Math.abs(lead0 - 0.05) < 1e-9);
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

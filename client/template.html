@@ -2044,6 +2044,17 @@ class BeeperChip{
    fire if the context is suspended, and then the cap never releases.     */
 const SND_LEAD = 0.08;        // seconds of head start given to the first buffer
 const SND_LEAD_MAX = 0.24;    // the adaptive ratchet's ceiling -- see `lead`
+/* ADDED (this fork): the FIFO transports (worklet/sproc) START at a
+   tighter gate than the scheduler's lead.  The scheduler pays DOUBLE for
+   optimism (the tear plus a fresh lead of resync silence), so 80 ms is
+   its floor; a FIFO underrun recovers inside its own single gap and the
+   ratchet then holds the measured need for ever -- so it opens at 50 ms
+   (three rAF frames: the FEEDER runs on rAF, so the gate must survive a
+   skipped frame -- 30 ms was tried and popped six times in 4 s of tune,
+   measured), and a machine that needs more buys it once.  Reported from
+   play: action-to-sound latency audibly behind a native emulator's; the
+   refill gate IS that latency, every millisecond of it. */
+const SND_LEAD_FIFO = 0.05;
 const SND_AHEAD = 3.0;        // never schedule further ahead than this
 const SND_VOICES = 48;        // the hard cap on LIVE scheduled buffers
 /* THE WORKLET -- one continuous stream, the way an emulator does it.
@@ -2121,7 +2132,8 @@ class SoundOut{
        SND_LEAD_MAX -- the machine that needs 200 ms of slack buys it with
        200 ms of sfx latency, and the machine that doesn't never pays.
        It never decays: a machine that stalled once will stall again. */
-    this.lead = SND_LEAD;
+    this.lead = SND_LEAD;         // the SCHEDULER's head start
+    this.fifoLead = SND_LEAD_FIFO;  // the FIFO transports' refill gate
     this.underruns = 0;       // genuine tears only -- resyncs also counts restarts
     /* the worklet path -- see WORKLET_SRC.  'sched' until addModule
        resolves; 'worklet' from then on.  initPending holds flush() off for
@@ -2145,15 +2157,21 @@ class SoundOut{
   ratchetSamples(n){
     this.underruns++;
     const sr = this.ctx ? this.ctx.sampleRate : 44100;
-    this.lead = Math.min(SND_LEAD_MAX,
-                         Math.max(this.lead, n/sr + SND_LEAD));
-    if (this.node) this.node.port.postMessage({ min: Math.floor(this.lead*sr) });
+    /* grow by AT LEAST one rAF frame per genuine episode: a train of
+       tiny underruns must converge in a couple of steps, not pop its
+       way up two milliseconds at a time (measured doing exactly that) */
+    this.fifoLead = Math.min(SND_LEAD_MAX,
+                             Math.max(this.fifoLead + 0.016,
+                                      n/sr + SND_LEAD_FIFO));
+    if (this.node) this.node.port.postMessage({ min: Math.floor(this.fifoLead*sr) });
   }
   /* one line for a bug report: the whole audio state, console-pasteable */
   info(){
     const c = this.ctx || {};
+    const activeLead = (this.mode === 'worklet' || this.mode === 'sproc')
+      ? this.fifoLead : this.lead;
     return 'mode=' + this.mode + ' sr=' + (c.sampleRate || 0) +
-           ' lead=' + this.lead.toFixed(3) + ' underruns=' + this.underruns +
+           ' lead=' + activeLead.toFixed(3) + ' underruns=' + this.underruns +
            ' resyncs=' + this.resyncs + ' dropped=' + this.dropped +
            ' base=' + (c.baseLatency != null ? c.baseLatency.toFixed(4) : '?') +
            ' out=' + (c.outputLatency != null ? c.outputLatency.toFixed(4) : '?') +
@@ -2243,7 +2261,7 @@ class SoundOut{
           if (e.data && e.data.underrun) this.ratchetSamples(e.data.underrun);
         };
         this.node.port.postMessage(
-          { min: Math.floor(this.lead * this.ctx.sampleRate) });
+          { min: Math.floor(this.fifoLead * this.ctx.sampleRate) });
         this.mode = 'worklet'; this.initPending = false;
       };
       /* only addModule's own then(onOk, onErr) -- no interior Promises, so
@@ -2295,8 +2313,8 @@ class SoundOut{
         if (m && m.underrun) this.ratchetSamples(m.underrun);
       };
       let sp;
-      try { sp = this.ctx.createScriptProcessor(2048, 0, 1); }
-      catch (e) { sp = this.ctx.createScriptProcessor(2048, 1, 1); }
+      try { sp = this.ctx.createScriptProcessor(1024, 0, 1); }
+      catch (e) { sp = this.ctx.createScriptProcessor(1024, 1, 1); }
       sp.onaudioprocess = (e) => {
         proc.process([], [[e.outputBuffer.getChannelData(0)]]);
       };
@@ -2305,7 +2323,7 @@ class SoundOut{
       this.node = { port: { postMessage: (m) => {
         const h = proc.port.onmessage; if (h) h({ data: m });
       } } };
-      this.node.port.postMessage({ min: Math.floor(this.lead * this.ctx.sampleRate) });
+      this.node.port.postMessage({ min: Math.floor(this.fifoLead * this.ctx.sampleRate) });
       this.mode = 'sproc';
     } catch (e) {
       this.workletErr += 'sproc:' + ((e && e.name) || e) + ' ';
