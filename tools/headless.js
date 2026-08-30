@@ -3349,6 +3349,11 @@ if (A.player_frames) {
        edge stream for a known (C,E), render it, and count ZERO CROSSINGS out
        of the samples -- never a read-back of beepHz(). */
     {
+      /* everything in this block measures the BOX INTEGRAL and the DC
+         BLOCKER, so it runs with the ADDED speaker model off -- the 1,588 Hz
+         at-unity bound in particular is a property of the blocker's
+         passband, which the 4.2 kHz speaker roll-off deliberately shades. */
+      G.speakerFilter.set(false);
       const sr = 44100;
       const measure = (e) => {
         const half = S.beepHalf(e) / 3500000;         // seconds
@@ -3443,6 +3448,49 @@ if (A.player_frames) {
         checkTrue('the startup transient decays as h*R^i, not as a whine',
                   worst < 0, String(worst));
       }
+      G.speakerFilter.set(true);
+    }
+
+    /* 8. THE SPEAKER MODEL -- ADDED, see SPEAKER_FILTER's own comment: the
+       raw square is the VOLTAGE; what a Spectrum owner heard came through a
+       ~4 cm cone that rolled the top octaves off, and small modern drivers
+       buzz on the unfiltered edges (reported from play as "very crackly").
+       A 2nd-order low pass at 4.2 kHz, live-toggleable. */
+    {
+      const sr = 44100;
+      const square = (hz, secs) => {
+        const ed = []; let lv = 1;
+        for (let t = 0; t < secs; t += 1/(2*hz)){ ed.push([t, lv]); lv ^= 1; }
+        return ed;
+      };
+      const rms = (b, from) => {
+        let s = 0; for (let i = from; i < b.length; i++) s += b[i]*b[i];
+        return Math.sqrt(s / (b.length - from));
+      };
+      const render = (hz) => {
+        const n = Math.round(sr * 0.2), b = new Float32Array(n);
+        new S.BeeperChip(sr).render(b, 0, n, 0, square(hz, 0.2), 0);
+        return rms(b, Math.round(sr * 0.1));      // past the DC settle
+      };
+      G.speakerFilter.set(false); const hiRaw = render(8000), loRaw = render(500);
+      G.speakerFilter.set(true);  const hiMod = render(8000), loMod = render(500);
+      checkTrue('the speaker model shades an 8 kHz square well below the raw render',
+                hiMod < hiRaw * 0.5, (hiMod/hiRaw).toFixed(3) + ' of raw');
+      checkTrue('...and passes a 500 Hz square nearly whole',
+                loMod > loRaw * 0.85, (loMod/loRaw).toFixed(3) + ' of raw');
+      /* the filter STATE persists across render() calls -- a buffer join in
+         the bridge lands mid-waveform, and a per-call reset would click on
+         every one of them.  Split render must equal whole render EXACTLY. */
+      const n = Math.round(sr * 0.1), ed = square(2000, 0.1);
+      const whole = new Float32Array(n), split = new Float32Array(n);
+      new S.BeeperChip(sr).render(whole, 0, n, 0, ed, 0);
+      const c2 = new S.BeeperChip(sr), h = n >> 1;
+      const ei = c2.render(split, 0, h, 0, ed, 0);
+      c2.render(split, h, n - h, h/sr, ed, ei);
+      let same = true;
+      for (let i = 0; i < n; i++) if (whole[i] !== split[i]){ same = false; break; }
+      checkTrue('the model state carries across render calls: split === whole',
+                same);
     }
   }
 
@@ -8127,12 +8175,20 @@ if (process.argv[2] === '--table') {
   {
     sandbox.document.hidden = true;
     const stepWas = S.step;
+    /* the hidden tab must keep FEEDING the audio transport too -- the
+       worklet FIFO drains on the audio thread whatever rAF does */
+    const realFlush = G.sound.out.flush;
+    let flushed = 0;
+    G.sound.out.flush = function(){ flushed++; return realFlush.apply(this, arguments); };
     H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
+    G.sound.out.flush = realFlush;
     checkTrue('a hidden tab steps on the echo alone (no frame loop at all)',
               S.step === stepWas + 1);
     const inp2 = lastOf(M.INPUT);
     check('...and answers with the NEXT step\'s byte at once',
           rd32(inp2, 1), S.step);
+    checkTrue('...and keeps feeding the sound transport while hidden',
+              flushed >= 1);
     sandbox.document.hidden = false;
   }
 
@@ -8155,6 +8211,241 @@ if (process.argv[2] === '--table') {
   kb.releaseAll();
   G.seed({});                            // back to the offline gate baseline
   G.settings.reset();
+}
+
+/* ====================================================================
+   THE BRIDGE'S ADAPTIVE LEAD -- ADDED, see SoundOut's own comment.
+   Reported from play on an Acer Nitro 5: "the sound is really choppy".
+   The fixed 80 ms head start was the whole jitter budget, and a machine
+   whose main thread stalls longer than that tears the schedule on every
+   stall.  Driven here with a mock AudioContext whose clock the test owns,
+   through the REAL flushBeeper and the REAL BeeperChip.
+   ==================================================================== */
+{
+  const FRAME_HZ = G.constants.FRAME_HZ;
+  const S = new G.sound.SoundOut();
+  S.ctx = {
+    _t: 0, get currentTime(){ return this._t; }, sampleRate: 44100,
+    createBuffer(ch, len, sr){ const d = new Float32Array(len);
+      return { getChannelData: () => d }; },
+    createBufferSource(){ return { buffer: null, connect(){}, start(){} }; },
+  };
+  S.gain = { connect(){} };
+  S.chip = new G.sound.BeeperChip(44100);
+
+  S.ctx._t = 0;
+  S.flushBeeper([], 10);                       // first flush: originate the map
+  check('the first flush originates at now + the DEFAULT lead',
+        [S.lead, S.t0], [0.08, 0.08]);
+
+  S.ctx._t = 0.02;
+  S.flushBeeper([[12, 1]], 15);                // healthy progress
+  checkTrue('a healthy flush schedules and never ratchets',
+            S.live.length === 1 && S.underruns === 0 && S.lead === 0.08);
+
+  /* a 120 ms main-thread stall: the cursor (t0 + 5 frames) is now BEHIND
+     the clock.  The ratchet must cover the measured deficit plus the base
+     margin -- not jump straight to the ceiling. */
+  const cursor = 0.08 + 5/FRAME_HZ;
+  S.ctx._t = 0.30;
+  S.flushBeeper([], 20);
+  const expect = (0.30 - cursor) + 0.08;
+  checkTrue('an underrun ratchets the lead by the MEASURED deficit + margin',
+            S.underruns === 1 && Math.abs(S.lead - expect) < 1e-9,
+            'lead ' + S.lead.toFixed(5) + ' expect ' + expect.toFixed(5));
+  checkTrue('...and the re-origin schedules with the NEW lead',
+            Math.abs(S.t0 - (0.30 + expect)) < 1e-9);
+
+  S.ctx._t = 5;                                // a pathological stall
+  S.flushBeeper([], 25);
+  checkTrue('a huge stall caps the lead at SND_LEAD_MAX',
+            S.underruns === 2 && S.lead === 0.24);
+
+  const led = S.lead, und = S.underruns, rs = S.resyncs;
+  S.flushBeeper([], 2);                        // upto < next: a game RESTART
+  checkTrue('a clock restart re-origins but does NOT ratchet -- it is not a tear',
+            S.resyncs === rs + 1 && S.underruns === und && S.lead === led);
+
+  /* start() asks the OS for the STABILITY buffer, not the smallest one --
+     'playback', not the default 'interactive'.  See SoundOut.start()'s own
+     comment: the game's sound is pass-quantised to 80-100 ms anyway, and
+     the small-buffer default is what crackles on a DPC-spiky laptop. */
+  {
+    let captured = null;
+    sandbox.AudioContext = class {
+      constructor(opts){ captured = opts; this.sampleRate = 48000;
+        this.destination = {}; }
+      createGain(){ return { gain: { value: 0 }, connect(){} }; }
+    };
+    const S2 = new G.sound.SoundOut();
+    checkTrue('start() brings the context up under the mock', S2.start() === true);
+    checkTrue('...and asks for the playback latency class, not the default',
+              !!captured && captured.latencyHint === 'playback');
+    checkTrue('...and with no audioWorklet on the context, stays on the scheduler',
+              S2.mode === 'sched' && S2.initPending === false);
+    delete sandbox.AudioContext;
+  }
+
+  /* --- the worklet module's TWO URLs, blob then data ---------------------
+     MEASURED in headless Chrome: a blob module for a worklet FAILS on a
+     file:// page (AbortError) while the data: form loads and constructs --
+     and file:// is how a double-clicked download runs this game.  The
+     mocks' addModule returns a SYNCHRONOUS thenable, which the engine's
+     chain supports on purpose (only addModule's own then(onOk, onErr), no
+     interior Promises), so the whole async dance is assertable inline. */
+  {
+    const mkCtx = (verdict) => class {
+      constructor(){ this.sampleRate = 48000; this.destination = {};
+        this.tried = []; const tried = this.tried;
+        this.audioWorklet = { addModule: (url) => ({
+          then(ok, err){ tried.push(url.slice(0, 5));
+                         verdict(url) ? ok() : err({ name: 'AbortError' }); }
+        }) };
+      }
+      createGain(){ return { gain: { value: 0 }, connect(){} }; }
+    };
+    sandbox.Blob = Blob; sandbox.URL = URL; sandbox.btoa = btoa;
+    sandbox.AudioWorkletNode = class {
+      constructor(ctx, name, opts){ this.name = name; this.opts = opts;
+        this.port = { posted: [], onmessage: null,
+                      postMessage(m){ this.posted.push(m); } }; }
+      connect(){}
+    };
+
+    sandbox.AudioContext = mkCtx(url => !url.startsWith('blob:'));
+    const S3 = new G.sound.SoundOut();
+    S3.start();
+    checkTrue('a blob-refusing platform (file://) falls back to the data: module',
+              S3.mode === 'worklet' && S3.initPending === false &&
+              S3.ctx.tried.length === 2 && S3.ctx.tried[0] === 'blob:' &&
+              S3.ctx.tried[1] === 'data:');
+    checkTrue('...recording WHY blob was refused for info()',
+              S3.workletErr.indexOf('blob:AbortError') === 0 &&
+              S3.info().indexOf('wk=on') > 0);
+    checkTrue('...and the node got its refill gate on arrival',
+              S3.node.port.posted.length === 1 &&
+              S3.node.port.posted[0].min === Math.floor(0.08 * 48000));
+
+    sandbox.AudioContext = mkCtx(() => false);       // nothing loads
+    const S4 = new G.sound.SoundOut();
+    S4.start();
+    checkTrue('both URLs refused: the scheduler keeps the game audible',
+              S4.mode === 'sched' && S4.initPending === false);
+    checkTrue('...and info() names both failures instead of staying silent',
+              S4.info().indexOf('wk=blob:AbortError data:AbortError') > 0);
+
+    delete sandbox.AudioContext; delete sandbox.AudioWorkletNode;
+    delete sandbox.Blob; delete sandbox.URL; delete sandbox.btoa;
+  }
+}
+
+/* ====================================================================
+   THE WORKLET PATH -- ADDED, see WORKLET_SRC's own comment.  One
+   continuous pull-model stream, the architecture a native emulator uses,
+   because a machine was found (an Acer Nitro 5) that crackles on the
+   scheduled-buffer joins while playing an emulator's stream clean.
+   ==================================================================== */
+{
+  const FRAME_HZ = G.constants.FRAME_HZ, sr = 44100;
+
+  /* --- the tiling: the FIFO concatenation reconstructs ONE continuous
+     render exactly, over irregular flush steps -- the same property the
+     scheduled path proves against ctx time, restated against the stream
+     clock. */
+  {
+    const S = new G.sound.SoundOut();
+    const chunks = [];
+    S.ctx = { sampleRate: sr };
+    S.chip = new G.sound.BeeperChip(sr);
+    S.node = { port: { postMessage(m){ if (m.chunk) chunks.push(m.chunk); } } };
+    S.mode = 'worklet';
+    const edges = [];                    // a 0.37-frame square over 60 frames
+    { let lv = 1; for (let f = 0.2; f < 60; f += 0.37){ edges.push([f, lv]); lv ^= 1; } }
+    const log = [];
+    let fed = 0;
+    const feed = (upto) => {
+      while (fed < edges.length && edges[fed][0] < upto) log.push(edges[fed++]);
+      S.flushWorklet(log, upto);
+    };
+    S.flushWorklet([], 0);               // originate the stream at frame 0
+    for (const u of [3, 8, 9, 15, 26, 41, 60]) feed(u);
+    const total = Math.floor(60/FRAME_HZ*sr);
+    check('the stream sent exactly the whole-sample window of 60 frames',
+          S.vsent, total);
+    const cat = new Float32Array(total);
+    { let o = 0; for (const c of chunks){ cat.set(c, o); o += c.length; } }
+    const ref = new Float32Array(total);
+    new G.sound.BeeperChip(sr).render(ref, 0, total, 0,
+      edges.map(e => [e[0]/FRAME_HZ, e[1]]), 0);
+    let worst = 0;
+    for (let i = 0; i < total; i++) worst = Math.max(worst, Math.abs(cat[i] - ref[i]));
+    checkTrue('the chunk concatenation IS the one-shot render, sample for sample',
+              worst < 1e-7, 'worst ' + worst.toExponential(2));
+
+    /* a sim-clock restart re-origins the map with NO chunk and NO gap */
+    const rs = S.resyncs, n0 = chunks.length;
+    S.flushWorklet([[1, 1]], 2);         // upto 2 < next 60
+    checkTrue('a clock restart re-origins the stream map without emitting',
+              S.resyncs === rs + 1 && chunks.length === n0 &&
+              S.vbase === 2 && S.vsent === 0 && S.chip.lvl === 1);
+  }
+
+  /* --- the sample-fed ratchet: an underrun report ratchets the lead by
+     the episode's own length and hands the worklet its new refill gate. */
+  {
+    const S = new G.sound.SoundOut();
+    const posted = [];
+    S.ctx = { sampleRate: sr };
+    S.node = { port: { postMessage(m){ posted.push(m); } } };
+    S.ratchetSamples(Math.round(0.05*sr));
+    checkTrue('an underrun report ratchets lead to episode + margin',
+              S.underruns === 1 && Math.abs(S.lead - 0.13) < 1e-3);
+    checkTrue('...and posts the worklet its new refill gate',
+              posted.length === 1 &&
+              posted[0].min === Math.floor(S.lead*sr));
+    S.ratchetSamples(sr * 2);
+    checkTrue('...and a huge episode caps at SND_LEAD_MAX', S.lead === 0.24);
+  }
+
+  /* --- the processor itself, eval'd from the SAME source string the page
+     ships, with the worklet globals stubbed. */
+  {
+    let ProcCls = null; const reports = [];
+    const AudioWorkletProcessor = class {
+      constructor(){ this.port = { onmessage: null,
+                                   postMessage: m => reports.push(m) }; } };
+    const registerProcessor = (name, cls) => { ProcCls = cls; };
+    void AudioWorkletProcessor; void registerProcessor;
+    eval(G.sound.WORKLET_SRC);
+    const p = new ProcCls();
+    const msg = d => p.port.onmessage({ data: d });
+    const spin = () => { const o = new Float32Array(128);
+                         p.process([], [[o]]); return o; };
+    msg({ min: 100 });
+    let o = spin();
+    checkTrue('before anything arrives: silence, and NO underrun report',
+              reports.length === 0 && o.every(v => v === 0));
+    msg({ chunk: new Float32Array(60).fill(0.5) });     // below the gate
+    o = spin();
+    checkTrue('below the refill gate the stream does not start yet',
+              reports.length === 0 && o.every(v => v === 0));
+    msg({ chunk: new Float32Array(80).fill(0.25) });    // depth 140 >= 100
+    o = spin();
+    checkTrue('at the gate it starts -- and boot silence was NOT an underrun',
+              reports.length === 0 && o[0] === 0.5 && o[127] === 0.25);
+    o = spin();                                         // 12 left, then dry
+    checkTrue('a dry queue emits zeros mid-episode without reporting yet',
+              reports.length === 0 && o[11] === 0.25 && o[12] === 0);
+    msg({ chunk: new Float32Array(50).fill(0.75) });    // below the gate
+    o = spin();
+    checkTrue('recovery ALSO waits for the refill gate -- no fragile resume',
+              reports.length === 0 && o.every(v => v === 0));
+    msg({ chunk: new Float32Array(80).fill(0.75) });    // depth 130 >= 100
+    o = spin();
+    checkTrue('resuming reports the episode length, once',
+              reports.length === 1 && reports[0].underrun === 244 &&
+              o[0] === 0.75);
+  }
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

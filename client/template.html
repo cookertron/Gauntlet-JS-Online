@@ -1959,6 +1959,22 @@ class AyChip{
    The PASS CLOCK is a separate question and does model contention now --
    see the CLK block -- but the beeper's own loops live above $8000, where
    there is nothing to contend, so this stays true either way.            */
+/* ADDED, not ported: THE SPEAKER, as distinct from the VOLTAGE.  The chip
+   below reproduces bit 4 of $FE exactly -- a mathematically perfect square
+   wave -- but nobody ever HEARD that: the real machine played it through a
+   ~4 cm cone in a plastic case, which mechanically low-passed everything.
+   Rendering the raw square into modern hardware is arguably LESS faithful
+   to the experience, and it is measurably harsher: the edges carry
+   fold-back aliasing, and small laptop drivers buzz and break up on
+   full-bandwidth squares (reported from play on an Acer Nitro 5 as
+   "very crackly", surviving every scheduling and buffering fix, because
+   the crackle was in the waveform's own top octaves).  True runs the
+   render through a 2nd-order low-pass at 4.2 kHz -- the same class of
+   speaker model mature Spectrum emulators apply -- and false is the raw
+   voltage, live-toggleable (__GAUNTLET__.speakerFilter) so the two can be
+   A/B'd mid-game.  The dc=false exactness path and every edge-stream gate
+   are upstream of this and unaffected either way. */
+let SPEAKER_FILTER = true;
 class BeeperChip{
   constructor(sampleRate, dc){
     this.sr = sampleRate; this.lvl = 0;
@@ -1976,6 +1992,15 @@ class BeeperChip{
     this.dc = dc !== false;
     this.R = 1 - 2*Math.PI*20/sampleRate;
     this.px = 0; this.py = 0;
+    /* the SPEAKER MODEL's biquad (RBJ low-pass, fc 4.2 kHz, Q 0.7071),
+       transposed direct form II; state persists across render() calls the
+       same way px/py do, so buffer joins stay continuous.  The state is
+       fed even when SPEAKER_FILTER is off, so a live toggle never thumps. */
+    const w0 = 2*Math.PI*4200/sampleRate, cw = Math.cos(w0),
+          al = Math.sin(w0)/(2*0.7071), a0 = 1 + al;
+    this.fb0 = ((1-cw)/2)/a0; this.fb1 = (1-cw)/a0; this.fb2 = this.fb0;
+    this.fa1 = (-2*cw)/a0;    this.fa2 = (1-al)/a0;
+    this.z1 = 0; this.z2 = 0;
   }
   /* `edges` is a sorted list of [timeSeconds, level] relative to `t0`; every
      one strictly inside [t0, t0 + n/sr) is consumed.  Returns the index of
@@ -1995,7 +2020,10 @@ class BeeperChip{
       if (!this.dc){ buf[off+i] = v - 0.5; continue; }
       const y = v - this.px + this.R*this.py;
       this.px = v; this.py = y;
-      buf[off+i] = y;
+      const s = this.fb0*y + this.z1;             // the speaker model
+      this.z1 = this.fb1*y - this.fa1*s + this.z2;
+      this.z2 = this.fb2*y - this.fa2*s;
+      buf[off+i] = SPEAKER_FILTER ? s : y;
     }
     return ei;
   }
@@ -2015,8 +2043,63 @@ class BeeperChip{
    There is no `onended` bookkeeping anywhere -- that callback may never
    fire if the context is suspended, and then the cap never releases.     */
 const SND_LEAD = 0.08;        // seconds of head start given to the first buffer
+const SND_LEAD_MAX = 0.24;    // the adaptive ratchet's ceiling -- see `lead`
 const SND_AHEAD = 3.0;        // never schedule further ahead than this
 const SND_VOICES = 48;        // the hard cap on LIVE scheduled buffers
+/* THE WORKLET -- one continuous stream, the way an emulator does it.
+   The scheduled-buffer path below stitches dozens of tiny one-shot
+   AudioBufferSourceNodes per second onto a sample grid.  That stitching is
+   sample-exact IN CONTEXT TIME, and on most machines the browser plays it
+   seamlessly -- but it hands the joins to the browser, and one reported
+   machine (an Acer Nitro 5) crackled on them persistently while a native
+   Spectrum emulator on the SAME machine played the SAME game clean.  The
+   discriminating difference is architecture: the emulator's audio is one
+   continuous pull-model stream.  So this is that: an AudioWorkletProcessor
+   holding a FIFO of rendered chunks, consuming 128 samples at a time,
+   emitting zeros on underrun and REFUSING to resume until the queue holds
+   `min` samples again -- which rebuilds the lead as part of the same single
+   gap, with no separate re-origin penalty.  It reports each underrun
+   episode's length so the main thread can ratchet `min` to cover it.
+   The scheduled path is kept whole as the automatic fallback for browsers
+   without worklet support, and for the AY (128K) mode. */
+const WORKLET_SRC = `
+class GauntletBeeperOut extends AudioWorkletProcessor {
+  constructor(){
+    super();
+    this.q = []; this.off = 0; this.depth = 0;
+    this.min = 0;            // do not (re)start until this many are queued
+    this.gap = 0;            // zeros emitted in the current underrun episode
+    this.started = false;    // pre-start silence is not an underrun
+    this.port.onmessage = (e) => {
+      const d = e.data || {};
+      if (typeof d.min === 'number') this.min = d.min;
+      if (d.chunk){ this.q.push(d.chunk); this.depth += d.chunk.length; }
+    };
+  }
+  process(inputs, outputs){
+    const out = outputs[0][0];
+    for (let i = 0; i < out.length; i++){
+      if (!this.started || this.gap > 0){
+        if (this.depth < this.min){
+          out[i] = 0;
+          if (this.started) this.gap++;
+          continue;
+        }
+        if (this.gap > 0){ this.port.postMessage({ underrun: this.gap }); this.gap = 0; }
+        this.started = true;
+      } else if (this.depth === 0){
+        out[i] = 0; this.gap++;
+        continue;
+      }
+      const c = this.q[0];
+      out[i] = c[this.off++]; this.depth--;
+      if (this.off >= c.length){ this.q.shift(); this.off = 0; }
+    }
+    return true;
+  }
+}
+registerProcessor('gauntlet-beeper', GauntletBeeperOut);
+`;
 class SoundOut{
   constructor(){
     this.ctx = null; this.gain = null; this.chip = null;
@@ -2025,6 +2108,57 @@ class SoundOut{
     this.t0 = 0;              // its AudioContext time
     this.live = [];           // scheduled END TIMES, the only voice bookkeeping
     this.on = true; this.dropped = 0; this.resyncs = 0;
+    /* THE ADAPTIVE LEAD.  SND_LEAD is the whole jitter budget: the schedule
+       cursor runs `lead` seconds ahead of ctx.currentTime, so a main-thread
+       stall longer than that (a GPU switch on an Optimus laptop, a DPC
+       spike, a GC pause, a power-profile throttle) tears the schedule --
+       one audible gap for the stall, then ANOTHER `lead` of silence from
+       the resync.  Reported from play on exactly that class of machine
+       (an Acer Nitro 5): "the sound is really choppy".  A fixed budget
+       cannot fit both a quiet desktop and a janky laptop, so every GENUINE
+       underrun (the `when < now` branch, never a game.reset re-origin)
+       ratchets the lead up to cover the stall just measured, capped at
+       SND_LEAD_MAX -- the machine that needs 200 ms of slack buys it with
+       200 ms of sfx latency, and the machine that doesn't never pays.
+       It never decays: a machine that stalled once will stall again. */
+    this.lead = SND_LEAD;
+    this.underruns = 0;       // genuine tears only -- resyncs also counts restarts
+    /* the worklet path -- see WORKLET_SRC.  'sched' until addModule
+       resolves; 'worklet' from then on.  initPending holds flush() off for
+       the few ms the decision takes, so the first buffers take whichever
+       path actually won. */
+    this.mode = 'sched'; this.node = null; this.initPending = false;
+    this.workletErr = '';      // why the worklet did not engage, for info()
+    this.vbase = 0;           // sim frame at the stream's origin
+    this.vsent = 0;           // samples pushed since that origin
+  }
+  /* the underrun branch of both SCHEDULED flush paths: measure the deficit,
+     cover it */
+  ratchet(now, when){
+    this.underruns++;
+    this.lead = Math.min(SND_LEAD_MAX,
+                         Math.max(this.lead, (now - when) + SND_LEAD));
+  }
+  /* the WORKLET's version, fed by its underrun reports: the episode length
+     IS the measured deficit, in samples.  Ratchets `lead` the same way and
+     hands the worklet its new refill gate. */
+  ratchetSamples(n){
+    this.underruns++;
+    const sr = this.ctx ? this.ctx.sampleRate : 44100;
+    this.lead = Math.min(SND_LEAD_MAX,
+                         Math.max(this.lead, n/sr + SND_LEAD));
+    if (this.node) this.node.port.postMessage({ min: Math.floor(this.lead*sr) });
+  }
+  /* one line for a bug report: the whole audio state, console-pasteable */
+  info(){
+    const c = this.ctx || {};
+    return 'mode=' + this.mode + ' sr=' + (c.sampleRate || 0) +
+           ' lead=' + this.lead.toFixed(3) + ' underruns=' + this.underruns +
+           ' resyncs=' + this.resyncs + ' dropped=' + this.dropped +
+           ' base=' + (c.baseLatency != null ? c.baseLatency.toFixed(4) : '?') +
+           ' out=' + (c.outputLatency != null ? c.outputLatency.toFixed(4) : '?') +
+           ' wk=' + (this.mode === 'worklet' ? 'on'
+                     : (this.workletErr ? this.workletErr.trim() : 'off'));
   }
   /* a browser will not start a context before a user gesture, so this is
      called from the first keydown rather than from load */
@@ -2037,7 +2171,20 @@ class SoundOut{
             : (typeof webkitAudioContext !== 'undefined') ? webkitAudioContext
             : null;
     if (!C){ this.on = false; return false; }
-    this.ctx = new C();
+    /* 'playback', NOT the default 'interactive'.  The default asks the OS
+       for the SMALLEST hardware buffer it can serve -- the most glitch-
+       prone setting there is on a machine whose audio engine gets starved
+       by DPC spikes (gaming laptops are the worst offenders), and the
+       reason a game can crackle while a video site plays clean: media
+       players buffer big.  This game's sound is pass-quantised to
+       80-100 ms by the simulation itself, so the ~100 ms of extra output
+       latency 'playback' costs is below the game's own granularity --
+       stability is the right side of that trade here.  Reported from play
+       (an Acer Nitro 5): "very crackly", with the bridge's own underrun
+       counter clean -- a glitch BELOW the page, which only a bigger
+       hardware buffer can absorb. */
+    try { this.ctx = new C({ latencyHint: 'playback' }); }
+    catch (e) { this.ctx = new C(); }
     /* ONE BRIDGE, TWO INSTRUMENTS, chosen by the game's own probe flag --
        the same byte $BF21 reads.  Nothing else in this class changes: the
        simulated-frame timestamp, the resync rule and the voice cap are
@@ -2050,6 +2197,54 @@ class SoundOut{
     this.gain.gain.value = 0.30;
     this.gain.connect(this.ctx.destination);
     this.next = null;
+    /* the worklet, if this browser has one -- see WORKLET_SRC.  addModule
+       is async, so flush() waits on initPending for the few ms the answer
+       takes; a browser without worklets (or a failed module load) simply
+       stays on the scheduled path.  Beeper mode only: the AY path keeps
+       the scheduler, declared.
+       TWO module URLS, in order, because the obvious one fails exactly
+       where this page lives: Chrome refuses a BLOB module for a worklet on
+       a file:// page (AbortError, 'Unable to load a worklet's module' --
+       MEASURED with a probe page in headless Chrome, which also proved the
+       data: form loads, constructs and talks), and file:// is how a
+       download-and-double-click player runs this game.  blob: is tried
+       first for the http(s) world, data: is the file:// fallback, and a
+       failure of both leaves the reason in workletErr where info() can
+       show it -- the first failure here was SILENT and cost a whole
+       remote-debugging round trip to see. */
+    if (SOUND_MODE === SOUND_48K && this.ctx.audioWorklet &&
+        typeof AudioWorkletNode !== 'undefined' &&
+        typeof Blob !== 'undefined' && typeof URL !== 'undefined' &&
+        URL.createObjectURL){
+      this.initPending = true;
+      const wire = () => {
+        this.node = new AudioWorkletNode(this.ctx, 'gauntlet-beeper',
+          { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
+        this.node.connect(this.gain);
+        this.node.port.onmessage = (e) => {
+          if (e.data && e.data.underrun) this.ratchetSamples(e.data.underrun);
+        };
+        this.node.port.postMessage(
+          { min: Math.floor(this.lead * this.ctx.sampleRate) });
+        this.mode = 'worklet'; this.initPending = false;
+      };
+      /* only addModule's own then(onOk, onErr) -- no interior Promises, so
+         the chain is drivable synchronously by a thenable in tests */
+      const attempt = (url, tag, next) => {
+        this.ctx.audioWorklet.addModule(url).then(wire, (e) => {
+          this.workletErr += tag + ':' + ((e && e.name) || e) + ' ';
+          if (next) next(); else this.initPending = false;
+        });
+      };
+      const blobUrl = URL.createObjectURL(
+        new Blob([WORKLET_SRC], { type: 'application/javascript' }));
+      attempt(blobUrl, 'blob', () => {
+        if (typeof btoa !== 'undefined')
+          attempt('data:application/javascript;base64,' + btoa(WORKLET_SRC),
+                  'data', null);
+        else this.initPending = false;
+      });
+    }
     return true;                       // the context has JUST come up
   }
   /* `events` is the driver's log and `upto` is the first simulated frame the
@@ -2060,8 +2255,53 @@ class SoundOut{
               a chirp's edges are 82..1102 T-states apart and a whole one
               fits inside a fifth of a frame.                             */
   flush(events, upto){
+    if (this.initPending) return;      // path not decided yet; the log waits
+    if (this.mode === 'worklet') return this.flushWorklet(events, upto);
     if (SOUND_MODE === SOUND_48K) return this.flushBeeper(events, upto);
     return this.flushAy(events, upto);
+  }
+  /* THE WORKLET PATH -- the same absolute whole-sample tiling flushBeeper
+     explains at length, but against a VIRTUAL stream clock instead of
+     AudioContext time: sample s of the stream is sim frame
+     vbase + s*FRAME_HZ/sr, so chunk k's end and chunk k+1's start are the
+     same expression of the same (vbase, vsent) and the FIFO concatenation
+     reconstructs one continuous render exactly.  No live[] cap, no
+     scheduling, no resync arithmetic: bursts deepen the queue and drain,
+     underruns are the WORKLET's to detect (and this side's ratchetSamples
+     to learn from), and a sim-clock restart just re-origins the map with
+     no gap at all -- the stream itself never stops. */
+  flushWorklet(events, upto){
+    if (!this.on){ events.length = 0; return; }
+    const sr = this.ctx.sampleRate;
+    if (this.next === null || upto < this.next){
+      if (this.next !== null){
+        this.resyncs++;
+        if (events.length) this.chip.lvl = events[events.length-1][1];
+      }
+      this.next = upto; this.vbase = upto; this.vsent = 0;
+      events.length = 0; return;
+    }
+    const nf = upto - this.next;
+    if (nf <= 0) return;
+    const total = Math.floor((upto - this.vbase)/FRAME_HZ*sr) - this.vsent;
+    if (total <= 0) return;
+    const vStart = this.vsent/sr;               // stream seconds since origin
+    const vEnd = (this.vsent + total)/sr;
+    /* cut by the window, not by the frame -- flushBeeper's own rule: an
+       edge in the last sub-sample sliver stays in the log for the next
+       chunk, which begins exactly there. */
+    let cut = 0;
+    while (cut < events.length && events[cut][0] < upto) cut++;
+    while (cut > 0 && (events[cut-1][0] - this.vbase)/FRAME_HZ >= vEnd) cut--;
+    const chunk = new Float32Array(total);
+    const ed = [];
+    for (let i = 0; i < cut; i++)
+      ed.push([(events[i][0] - this.vbase)/FRAME_HZ - vStart, events[i][1]]);
+    const ei = this.chip.render(chunk, 0, total, 0, ed, 0);
+    if (ei < ed.length) this.chip.lvl = ed[ed.length-1][1];
+    events.splice(0, cut);
+    this.next = upto; this.vsent += total;
+    this.node.port.postMessage({ chunk }, [chunk.buffer]);
   }
   /* the SHIPPED path.  Same clock discipline as flushAy; the difference is
      that the payload is a level, the frames are fractional, and the mixing
@@ -2084,14 +2324,15 @@ class SoundOut{
            dropped-buffer path below applies its last level */
         if (events.length) this.chip.lvl = events[events.length-1][1];
       }
-      this.next = upto; this.base = upto; this.t0 = now + SND_LEAD;
+      this.next = upto; this.base = upto; this.t0 = now + this.lead;
       events.length = 0; return;
     }
     const f0 = this.next, nf = upto - f0;
     if (nf <= 0) return;
     let when = this.t0 + (f0 - this.base)/FRAME_HZ;
     if (when < now + 0.005 || when > now + SND_AHEAD){
-      this.base = f0; this.t0 = when = now + SND_LEAD; this.resyncs++;
+      if (when < now + 0.005) this.ratchet(now, when);   // a genuine tear
+      this.base = f0; this.t0 = when = now + this.lead; this.resyncs++;
     }
     let cut = 0;
     while (cut < events.length && events[cut][0] < upto) cut++;
@@ -2197,7 +2438,7 @@ class SoundOut{
            the driver left them, so apply what is pending before discarding */
         for (const e of events) this.chip.write(e[1], e[2]);
       }
-      this.next = upto; this.base = upto; this.t0 = now + SND_LEAD;
+      this.next = upto; this.base = upto; this.t0 = now + this.lead;
       events.length = 0; return;
     }
     const f0 = this.next, nf = upto - f0;
@@ -2207,7 +2448,8 @@ class SoundOut{
        that has just burst 104 frames through a banner pause. */
     let when = this.t0 + (f0 - this.base)/FRAME_HZ;
     if (when < now + 0.005 || when > now + SND_AHEAD){
-      this.base = f0; this.t0 = when = now + SND_LEAD; this.resyncs++;
+      if (when < now + 0.005) this.ratchet(now, when);   // a genuine tear
+      this.base = f0; this.t0 = when = now + this.lead; this.resyncs++;
     }
     if (this.live.length >= SND_VOICES){        // the cap, not a callback
       this.dropped++; this.next = upto;
@@ -10911,6 +11153,13 @@ function netPump(){
     const d = net.pendDirs; net.pendDirs = null;
     netApply(d);
   }
+  /* THE HIDDEN TAB STILL FEEDS THE SPEAKER.  The worklet FIFO drains on
+     the AUDIO thread regardless of rAF throttling (browsers keep hidden
+     tabs audible), so the sim stepping here must keep flushing or the
+     queue runs dry: a silent gap, a spurious underrun episode, and a
+     permanently ratcheted lead -- for a tab that was playing fine. */
+  if (typeof sound !== 'undefined' && sound.flush)
+    sound.flush(game.sound.log, game.simFrame);
   if (net.sentInput) return;
   /* HIDDEN PACING: answer at the sim's own tick rate, never the wire's.
      With a visible player in the session, their paced inputs govern the
@@ -11097,7 +11346,7 @@ globalThis.__GAUNTLET__={
      artifact.  `log()` is the driver's own event stream:
         AY      (frame, register, value)
         BEEPER  (frame, speaker level)  -- FRACTIONAL frames             */
-  sound:{SfxDriver, AyChip, SoundOut, out:sound, streams:AY_STREAMS,
+  sound:{SfxDriver, AyChip, SoundOut, out:sound, streams:AY_STREAMS, WORKLET_SRC,
          AY_CLOCK, SFX_COUNT,
          BeeperDriver, BeeperChip, beeper:BEEP, beepHalf, beepHz, CPU_HZ,
          BEEP_TONE_AT, BEEP_DRAW_LO, BEEP_DRAW_HI, BEEP_TILE_TICKS,
@@ -11169,6 +11418,13 @@ globalThis.__GAUNTLET__={
   symCheat:{
     get(){ return FAITHFUL_SYM_CHEAT; },
     set(v){ FAITHFUL_SYM_CHEAT = !!v; return FAITHFUL_SYM_CHEAT; },
+  },
+  /* the beeper's speaker model (see SPEAKER_FILTER) -- live-toggleable so
+     the modelled and raw-voltage renders can be A/B'd mid-game from the
+     console: __GAUNTLET__.speakerFilter.set(false) */
+  speakerFilter:{
+    get(){ return SPEAKER_FILTER; },
+    set(v){ SPEAKER_FILTER = !!v; return SPEAKER_FILTER; },
   },
   frontend:{FrontEnd, Keyboard, SpecScreen, TitleTune, FE, live:frontend,
             renderScreen, feHandover, pollGamepads, liveKb:keyboard,
