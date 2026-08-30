@@ -36,6 +36,15 @@ into the dungeon exactly as it always did.  Opening the page from disk
 (or setting SERVER LOCAL) plays offline; `?server=host:port` joins a
 relay from a page hosted elsewhere.
 
+For play from OUTSIDE the network, `--forward` asks the router to open
+the port itself (NAT-PMP first, then UPnP), prints the public address
+to share, renews the lease, and removes the mapping on Ctrl+C
+(`--unforward` cleans one up by hand).  It also tells the truth when
+forwarding cannot work: a DOUBLE-NAT setup (the router behind an ISP
+modem — the outer box must forward too, or run in bridge mode) or
+carrier-grade NAT (only the ISP or a tunnel can fix that).  The
+Windows Firewall must allow the exe as well — it prompts on first run.
+
 The C++ relay server (`server/relay.cpp`, protocol in
 `shared/PROTOCOL.md`) builds inside the VS x64 environment:
 

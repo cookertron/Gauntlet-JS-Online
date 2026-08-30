@@ -14,8 +14,12 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
 - `client/template.html` — the engine SOURCE (~10.6k lines). Never edit
   `client/gauntlet.html`; it is generated.
 - `client/gauntlet.html` — the built, playable single file.
-- `server/relay.cpp` — the C++ lockstep relay (one file, ws2_32 only;
-  speaks RFC 6455 itself).  Build inside vcvars64:
+- `server/relay.cpp` — the C++ lockstep relay (one file, ws2_32 +
+  iphlpapi only; speaks RFC 6455 itself, and NAT-PMP/UPnP for
+  `--forward` self-port-forwarding with double-NAT/CGNAT detection —
+  Anthony's own network IS double-NATted: router 192.168.50.1 behind
+  an ISP box, its "external" address 192.168.1.239).  Build inside
+  vcvars64:
   `cmake -S server -B server\build -G Ninja && ninja -C server\build`.
 - `shared/PROTOCOL.md` + `shared/protocol.json` — the wire contract, v1.
   The JSON is the source of truth; `python tools/protocheck.py` holds

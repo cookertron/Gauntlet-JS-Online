@@ -33,6 +33,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <iphlpapi.h>
 
 #include <cctype>
 #include <cstdint>
@@ -44,6 +45,7 @@
 #include <vector>
 
 #pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "iphlpapi.lib")
 
 /* ==== protocol constants -- MUST match shared/protocol.json ============
    tools/protocheck.py parses this block by the `= value;` on each line;
@@ -138,6 +140,344 @@ static std::string base64(const uint8_t* p, size_t n){
     o += (i+2<n) ? T[v&63] : '=';
   }
   return o;
+}
+
+/* =======================================================================
+   NAT TRAVERSAL -- the server sets up its own port forwarding (opt-in,
+   --forward).  Two protocols, tried in order:
+     * NAT-PMP (RFC 6886): one tiny UDP exchange with the gateway on
+       port 5351.  Cheap, clean, and it also reports the public address.
+     * UPnP IGD: SSDP multicast discovery, fetch the device description,
+       find the WAN*Connection control URL, SOAP AddPortMapping.  The
+       consumer-router lingua franca.
+   Both are plain sockets and strings -- no libraries, same as the rest
+   of this file.  What NO protocol can fix: an ISP running CGNAT (the
+   router's own "external" address is itself private) -- detected and
+   reported honestly, because a mapping that succeeds into a carrier NAT
+   still goes nowhere.  --unforward removes the mapping and exits.     */
+static uint32_t natGateway(){
+  MIB_IPFORWARDTABLE* t = nullptr; ULONG sz = 0;
+  GetIpForwardTable(nullptr, &sz, FALSE);
+  if (!sz) return 0;
+  std::vector<uint8_t> buf(sz);
+  t = (MIB_IPFORWARDTABLE*)buf.data();
+  if (GetIpForwardTable(t, &sz, FALSE) != NO_ERROR) return 0;
+  for (DWORD i = 0; i < t->dwNumEntries; i++)
+    if (t->table[i].dwForwardDest == 0)          // the default route
+      return t->table[i].dwForwardNextHop;       // network byte order
+  return 0;
+}
+static std::string ip4str(uint32_t nbo){
+  const uint8_t* b = (const uint8_t*)&nbo;
+  char s[20]; snprintf(s, sizeof s, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
+  return s;
+}
+static std::string natLocalIpToward(uint32_t gwNbo){
+  SOCKET s = socket(AF_INET, SOCK_DGRAM, 0);
+  if (s == INVALID_SOCKET) return "";
+  sockaddr_in a{}; a.sin_family = AF_INET;
+  a.sin_addr.s_addr = gwNbo; a.sin_port = htons(9);
+  std::string out;
+  if (connect(s, (sockaddr*)&a, sizeof a) == 0){
+    sockaddr_in me{}; int ml = sizeof me;
+    if (getsockname(s, (sockaddr*)&me, &ml) == 0)
+      out = ip4str(me.sin_addr.s_addr);
+  }
+  closesocket(s); return out;
+}
+static bool privateIp(const std::string& ip){
+  unsigned a = 0, b = 0;
+  if (sscanf(ip.c_str(), "%u.%u", &a, &b) < 2) return false;
+  return a == 10 || (a == 192 && b == 168) ||
+         (a == 172 && b >= 16 && b <= 31) ||
+         (a == 100 && b >= 64 && b <= 127) ||    // CGNAT space (RFC 6598)
+         a == 169;                                // link-local: no route out
+}
+/* ---- NAT-PMP ---------------------------------------------------------- */
+static bool natPmpTalk(uint32_t gwNbo, const uint8_t* req, int reqLen,
+                       uint8_t* resp, int respLen){
+  SOCKET s = socket(AF_INET, SOCK_DGRAM, 0);
+  if (s == INVALID_SOCKET) return false;
+  DWORD tmo = 1200;
+  setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tmo, sizeof tmo);
+  sockaddr_in a{}; a.sin_family = AF_INET;
+  a.sin_addr.s_addr = gwNbo; a.sin_port = htons(5351);
+  bool ok = false;
+  for (int tries = 0; tries < 2 && !ok; tries++){
+    sendto(s, (const char*)req, reqLen, 0, (sockaddr*)&a, sizeof a);
+    int n = recv(s, (char*)resp, respLen, 0);
+    ok = (n >= respLen) && resp[0] == 0 && resp[1] == (req[1] | 0x80) &&
+         resp[2] == 0 && resp[3] == 0;           // result code 0 = success
+  }
+  closesocket(s); return ok;
+}
+static bool natPmpExternalIp(uint32_t gw, std::string& out){
+  uint8_t req[2] = {0, 0}, resp[12];
+  if (!natPmpTalk(gw, req, 2, resp, 12)) return false;
+  uint32_t ip; memcpy(&ip, resp + 8, 4);
+  out = ip4str(ip); return true;
+}
+static bool natPmpMap(uint32_t gw, uint16_t port, uint32_t lifetime,
+                      uint16_t& extPort){
+  uint8_t req[12] = {0, 2};                      // op 2 = map TCP
+  req[4] = uint8_t(port >> 8); req[5] = uint8_t(port);
+  req[6] = uint8_t(port >> 8); req[7] = uint8_t(port);
+  req[8] = uint8_t(lifetime >> 24); req[9] = uint8_t(lifetime >> 16);
+  req[10] = uint8_t(lifetime >> 8); req[11] = uint8_t(lifetime);
+  uint8_t resp[16];
+  if (!natPmpTalk(gw, req, 12, resp, 16)) return false;
+  extPort = uint16_t((resp[10] << 8) | resp[11]);
+  return true;
+}
+/* ---- UPnP IGD --------------------------------------------------------- */
+static bool ssdpDiscover(std::string& location){
+  SOCKET s = socket(AF_INET, SOCK_DGRAM, 0);
+  if (s == INVALID_SOCKET) return false;
+  DWORD tmo = 2500;
+  setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tmo, sizeof tmo);
+  sockaddr_in a{}; a.sin_family = AF_INET;
+  a.sin_port = htons(1900);
+  inet_pton(AF_INET, "239.255.255.250", &a.sin_addr);
+  bool ok = false;
+  for (const char* st : { "urn:schemas-upnp-org:device:InternetGatewayDevice:1",
+                          "urn:schemas-upnp-org:device:InternetGatewayDevice:2" }){
+    std::string m = std::string("M-SEARCH * HTTP/1.1\r\n"
+      "HOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: ")
+      + st + "\r\n\r\n";
+    sendto(s, m.data(), (int)m.size(), 0, (sockaddr*)&a, sizeof a);
+    char buf[2048];
+    int n = recv(s, buf, sizeof buf - 1, 0);
+    if (n <= 0) continue;
+    buf[n] = 0;
+    std::string r(buf), low;
+    for (char ch : r) low += (char)tolower((unsigned char)ch);
+    size_t k = low.find("location:");
+    if (k == std::string::npos) continue;
+    size_t vs = k + 9;
+    while (vs < r.size() && r[vs] == ' ') vs++;
+    size_t ve = r.find("\r\n", vs);
+    location = r.substr(vs, ve - vs);
+    ok = true; break;
+  }
+  closesocket(s); return ok;
+}
+static bool urlSplit(const std::string& url, std::string& host,
+                     uint16_t& port, std::string& path){
+  size_t p = url.find("://");
+  if (p == std::string::npos) return false;
+  size_t hs = p + 3, pe = url.find('/', hs);
+  std::string hp = url.substr(hs, pe == std::string::npos ? std::string::npos
+                                                          : pe - hs);
+  path = pe == std::string::npos ? "/" : url.substr(pe);
+  size_t c = hp.find(':');
+  host = c == std::string::npos ? hp : hp.substr(0, c);
+  port = c == std::string::npos ? 80 : (uint16_t)atoi(hp.c_str() + c + 1);
+  return !host.empty();
+}
+static bool httpTalk(const std::string& host, uint16_t port,
+                     const std::string& req, std::string& resp){
+  SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
+  if (s == INVALID_SOCKET) return false;
+  DWORD tmo = 4000;
+  setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tmo, sizeof tmo);
+  setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tmo, sizeof tmo);
+  sockaddr_in a{}; a.sin_family = AF_INET; a.sin_port = htons(port);
+  if (inet_pton(AF_INET, host.c_str(), &a.sin_addr) != 1){
+    closesocket(s); return false;                // IGDs advertise by IP
+  }
+  bool ok = false;
+  if (connect(s, (sockaddr*)&a, sizeof a) == 0){
+    send(s, req.data(), (int)req.size(), 0);
+    char buf[4096]; int n;
+    while ((n = recv(s, buf, sizeof buf, 0)) > 0){
+      resp.append(buf, n);
+      if (resp.size() > 262144) break;
+    }
+    ok = !resp.empty();
+  }
+  closesocket(s); return ok;
+}
+static std::string xmlTag(const std::string& xml, const std::string& tag,
+                          size_t from = 0){
+  size_t a = xml.find("<" + tag + ">", from);
+  if (a == std::string::npos) return "";
+  a += tag.size() + 2;
+  size_t b = xml.find("</" + tag + ">", a);
+  if (b == std::string::npos) return "";
+  return xml.substr(a, b - a);
+}
+struct Upnp { std::string host, path, service; uint16_t port = 0; bool ok = false; };
+static Upnp upnpFind(){
+  Upnp u;
+  std::string loc;
+  if (!ssdpDiscover(loc)) return u;
+  std::string host, path, xml;
+  uint16_t port;
+  if (!urlSplit(loc, host, port, path)) return u;
+  std::string req = "GET " + path + " HTTP/1.1\r\nHOST: " + host + ":" +
+                    std::to_string(port) + "\r\nCONNECTION: close\r\n\r\n";
+  if (!httpTalk(host, port, req, xml)) return u;
+  for (const char* svc : { "urn:schemas-upnp-org:service:WANIPConnection:2",
+                           "urn:schemas-upnp-org:service:WANIPConnection:1",
+                           "urn:schemas-upnp-org:service:WANPPPConnection:1" }){
+    size_t at = xml.find(svc);
+    if (at == std::string::npos) continue;
+    size_t end = xml.find("</service>", at);
+    std::string ctl = xmlTag(xml.substr(0, end == std::string::npos
+                                             ? xml.size() : end),
+                             "controlURL", at);
+    if (ctl.empty()) continue;
+    u.service = svc;
+    if (ctl.rfind("http://", 0) == 0){
+      if (!urlSplit(ctl, u.host, u.port, u.path)) continue;
+    } else {
+      u.host = host; u.port = port;
+      u.path = ctl[0] == '/' ? ctl : "/" + ctl;
+    }
+    u.ok = true; return u;
+  }
+  return u;
+}
+static bool soapCall(const Upnp& u, const std::string& action,
+                     const std::string& args, std::string& resp){
+  std::string body =
+    "<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org"
+    "/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/"
+    "encoding/\"><s:Body><u:" + action + " xmlns:u=\"" + u.service + "\">" +
+    args + "</u:" + action + "></s:Body></s:Envelope>";
+  std::string req =
+    "POST " + u.path + " HTTP/1.1\r\nHOST: " + u.host + ":" +
+    std::to_string(u.port) + "\r\nCONTENT-TYPE: text/xml; charset=\"utf-8\""
+    "\r\nSOAPACTION: \"" + u.service + "#" + action + "\"\r\n"
+    "CONTENT-LENGTH: " + std::to_string(body.size()) +
+    "\r\nCONNECTION: close\r\n\r\n" + body;
+  if (!httpTalk(u.host, u.port, req, resp)) return false;
+  return resp.find(" 200 ") != std::string::npos;
+}
+/* ---- the orchestration ------------------------------------------------ */
+struct NatState {
+  bool active = false;
+  bool pmp = false;               // which protocol holds the mapping
+  uint32_t gw = 0;
+  Upnp upnp;
+  uint16_t port = 0, extPort = 0;
+  std::string extIp, lan;
+  uint64_t renewAt = 0;           // GetTickCount64 ms; 0 = no renewal needed
+};
+static NatState NAT;
+static bool upnpMap(const Upnp& u, uint16_t port, const std::string& lan,
+                    uint32_t lease){
+  std::string resp;
+  return soapCall(u, "AddPortMapping",
+    "<NewRemoteHost></NewRemoteHost><NewExternalPort>" +
+    std::to_string(port) + "</NewExternalPort><NewProtocol>TCP</NewProtocol>"
+    "<NewInternalPort>" + std::to_string(port) + "</NewInternalPort>"
+    "<NewInternalClient>" + lan + "</NewInternalClient><NewEnabled>1"
+    "</NewEnabled><NewPortMappingDescription>gauntlet-relay"
+    "</NewPortMappingDescription><NewLeaseDuration>" +
+    std::to_string(lease) + "</NewLeaseDuration>", resp);
+}
+static void natForward(uint16_t port, bool removeOnly){
+  NAT.port = port;
+  NAT.gw = natGateway();
+  if (!NAT.gw){ printf("[relay] forward: no default gateway found\n"); return; }
+  NAT.lan = natLocalIpToward(NAT.gw);
+  printf("[relay] forward: gateway %s, this machine %s\n",
+         ip4str(NAT.gw).c_str(), NAT.lan.c_str());
+  /* NAT-PMP first: one small exchange */
+  uint16_t ep = 0;
+  if (natPmpMap(NAT.gw, port, removeOnly ? 0 : 7200, ep)){
+    if (removeOnly){ printf("[relay] forward: NAT-PMP mapping removed\n"); return; }
+    NAT.active = true; NAT.pmp = true; NAT.extPort = ep;
+    NAT.renewAt = GetTickCount64() + 3600u * 1000u;      // half the lease
+    natPmpExternalIp(NAT.gw, NAT.extIp);
+  } else {
+    /* UPnP: discovery, description, SOAP */
+    NAT.upnp = upnpFind();
+    if (!NAT.upnp.ok){
+      printf("[relay] forward: router answered neither NAT-PMP nor UPnP --\n"
+             "        forward TCP %u to %s manually in the router, or check\n"
+             "        that UPnP is enabled there\n", port, NAT.lan.c_str());
+      return;
+    }
+    if (removeOnly){
+      std::string resp;
+      soapCall(NAT.upnp, "DeletePortMapping",
+        "<NewRemoteHost></NewRemoteHost><NewExternalPort>" +
+        std::to_string(port) +
+        "</NewExternalPort><NewProtocol>TCP</NewProtocol>", resp);
+      printf("[relay] forward: UPnP mapping removed\n");
+      return;
+    }
+    /* permanent lease first; some routers only accept timed ones */
+    bool ok = upnpMap(NAT.upnp, port, NAT.lan, 0);
+    if (!ok && upnpMap(NAT.upnp, port, NAT.lan, 86400)){
+      ok = true; NAT.renewAt = GetTickCount64() + 43200u * 1000u;
+    }
+    if (!ok){
+      printf("[relay] forward: UPnP found (%s) but AddPortMapping refused\n",
+             NAT.upnp.service.c_str());
+      return;
+    }
+    NAT.active = true; NAT.extPort = port;
+    std::string resp;
+    if (soapCall(NAT.upnp, "GetExternalIPAddress", "", resp))
+      NAT.extIp = xmlTag(resp, "NewExternalIPAddress");
+  }
+  printf("[relay] forward: %s mapped tcp %u -> %s:%u\n",
+         NAT.pmp ? "NAT-PMP" : "UPnP", NAT.extPort, NAT.lan.c_str(), port);
+  if (!NAT.extIp.empty()){
+    if (privateIp(NAT.extIp)){
+      unsigned pa = 0, pb = 0;
+      sscanf(NAT.extIp.c_str(), "%u.%u", &pa, &pb);
+      if (pa == 100 && pb >= 64 && pb <= 127)
+        printf("[relay] forward: WARNING -- the router's external address %s\n"
+               "        is CARRIER-GRADE NAT (the ISP's own).  No port forward\n"
+               "        can reach this from outside; ask the ISP for a public\n"
+               "        address, or use a tunnel.\n", NAT.extIp.c_str());
+      else
+        printf("[relay] forward: WARNING -- DOUBLE NAT.  This router's own\n"
+               "        external address %s is still private: it sits\n"
+               "        behind ANOTHER router (likely the ISP modem).  This\n"
+               "        mapping is good, but the OUTER box must also forward\n"
+               "        TCP %u to %s -- or be put in bridge mode so\n"
+               "        this router gets the public address.  The real public\n"
+               "        IP is on the outer box's status page.\n",
+               NAT.extIp.c_str(), NAT.extPort, NAT.extIp.c_str());
+    }
+    else
+      printf("[relay] forward: share  http://%s:%u/\n",
+             NAT.extIp.c_str(), NAT.extPort);
+  }
+  printf("[relay] forward: if nobody can connect, also allow this exe through\n"
+         "        the Windows Firewall (it prompts on first run)\n");
+}
+static void natRenew(){
+  if (!NAT.active || !NAT.renewAt || GetTickCount64() < NAT.renewAt) return;
+  if (NAT.pmp){
+    uint16_t ep = 0;
+    natPmpMap(NAT.gw, NAT.port, 7200, ep);
+    NAT.renewAt = GetTickCount64() + 3600u * 1000u;
+  } else {
+    upnpMap(NAT.upnp, NAT.port, NAT.lan, 86400);
+    NAT.renewAt = GetTickCount64() + 43200u * 1000u;
+  }
+}
+static void natCleanup(){
+  if (!NAT.active) return;
+  NAT.active = false;
+  if (NAT.pmp){ uint16_t ep; natPmpMap(NAT.gw, NAT.port, 0, ep); }
+  else {
+    std::string resp;
+    soapCall(NAT.upnp, "DeletePortMapping",
+      "<NewRemoteHost></NewRemoteHost><NewExternalPort>" +
+      std::to_string(NAT.port) +
+      "</NewExternalPort><NewProtocol>TCP</NewProtocol>", resp);
+  }
+}
+static BOOL WINAPI natCtrlHandler(DWORD){
+  natCleanup();                    // best effort inside the ~5 s Windows grants
+  return FALSE;                    // let the default handler terminate us
 }
 
 /* ---- little-endian message building ---------------------------------- */
@@ -689,6 +1029,7 @@ struct Relay {
         passStartMs = t;
       }
     }
+    natRenew();                    // keep a --forward mapping alive
     if (syncing && t - syncStartMs > LIM_SYNC_MS){
       printf("[relay] sync timeout\n"); fflush(stdout);
       if (provider >= 0 && conns[provider]->open)
@@ -766,6 +1107,7 @@ struct Relay {
 
 int main(int argc, char** argv){
   Relay R;
+  bool doForward = false, doUnforward = false;
   for (int i=1;i<argc;i++){
     if (!strcmp(argv[i], "--port") && i+1 < argc) R.port = (uint16_t)atoi(argv[++i]);
     else if (!strcmp(argv[i], "--seats") && i+1 < argc){
@@ -774,6 +1116,8 @@ int main(int argc, char** argv){
       R.seatsN = s;
     }
     else if (!strcmp(argv[i], "--html") && i+1 < argc) R.htmlPath = argv[++i];
+    else if (!strcmp(argv[i], "--forward")) doForward = true;
+    else if (!strcmp(argv[i], "--unforward")) doUnforward = true;
   }
   /* the page (GET /): --html wins; otherwise look beside the cwd and the
      exe for client/gauntlet.html, the built single file */
@@ -798,7 +1142,15 @@ int main(int argc, char** argv){
   }
   WSADATA wsa;
   if (WSAStartup(MAKEWORD(2,2), &wsa) != 0){ printf("WSAStartup failed\n"); return 1; }
+  if (doUnforward){ natForward(R.port, true); return 0; }
   if (!R.listenOn()){ printf("bind/listen failed on %u\n", (unsigned)R.port); return 1; }
+  if (doForward){
+    natForward(R.port, false);
+    SetConsoleCtrlHandler(natCtrlHandler, TRUE);   // unmap on Ctrl+C / close
+  } else {
+    printf("[relay] LAN only (--forward asks the router to open this port "
+           "for internet play)\n");
+  }
   printf(R.htmlPath.empty()
            ? "[relay] no client page found -- GET / will 404 (use --html)\n"
            : "[relay] serving %s\n",
