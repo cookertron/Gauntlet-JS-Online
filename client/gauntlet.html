@@ -2082,6 +2082,7 @@ class GauntletBeeperOut extends AudioWorkletProcessor {
     this.min = 0;            // do not (re)start until this many are queued
     this.gap = 0;            // zeros emitted in the current underrun episode
     this.started = false;    // pre-start silence is not an underrun
+    this.since = 0;          // samples since the last depth report
     this.port.onmessage = (e) => {
       const d = e.data || {};
       if (typeof d.min === 'number') this.min = d.min;
@@ -2090,6 +2091,16 @@ class GauntletBeeperOut extends AudioWorkletProcessor {
   }
   process(inputs, outputs){
     const out = outputs[0][0];
+    /* THE QUEUE DEPTH IS THE LATENCY, and nothing above can shrink it --
+       a transient bulge (a stall's backlog, an early rough patch) would
+       ride between the sim and the speaker FOR EVER.  So above 1.5x the
+       gate the queue DRAINS, the way only a square-wave chip can afford:
+       by dropping samples that are IDENTICAL to the one just played --
+       flat runs and silence, never an edge -- at most one per sixteen,
+       so an active waveform is never touched and a post-stall bulge
+       sheds in seconds.  Below 1.5x (the tests' own regime included)
+       consumption is exactly one-for-one, bit-identical to before. */
+    const hi = this.min * 1.5;
     for (let i = 0; i < out.length; i++){
       if (!this.started || this.gap > 0){
         if (this.depth < this.min){
@@ -2106,7 +2117,18 @@ class GauntletBeeperOut extends AudioWorkletProcessor {
       const c = this.q[0];
       out[i] = c[this.off++]; this.depth--;
       if (this.off >= c.length){ this.q.shift(); this.off = 0; }
+      if (this.depth > hi && (i & 15) === 0 && this.q.length &&
+          this.off < this.q[0].length && this.q[0][this.off] === out[i]){
+        this.off++; this.depth--;
+        if (this.off >= this.q[0].length){ this.q.shift(); this.off = 0; }
+      }
     }
+    /* a depth report roughly every two-thirds of a second, counted in
+       SAMPLES so the cadence survives any callback size (the sproc path
+       runs 1024-sample blocks, the worklet 128) -- the pipeline's true
+       latency, for info() and for reports from machines nobody can touch */
+    this.since += out.length;
+    if (this.since >= 32768){ this.since = 0; this.port.postMessage({ depth: this.depth }); }
     return true;
   }
 }
@@ -2141,6 +2163,8 @@ class SoundOut{
        the few ms the decision takes, so the first buffers take whichever
        path actually won. */
     this.mode = 'sched'; this.node = null; this.initPending = false;
+    this.lastDepth = -1;      // the FIFO's own latency report, for info()
+    this.lastTrouble = -1;    // ctx time of the last underrun -- see maybeEase
     this.workletErr = '';      // why the worklet did not engage, for info()
     this.vbase = 0;           // sim frame at the stream's origin
     this.vsent = 0;           // samples pushed since that origin
@@ -2157,6 +2181,7 @@ class SoundOut{
      hands the worklet its new refill gate. */
   ratchetSamples(n){
     this.underruns++;
+    if (this.ctx) this.lastTrouble = this.ctx.currentTime;
     const sr = this.ctx ? this.ctx.sampleRate : 44100;
     /* grow by AT LEAST one rAF frame per genuine episode: a train of
        tiny underruns must converge in a couple of steps, not pop its
@@ -2176,6 +2201,9 @@ class SoundOut{
            ' resyncs=' + this.resyncs + ' dropped=' + this.dropped +
            ' base=' + (c.baseLatency != null ? c.baseLatency.toFixed(4) : '?') +
            ' out=' + (c.outputLatency != null ? c.outputLatency.toFixed(4) : '?') +
+           ' depth=' + (this.lastDepth >= 0 && c.sampleRate
+                        ? Math.round(this.lastDepth / c.sampleRate * 1000) + 'ms'
+                        : '?') +
            ' wk=' + (this.mode === 'worklet' ? 'on'
                      : (this.workletErr ? this.workletErr.trim() : 'off'));
   }
@@ -2202,7 +2230,19 @@ class SoundOut{
        (an Acer Nitro 5): "very crackly", with the bridge's own underrun
        counter clean -- a glitch BELOW the page, which only a bigger
        hardware buffer can absorb. */
-    try { this.ctx = new C({ latencyHint: 'playback' }); }
+    /* RE-MEASURED TRADE (this fork): 'playback' bought ~50 ms of output
+       buffer as a shield for the SCHEDULED transport's joins.  With the
+       FIFO transports carrying the stream (and the drain + ratchet
+       absorbing jitter above the hardware), that shield mostly buys
+       LATENCY -- reported from play as sfx audibly behind a native
+       emulator.  So the default is 'interactive' again, and the old
+       trade stays one URL param away: ?audio=stable. */
+    let hint = 'interactive';
+    try {
+      if (typeof location !== 'undefined' &&
+          /[?&]audio=stable/.test(location.search || '')) hint = 'playback';
+    } catch (e) {}
+    try { this.ctx = new C({ latencyHint: hint }); }
     catch (e) { this.ctx = new C(); }
     /* ONE BRIDGE, TWO INSTRUMENTS, chosen by the game's own probe flag --
        the same byte $BF21 reads.  Nothing else in this class changes: the
@@ -2260,6 +2300,7 @@ class SoundOut{
         this.node.connect(this.gain);
         this.node.port.onmessage = (e) => {
           if (e.data && e.data.underrun) this.ratchetSamples(e.data.underrun);
+          if (e.data && typeof e.data.depth === 'number') this.lastDepth = e.data.depth;
         };
         this.node.port.postMessage(
           { min: Math.floor(this.fifoLead * this.ctx.sampleRate) });
@@ -2312,6 +2353,7 @@ class SoundOut{
       const proc = new cls();
       proc.port.postMessage = (m) => {
         if (m && m.underrun) this.ratchetSamples(m.underrun);
+        if (m && typeof m.depth === 'number') this.lastDepth = m.depth;
       };
       let sp;
       try { sp = this.ctx.createScriptProcessor(1024, 0, 1); }
@@ -2338,8 +2380,27 @@ class SoundOut{
        BEEPER rows of (frame, speaker level)    -- FRACTIONAL frames, because
               a chirp's edges are 82..1102 T-states apart and a whole one
               fits inside a fifth of a frame.                             */
+  /* THE GATE DECAYS when the machine proves healthy: one frame's worth
+     every five clean seconds, back toward the 50 ms base -- so a rough
+     first second (page load, the first level build) no longer parks the
+     session at a ratcheted latency FOR EVER.  With the queue drain in
+     the processor, a lowered gate is actually REALISED: the surplus
+     sheds at the next flat run.  Trouble resets the clock; the ceiling
+     stays wherever genuine repeated underruns put it. */
+  maybeEase(){
+    if (this.mode !== 'worklet' && this.mode !== 'sproc') return;
+    if (!this.ctx || this.fifoLead <= SND_LEAD_FIFO) return;
+    const t = this.ctx.currentTime;
+    if (this.lastTrouble < 0){ this.lastTrouble = t; return; }
+    if (t - this.lastTrouble < 5) return;
+    this.fifoLead = Math.max(SND_LEAD_FIFO, this.fifoLead - 0.016);
+    this.lastTrouble = t;
+    if (this.node)
+      this.node.port.postMessage({ min: Math.floor(this.fifoLead * this.ctx.sampleRate) });
+  }
   flush(events, upto){
     if (this.initPending) return;      // path not decided yet; the log waits
+    this.maybeEase();
     if (this.mode === 'worklet' || this.mode === 'sproc')
       return this.flushWorklet(events, upto);
     if (SOUND_MODE === SOUND_48K) return this.flushBeeper(events, upto);

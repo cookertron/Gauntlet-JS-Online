@@ -8329,10 +8329,20 @@ if (process.argv[2] === '--table') {
     };
     const S2 = new G.sound.SoundOut();
     checkTrue('start() brings the context up under the mock', S2.start() === true);
-    checkTrue('...and asks for the playback latency class, not the default',
-              !!captured && captured.latencyHint === 'playback');
+    /* FORK DEVIATION, re-measured: with the FIFO transports carrying the
+       jitter, the big 'playback' buffer would only buy latency -- the
+       default is 'interactive' again, ?audio=stable restores the trade. */
+    checkTrue('...and asks for the INTERACTIVE latency class by default',
+              !!captured && captured.latencyHint === 'interactive');
     checkTrue('...and with no audioWorklet on the context, stays on the scheduler',
               S2.mode === 'sched' && S2.initPending === false);
+    /* the stability trade is one URL param away, not gone */
+    sandbox.location = { search: '?audio=stable' };
+    const S2b = new G.sound.SoundOut();
+    S2b.start();
+    checkTrue('?audio=stable still buys the playback buffer',
+              !!captured && captured.latencyHint === 'playback');
+    delete sandbox.location;
     delete sandbox.AudioContext;
   }
 
@@ -8554,6 +8564,88 @@ if (process.argv[2] === '--table') {
             S.fifoLead > lead0, 'fifoLead ' + S.fifoLead);
   checkTrue('the FIFO gate OPENS at its own 50 ms, not the scheduler 80',
             Math.abs(lead0 - 0.05) < 1e-9);
+}
+
+/* ====================================================================
+   THE QUEUE DRAIN, THE DEPTH REPORT AND THE GATE DECAY -- ADDED (this
+   fork).  Reported from play: sfx audibly behind a native emulator, and
+   a 50 ms trim imperceptible -- so the dominant term was elsewhere.
+   The queue's DEPTH is the latency, and nothing above the processor
+   could ever shrink it: a stall's backlog or an early ratchet rode
+   between the sim and the speaker for ever.  Now the processor drains
+   above 1.5x the gate by dropping only samples IDENTICAL to the one
+   just played (a square-wave stream is rich in flat runs; an edge is
+   never touched), reports its depth for info(), and the gate itself
+   decays a frame per five clean seconds so early jank stops being a
+   life sentence.
+   ==================================================================== */
+{
+  let ProcCls = null; const reports = [];
+  const AudioWorkletProcessor = class {
+    constructor(){ this.port = { onmessage: null,
+                                 postMessage: m => reports.push(m) }; } };
+  const registerProcessor = (name, cls) => { ProcCls = cls; };
+  void AudioWorkletProcessor; void registerProcessor;
+  eval(G.sound.WORKLET_SRC);
+  const mk = () => { const p = new ProcCls();
+    p.port.onmessage({ data: { min: 100 } }); return p; };
+  const feed = (p, arr) => p.port.onmessage({ data: { chunk: Float32Array.from(arr) } });
+  const spin = p => { const o = new Float32Array(128); p.process([], [[o]]); return o; };
+
+  /* a FLAT bulge drains faster than one-for-one */
+  {
+    const p = mk();
+    feed(p, new Array(400).fill(0.5));            // depth 400 >> hi (150)
+    const o = spin(p);
+    checkTrue('above 1.5x the gate a flat run DRAINS (extra samples consumed)',
+              p.depth < 400 - 128, 'depth ' + p.depth);
+    checkTrue('...at the capped rate (one extra per sixteen)',
+              p.depth === 400 - 128 - 8);
+    checkTrue('...with the output untouched -- every sample the flat value',
+              o.every(v => v === 0.5));
+  }
+  /* an ACTIVE waveform is never touched, however deep the queue */
+  {
+    const p = mk();
+    const sq = []; for (let i = 0; i < 400; i++) sq.push(i & 1 ? 0.9 : -0.9);
+    feed(p, sq);                                   // alternating: no flat runs
+    spin(p);
+    check('an alternating (edge-dense) stream drains one-for-one only',
+          p.depth, 400 - 128);
+  }
+  /* the depth report surfaces about once a second */
+  {
+    const p = mk();
+    feed(p, new Array(200).fill(0));
+    reports.length = 0;
+    for (let i = 0; i < 512; i++){ spin(p); feed(p, new Array(128).fill(0)); }
+    checkTrue('the processor reports its depth for info()',
+              reports.some(r => typeof r.depth === 'number'));
+  }
+  /* the gate decay: five clean seconds ease one frame off; trouble rearms */
+  {
+    const S = new G.sound.SoundOut();
+    const posted = [];
+    S.ctx = { sampleRate: 48000, _t: 0, get currentTime(){ return this._t; } };
+    S.node = { port: { postMessage(m){ posted.push(m); } } };
+    S.mode = 'worklet';
+    S.fifoLead = 0.24;                             // parked at the ceiling
+    S.maybeEase(); S.ctx._t = 3; S.maybeEase();
+    check('inside five clean seconds the gate holds', S.fifoLead, 0.24);
+    S.ctx._t = 6; S.maybeEase();
+    checkTrue('...then eases one frame', Math.abs(S.fifoLead - 0.224) < 1e-9);
+    checkTrue('...and posts the worklet the lower gate',
+              posted.length === 1 &&
+              posted[0].min === Math.floor(S.fifoLead * 48000));
+    S.ctx._t = 8; S.ratchetSamples(480);           // fresh trouble
+    const led = S.fifoLead;
+    S.ctx._t = 12; S.maybeEase();
+    check('trouble REARMS the clock: no ease four seconds after an underrun',
+          S.fifoLead, led);
+    S.fifoLead = 0.052; S.lastTrouble = 20; S.ctx._t = 26; S.maybeEase();
+    checkTrue('...and the ease FLOORS at the 50 ms base',
+              Math.abs(S.fifoLead - 0.05) < 1e-9);
+  }
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);
