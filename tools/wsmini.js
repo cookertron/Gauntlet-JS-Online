@@ -16,7 +16,8 @@ class Ws {
   constructor(){ this.q = []; this.waiters = []; this.buf = Buffer.alloc(0);
                  this.closed = false; this.sock = null;
                  this.push = null; this.onclose = null; }
-  connect(port){
+  connect(port, path){
+    this.path = path || '/';
     return new Promise((resolve, reject) => {
       const key = crypto.randomBytes(16).toString('base64');
       const want = crypto.createHash('sha1')
@@ -41,7 +42,7 @@ class Ws {
       };
       s.on('data', onHs);
       s.on('connect', () => {
-        s.write('GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n' +
+        s.write('GET ' + this.path + ' HTTP/1.1\r\nHost: 127.0.0.1\r\n' +
                 'Upgrade: websocket\r\nConnection: Upgrade\r\n' +
                 'Sec-WebSocket-Key: ' + key + '\r\n' +
                 'Sec-WebSocket-Version: 13\r\n\r\n');

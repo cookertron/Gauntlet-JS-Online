@@ -2212,10 +2212,28 @@ class SoundOut{
        failure of both leaves the reason in workletErr where info() can
        show it -- the first failure here was SILENT and cost a whole
        remote-debugging round trip to see. */
-    if (SOUND_MODE === SOUND_48K && this.ctx.audioWorklet &&
+    if (SOUND_MODE === SOUND_48K && !(this.ctx.audioWorklet &&
         typeof AudioWorkletNode !== 'undefined' &&
         typeof Blob !== 'undefined' && typeof URL !== 'undefined' &&
-        URL.createObjectURL){
+        URL.createObjectURL)){
+      /* ADDED (this fork): NO WORKLET AT ALL -- and the headline case is
+         not an old browser, it is THIS GAME'S OWN DISTRIBUTION.  The
+         relay serves the page over plain http, and on http://<LAN-IP>
+         (how every second machine joins) the origin is NOT a secure
+         context, where Chrome does not expose AudioWorklet, full stop --
+         MEASURED: isSecureContext=false, ctx.audioWorklet=undefined,
+         and the session fell silently to the scheduler, which is the
+         exact title-tune crackle the worklet exists to fix (the first
+         field report reproduced it on the machine the whole sound arc
+         was about).  So the same FIFO runs here on a ScriptProcessorNode
+         instead -- available on any origin -- and the reason the worklet
+         could not is RECORDED where info() shows it. */
+      this.workletErr =
+        (typeof isSecureContext !== 'undefined' && !isSecureContext)
+          ? 'unavailable(insecure origin) ' : 'unavailable ';
+      this.startSproc();
+    }
+    else if (SOUND_MODE === SOUND_48K){
       this.initPending = true;
       const wire = () => {
         this.node = new AudioWorkletNode(this.ctx, 'gauntlet-beeper',
@@ -2230,10 +2248,14 @@ class SoundOut{
       };
       /* only addModule's own then(onOk, onErr) -- no interior Promises, so
          the chain is drivable synchronously by a thenable in tests */
+      /* a failure of BOTH module URLs falls to the ScriptProcessor FIFO
+         (startSproc), not to the scheduler -- the continuous stream is
+         the point, whichever node carries it */
       const attempt = (url, tag, next) => {
         this.ctx.audioWorklet.addModule(url).then(wire, (e) => {
           this.workletErr += tag + ':' + ((e && e.name) || e) + ' ';
-          if (next) next(); else this.initPending = false;
+          if (next) next();
+          else { this.initPending = false; this.startSproc(); }
         });
       };
       const blobUrl = URL.createObjectURL(
@@ -2242,10 +2264,53 @@ class SoundOut{
         if (typeof btoa !== 'undefined')
           attempt('data:application/javascript;base64,' + btoa(WORKLET_SRC),
                   'data', null);
-        else this.initPending = false;
+        else { this.initPending = false; this.startSproc(); }
       });
     }
     return true;                       // the context has JUST come up
+  }
+  /* ADDED (this fork): THE SAME FIFO ON A ScriptProcessorNode.  The
+     processor class in WORKLET_SRC is deliberately self-contained (no
+     worklet globals), so it is instantiated HERE, on the main thread,
+     by evaluating the same string the worklet loads and the suite
+     unit-tests -- one state machine, three homes, zero duplication.
+     The node shim gives flushWorklet() and ratchetSamples() the same
+     port.postMessage they always talk to; the processor's own reports
+     come back through the stubbed base port.  ScriptProcessor is
+     deprecated-but-universal and runs on ANY origin, which is the whole
+     reason it is here (see the insecure-origin note in start()); its
+     main-thread callback is jitter-exposed, but the min-gate and the
+     ratchet above it absorb that exactly as they do for the worklet.
+     The node reference is KEPT on `this` -- an unreferenced
+     ScriptProcessor is garbage-collected mid-play and goes silent. */
+  startSproc(){
+    try {
+      if (!this.ctx.createScriptProcessor) throw new Error('no node');
+      let cls = null;
+      (new Function('registerProcessor', 'AudioWorkletProcessor', WORKLET_SRC))(
+        (name, c) => { cls = c; },
+        class { constructor(){ this.port = { onmessage: null, postMessage: null }; } });
+      const proc = new cls();
+      proc.port.postMessage = (m) => {
+        if (m && m.underrun) this.ratchetSamples(m.underrun);
+      };
+      let sp;
+      try { sp = this.ctx.createScriptProcessor(2048, 0, 1); }
+      catch (e) { sp = this.ctx.createScriptProcessor(2048, 1, 1); }
+      sp.onaudioprocess = (e) => {
+        proc.process([], [[e.outputBuffer.getChannelData(0)]]);
+      };
+      sp.connect(this.gain);
+      this.spNode = sp; this.sproc = proc;
+      this.node = { port: { postMessage: (m) => {
+        const h = proc.port.onmessage; if (h) h({ data: m });
+      } } };
+      this.node.port.postMessage({ min: Math.floor(this.lead * this.ctx.sampleRate) });
+      this.mode = 'sproc';
+    } catch (e) {
+      this.workletErr += 'sproc:' + ((e && e.name) || e) + ' ';
+      /* the scheduler remains the floor everything can stand on */
+    }
   }
   /* `events` is the driver's log and `upto` is the first simulated frame the
      engine has NOT yet run, so every frame below it is closed and can be
@@ -2256,7 +2321,8 @@ class SoundOut{
               fits inside a fifth of a frame.                             */
   flush(events, upto){
     if (this.initPending) return;      // path not decided yet; the log waits
-    if (this.mode === 'worklet') return this.flushWorklet(events, upto);
+    if (this.mode === 'worklet' || this.mode === 'sproc')
+      return this.flushWorklet(events, upto);
     if (SOUND_MODE === SOUND_48K) return this.flushBeeper(events, upto);
     return this.flushAy(events, upto);
   }

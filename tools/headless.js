@@ -8498,5 +8498,51 @@ if (process.argv[2] === '--table') {
   }
 }
 
+/* ====================================================================
+   THE ScriptProcessor FIFO -- ADDED (this fork).  The relay serves the
+   page over plain http, and on http://<LAN-IP> -- how every second
+   machine joins -- the origin is NOT a secure context: Chrome exposes
+   no AudioWorklet there at all (measured; field-reported as the title
+   crackle surviving the worklet cherry-pick, info() reading mode=sched
+   wk=off).  startSproc() runs the SAME processor class main-thread on
+   a ScriptProcessorNode -- one state machine, evaluated from the same
+   WORKLET_SRC string the worklet loads and this suite unit-tests.
+   ==================================================================== */
+{
+  const S = new G.sound.SoundOut();
+  let spCap = null;
+  S.ctx = { sampleRate: 48000,
+            createScriptProcessor(sz, ic, oc){
+              spCap = { sz, ic, oc, onaudioprocess: null, connected: false,
+                        connect(){ spCap.connected = true; } };
+              return spCap; } };
+  S.gain = { connect(){} };
+  S.startSproc();
+  check('with no worklet the SAME FIFO engages on a ScriptProcessor', S.mode, 'sproc');
+  checkTrue('...node kept referenced and connected (GC-silence guard)',
+            S.spNode === spCap && spCap.connected === true);
+  checkTrue('...and info() says so', S.info().indexOf('mode=sproc') === 0);
+  const pull = n => { const out = new Float32Array(n);
+    spCap.onaudioprocess({ outputBuffer: { getChannelData: () => out } });
+    return Array.from(out); };
+  S.node.port.postMessage({ min: 4 });
+  S.node.port.postMessage({ chunk: Float32Array.from([1, 2, 3]) });
+  check('below the refill gate the stream holds silent (boot is not an underrun)',
+        pull(4), [0, 0, 0, 0]);
+  S.node.port.postMessage({ chunk: Float32Array.from([4, 5]) });
+  check('past the gate the chunks play back EXACTLY, concatenated',
+        pull(6), [1, 2, 3, 4, 5, 0]);
+  /* the drained tail opened an episode; resume must wait for the gate,
+     then report -- and the report must RATCHET, same policy as the
+     worklet's own wire */
+  const lead0 = S.lead;
+  S.node.port.postMessage({ chunk: Float32Array.from([7]) });
+  check('an episode refuses to resume below the gate', pull(2), [0, 0]);
+  S.node.port.postMessage({ chunk: Float32Array.from([8, 9, 10]) });
+  check('...then plays on cleanly once the queue refills', pull(4), [7, 8, 9, 10]);
+  checkTrue('...and the episode report ratcheted the lead through the shim',
+            S.lead > lead0, 'lead ' + S.lead);
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`);
 process.exit(failures ? 1 : 0);
