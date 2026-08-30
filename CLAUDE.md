@@ -48,6 +48,21 @@ the faithful path and the ONLINE lobby keep attract-until-FIRE.
 `deviceJoin` declined — `players[1].dir` is the wire's seam.  The
 `faithful` git remote stays wired for future picks.
 
+**This fork's audio is now AHEAD of upstream** (candidates for a
+reverse handover, all field-verified here 2026-08-30):
+- the ScriptProcessor FIFO fallback — `AudioWorklet` exists only in
+  SECURE contexts, and `http://<LAN-IP>` (how second machines join a
+  relay) is not one; same WORKLET_SRC state machine, main-thread;
+- the queue drain (depth IS the latency; drops only samples identical
+  to the last played — flat runs, never an edge), the `depth=` report
+  in `info()`, and the gate decay (a frame per five clean seconds);
+- `SND_LEAD_FIFO` 50 ms (FIFO recovers in one gap; the scheduler keeps
+  80) with at-least-a-frame ratchet escalation;
+- `latencyHint` back to 'interactive' by default (the FIFO carries the
+  jitter the big buffer guarded); `?audio=stable` restores 'playback'.
+Confirmed from play: crackle gone AND sfx latency at native-emulator
+feel, on both the worklet (localhost) and sproc (LAN) paths.
+
 ## Planned work (agreed with Anthony, in order of intent)
 
 1. ~~Strip local two-player from the client~~ **DONE 2026-08-29** (suite
