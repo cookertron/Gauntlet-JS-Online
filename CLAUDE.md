@@ -35,6 +35,15 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
 - `notes/NOTES-engine.md` — the 4700-line reverse-engineering log of the
   engine. The map. Search it before re-deriving anything.
 
+## Upstream changes waiting to be cherry-picked
+
+`notes/UPSTREAM-CHANGES.md` — Anthony's handover of everything the
+faithful port changed after the fork point (its suite is now 1268/1268).
+Headline: the ENTIRE audio stack here is pre-fork vintage and five
+upstream audio changes apply nearly clean, worklet FIFO transport above
+all; the join-flow changes are design decisions, not mechanical ports.
+Read it before touching sound or the join/lobby flow.
+
 ## Planned work (agreed with Anthony, in order of intent)
 
 1. ~~Strip local two-player from the client~~ **DONE 2026-08-29** (suite
