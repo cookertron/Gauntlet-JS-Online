@@ -11383,6 +11383,7 @@ const net = {
   names: null,         // the session name table (NAMES) -- display-only
   acc: 0, lastProgress: 0, desyncs: 0, seatMask: 0,
   pumpTimer: null,         // the hidden-tab pacer -- see netPump()
+  pumpT0: 0, pumpN: 0,     // its trailing-window budget (the free-run guard)
   forceAvailable: false,   // tests: offer the SERVER row with no location
 };
 function netNow(){
@@ -11422,6 +11423,7 @@ function netStart(url, cfgLocal, tpFactory){
   net.everLive = false; net.welcomed = false; net.chars = null;
   net.step = 0; net.sentInput = false; net.pendDirs = null;
   net.acc = 0; net.desyncs = 0; net.autoFire = false; net.names = null;
+  net.pumpT0 = 0; net.pumpN = 0;
   const h = {
     open(){ netSend(NETP.msgs.HELLO, [NETP.version & 0xFF, net.cfgLocal.char & 3]
                     .concat(netNameBytes(net.cfgLocal.name))); },
@@ -11606,21 +11608,40 @@ function netPump(){
   if (typeof sound !== 'undefined' && sound.flush)
     sound.flush(game.sound.log, game.simFrame);
   if (net.sentInput) return;
-  /* HIDDEN PACING: answer at the sim's own tick rate, never the wire's.
-     With a visible player in the session, their paced inputs govern the
-     loop and this floor never binds; alone (every participant hidden)
-     it stops the exchange free-running at round-trip speed -- measured
-     13,800 steps a second, the sim fast-forwarding by minutes while
-     nobody watched.  Browsers clamp hidden-tab timers to about 1 Hz,
-     which is exactly the idle pace wanted; where setTimeout does not
-     exist (the test sandboxes) the answer is immediate and the TESTS
+  /* HIDDEN PACING, SECOND CUT.  The first slept one tick per pass
+     through setTimeout -- and a browser CLAMPS a hidden tab's timers
+     to about a second, so a hidden participant fed one INPUT a second
+     and pure lockstep held the WHOLE session to it.  Found on the
+     bench 2026-09-01: WAITING FOR PLAYERS flashing in one-second
+     cycles on the VISIBLE machine, one step of movement per flash,
+     while the laptop's tab sat hidden -- and looking at the laptop
+     cured it, because looking IS unhiding.
+     A hidden tab must add ZERO delay while anyone visible is playing,
+     so it now answers AT ONCE -- unless the exchange is OUTRUNNING the
+     sim inside a trailing one-second window, which cannot happen while
+     any visible participant paces the loop (netFrame sends at
+     tickSeconds of real time) and is exactly the every-tab-hidden
+     free-run the first cut guarded against (measured 13,800 steps a
+     second).  Running hot, the clamped timer holds the NEXT window:
+     free-run becomes one-second BURSTS at the sim's own average rate,
+     in a session nobody is watching.  Where setTimeout does not exist
+     (the test sandboxes) the answer is always immediate and the tests
      pace the wire themselves. */
-  const wait = (net.lastProgress + game.tickSeconds() * 1000) - netNow();
-  if (wait > 0 && typeof setTimeout !== 'undefined'){
+  const nowMs = netNow();
+  /* a BACKWARD clock jump is not a window: re-origin, exactly as the
+     sound bridge does (netNow can fall back to Date.now, which a clock
+     sync can move backwards) */
+  if (nowMs - net.pumpT0 >= 1000 || nowMs < net.pumpT0){
+    net.pumpT0 = nowMs; net.pumpN = 0;
+  }
+  if (net.pumpN >= Math.max(1, Math.round(1 / game.tickSeconds())) &&
+      typeof setTimeout !== 'undefined'){
     if (net.pumpTimer === null)
-      net.pumpTimer = setTimeout(() => { net.pumpTimer = null; netPump(); }, wait);
+      net.pumpTimer = setTimeout(() => { net.pumpTimer = null; netPump(); },
+                                 Math.max(0, net.pumpT0 + 1000 - nowMs));
     return;
   }
+  net.pumpN++;
   netSend(NETP.msgs.INPUT, netU32(net.step).concat([netLocalDir()]));
   net.sentInput = true;
 }

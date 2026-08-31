@@ -8291,6 +8291,49 @@ if (process.argv[2] === '--table') {
     sandbox.document.hidden = false;
   }
 
+  /* ---- THE HIDDEN-TAB TIMER CLAMP: a browser clamps a hidden tab's
+     setTimeout to about a second, so the first-cut per-pass sleep fed
+     one INPUT a second -- and pure lockstep held the WHOLE session to
+     it (the bench report: WAITING FOR PLAYERS flashing in one-second
+     cycles on the VISIBLE machine, one step of movement per flash,
+     while the laptop's tab sat hidden).  The sandbox has no setTimeout,
+     which is exactly how that shipped unseen -- so THIS block installs
+     one, plus a fake clock, and pins the law: at or under the sim's own
+     rate a hidden tab answers every pass AT ONCE, timer available or
+     not; only wire-speed echoes (every participant hidden) may defer to
+     the clamped timer, and the deferred byte flows when the window
+     turns. */
+  {
+    sandbox.document.hidden = true;
+    let fakeT = 200000;
+    const timers = [];
+    sandbox.performance = { now: () => fakeT };
+    sandbox.setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
+    const tickMs = G.game.tickSeconds() * 1000;
+    for (let i = 0; i < 3; i++){
+      fakeT += tickMs;
+      H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
+    }
+    check('at the sim rate a hidden tab answers every pass AT ONCE, no timer',
+          [timers.length, rd32(lastOf(M.INPUT), 1)], [0, S.step]);
+    let n = 0;
+    while (timers.length === 0 && n < 100){
+      H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
+      n++;
+    }
+    checkTrue('wire-speed echoes trip the free-run guard inside ONE window',
+              timers.length === 1 && n <= Math.ceil(1000 / tickMs) + 1 &&
+              S.sentInput === false,
+              'n ' + n + ' timers ' + timers.length);
+    fakeT += 1000;
+    timers[0].fn();
+    checkTrue('...and the held INPUT flows the moment the window turns',
+              S.sentInput === true && rd32(lastOf(M.INPUT), 1) === S.step);
+    sandbox.document.hidden = false;
+    delete sandbox.setTimeout;
+    delete sandbox.performance;
+  }
+
   /* ---- NAMES: the session's name table is display metadata -- straight
      onto net.names and the live game's own tag table, never the sim. */
   {

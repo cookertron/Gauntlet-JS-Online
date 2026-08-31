@@ -152,10 +152,19 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      orphan-reset — the second browser then got a "totally separate
      game".  Fixed: when `document.hidden`, the PASS echo itself is the
      clock (`netPump()` — WebSocket messages still fire in hidden
-     tabs), floor-paced at the sim's own tick rate so a hidden-solo
-     session cannot free-run (measured 13,800 steps/s before the
-     floor).  Tab-out also releases all keys (`visibilitychange`/
-     `blur`) — a hidden tab never receives its keyups.
+     tabs).  SECOND CUT 2026-09-01: the first cut slept one tick per
+     pass via setTimeout, and browsers CLAMP hidden-tab timers to ~1 s
+     — a hidden participant fed one input a second and lockstep held
+     the whole session to it (bench: WAITING FOR PLAYERS flashing at
+     1 Hz on the VISIBLE machine; the laptop's browser sat COVERED by
+     the full-screen RDP window, and Chrome marks an occluded window
+     hidden).  Now a hidden tab answers AT ONCE, deferring to the
+     clamped timer only when the exchange outruns the sim inside a
+     trailing 1 s window — possible only with every participant hidden
+     (the free-run case, measured 13,800 steps/s; it becomes 1 s bursts
+     at the sim's average rate).  Tab-out also releases all keys
+     (`visibilitychange`/`blur`) — a hidden tab never receives its
+     keyups.
    - v1 paces one tick per round trip (LAN-ideal).  **Later polish:**
      input pipelining (net layer only); a join-time character pick (the
      dir byte has two spare bits); growing the sim to four player
