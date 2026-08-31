@@ -31,10 +31,11 @@ server\build\gauntlet-relay.exe          # builds below; --port/--seats/--html
 ```
 
 Everyone opens `http://<host-ip>:33792/`, picks a character, and STARTs
-with SERVER ONLINE — the attract screen is the lobby, and FIRE drops you
-into the dungeon exactly as it always did.  Opening the page from disk
-(or setting SERVER LOCAL) plays offline; `?server=host:port` joins a
-relay from a page hosted elsewhere.
+with SERVER ONLINE — START drops you straight into the dungeon, joining
+any game already running.  After a game ends the attract screen waits
+for FIRE to begin the next one, exactly as the arcade did.  Opening the
+page from disk (or setting SERVER LOCAL) plays offline;
+`?server=host:port` joins a relay from a page hosted elsewhere.
 
 For play from OUTSIDE the network, `--forward` asks the router to open
 the port itself (NAT-PMP first, then UPnP), prints the public address

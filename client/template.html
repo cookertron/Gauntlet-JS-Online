@@ -3666,11 +3666,12 @@ class FrontEnd {
     this.zoneOut = true;
     this.netOut = this.netOn && netAvailable();   // see feHandover()
     /* START MEANS START -- the one local player joins outright on the
-       OFFLINE handover (see Game.autoJoin); landing on the ranked table
-       to press FIRE would be asking for a decision the player has just
-       made.  The faithful front end never sets this and keeps $B374's
-       attract-until-FIRE, as does the ONLINE path, where the attract
-       screen is the lobby. */
+       handover; landing on the ranked table to press FIRE would be
+       asking for a decision the player has just made.  OFFLINE that is
+       Game.autoJoin; ONLINE the join must ride the wire, so feHandover
+       arms net.autoFire instead -- a held FIRE in the outgoing byte.
+       The faithful front end never sets this and keeps $B374's
+       attract-until-FIRE. */
     this.playersOut = 1;
     settingsSave();
     this.enter('pressplay');
@@ -5043,8 +5044,9 @@ class Game{
      boot-time join cannot bounce.  The faithful front end never reaches
      this (it sets no playersOut): its handover still lands on the
      attract loop and waits for FIRE, exactly as $B374 does.  And the
-     ONLINE path never reaches it either, on purpose: there the attract
-     screen is the LOBBY, and joining is the wire's own FIRE byte. */
+     ONLINE path never reaches it either, on purpose: there joining is
+     the wire's own FIRE byte, so START arms net.autoFire and holds
+     that byte in the outgoing dir until the join echoes back. */
   autoJoin(n){
     for (const q of this.players.slice(0, n & 3)){
       const save = this.p, saveDir = q.dir;
@@ -10911,6 +10913,14 @@ function feHandover(){
     netStart(serverUrl(), { char: frontend.FFFF & 3,
                             method1: frontend.FFFC & 3,
                             zonePotion: frontend.zoneOut });
+    /* START MEANS START, online too.  Game.autoJoin cannot run here --
+       every dir byte, the local player's included, comes from the
+       relay's echo -- so START becomes a held FIRE in the OUTGOING
+       byte (see netLocalDir), spent the moment this seat's player is
+       in.  One-shot: only THIS handover arms it, so a finished game
+       still returns to the attract lobby and waits for FIRE, exactly
+       as $B374's ranked table always has. */
+    net.autoFire = !!frontend.playersOut;
     feRunning = false;
     return;
   }
@@ -11164,6 +11174,7 @@ const net = {
   chars: null,         // the session character table (CHARS)
   step: 0,             // the next tick to exchange
   sentInput: false, pendDirs: null,
+  autoFire: false,     // START MEANS START, online -- see feHandover/netLocalDir
   acc: 0, lastProgress: 0, desyncs: 0, seatMask: 0,
   pumpTimer: null,         // the hidden-tab pacer -- see netPump()
   forceAvailable: false,   // tests: offer the SERVER row with no location
@@ -11193,7 +11204,7 @@ function netStart(url, cfgLocal, tpFactory){
   net.cfgLocal = cfgLocal || { char: GATE_CONFIG.char & 3, method1: 3, zonePotion: false };
   net.everLive = false; net.welcomed = false; net.chars = null;
   net.step = 0; net.sentInput = false; net.pendDirs = null;
-  net.acc = 0; net.desyncs = 0;
+  net.acc = 0; net.desyncs = 0; net.autoFire = false;
   const h = {
     open(){ netSend(NETP.msgs.HELLO, [NETP.version & 0xFF, net.cfgLocal.char & 3]); },
     message(b){ netOnMessage(b); },
@@ -11301,7 +11312,22 @@ function netOnMessage(b){
     return;
   }
 }
-function netLocalDir(){ return controlRead(game.method1, keyboard) & 0xFF; }
+/* the outgoing byte.  While feHandover's autoFire latch is armed, FIRE
+   rides every byte until this seat's player is IN -- the wire cannot
+   tell it from a held key, so the join is $9440 through joinPass like
+   any other.  Spent on arrival, not timed: it survives boot, snapshot
+   restore, even landing mid-rewind, and can never fire twice.  A
+   reused seat whose player still stands is already IN, so a reconnect
+   spends the latch silently and simply resumes him. */
+function netLocalDir(){
+  let d = controlRead(game.method1, keyboard) & 0xFF;
+  if (net.autoFire){
+    const q = game.players[net.seat];
+    if (q && q.inGame) net.autoFire = false;
+    else d |= DIR_FIRE;
+  }
+  return d;
+}
 function netApply(dirs){
   const t0 = game.simT;
   game.stepNet(dirs);
@@ -11394,7 +11420,7 @@ function netOverlay(ctx){
     const q = game.players[net.seat];
     line = (net.sentInput && netNow() - net.lastProgress > 700)
       ? 'WAITING FOR PLAYERS'
-      : (net.everLive && q && !q.inGame)
+      : (net.everLive && q && !q.inGame && !net.autoFire)
         ? 'PRESS ' + netFireKey() + ' TO JOIN'
         : '';
   }

@@ -8192,6 +8192,53 @@ if (process.argv[2] === '--table') {
     sandbox.document.hidden = false;
   }
 
+  /* ---- START MEANS START, online: the handover arms net.autoFire and
+     the latch rides the OUTGOING byte -- the join is the wire's own
+     FIRE, indistinguishable from a held key -- until this seat's
+     player is IN, then it is spent.  One-shot by construction: only
+     feHandover arms it, so a later death or game over returns to
+     attract-until-FIRE with no ghost re-join. */
+  {
+    const painted = () => {
+      let any = false;
+      const cap = { set fillStyle(v){}, get fillStyle(){ return null; },
+                    fillRect(){ any = true; } };
+      G.net.overlay(cap);
+      return any;
+    };
+    G.net.start('ws://mock', { char: 2, method1: 3, zonePotion: false }, tpF);
+    S.autoFire = true;                     // exactly what the ONLINE handover arms
+    H.open();
+    H.message(Uint8Array.from([M.WELCOME, 1, 2, ...u32(0xC0FFEE), NP.welcomeModes.FRESH, ...u32(0)]));
+    H.message(Uint8Array.from([M.CHARS, 3, 2, 255, 255]));
+    checkTrue('the autoFire latch survives the boot into the attract lobby',
+              S.phase === 'live' && S.autoFire === true);
+    checkTrue('...which paints NO join hint while the latch is mid-join', !painted());
+    G.net.frame(0.06);
+    const auto = lastOf(M.INPUT);
+    check('START crosses the wire: INPUT carries FIRE with no key down',
+          [rd32(auto, 1), auto[5]], [0, 0x10]);
+    H.message(Uint8Array.from([M.PASS, ...u32(0), 2, 0, 0x10]));
+    G.net.frame(0);
+    checkTrue('the echo joins MY player and the game starts -- no second button',
+              G.game.mode === 'play' && G.game.players[1].inGame &&
+              !G.game.players[0].inGame);
+    G.net.frame(0.1);
+    const clean = lastOf(M.INPUT);
+    check('...and the latch is SPENT: the next byte is the keyboard\'s own',
+          [rd32(clean, 1), clean[5], S.autoFire], [1, 0, false]);
+    H.message(Uint8Array.from([M.PASS, ...u32(1), 2, 0, 0]));
+    G.net.frame(0);
+    /* one-shot: knocked back OUT later (death, game over), nothing re-fires */
+    G.game.players[1].p14 |= 0x80;
+    G.net.frame(0.1);
+    const dead = lastOf(M.INPUT);
+    check('knocked out later, the byte stays clean -- no ghost FIRE',
+          [rd32(dead, 1), dead[5]], [2, 0]);
+    checkTrue('...and the join hint is back for the rejoin', painted());
+    G.game.players[1].p14 &= 0x7F;
+  }
+
   /* ---- the SERVER row exists exactly when a server is discoverable ---- */
   S.forceAvailable = true;
   checkTrue('the options screen offers SERVER when one is discoverable',
@@ -8216,8 +8263,10 @@ if (process.argv[2] === '--table') {
 /* ====================================================================
    START MEANS START -- upstream f23d538, ADAPTED (playersOut/autoJoin).
    The streamlined START joins the ONE local player through the REAL
-   join ($9440..$948C); the faithful path -- and the ONLINE lobby, where
-   joining is the wire's own FIRE byte -- keep attract-until-FIRE.
+   join ($9440..$948C); the faithful path keeps attract-until-FIRE.
+   ONLINE, START arms net.autoFire instead: the join rides the OUTGOING
+   dir byte -- the wire's own FIRE -- whose mechanics the mock-transport
+   section above pins end to end.
    (deviceJoin, the other half of that upstream commit, is DECLINED
    here: local player 2 is stripped and players[1].dir is the network
    seam -- a local pad must never claim a wire seat.)
@@ -8260,6 +8309,35 @@ if (process.argv[2] === '--table') {
   F.feHandover();
   checkTrue('with no playersOut the handover keeps attract-until-FIRE',
             G.game.mode === 'attract' && !G.game.players[0].inGame);
+  /* the ONLINE handover: START arms the wire join instead of calling
+     autoJoin -- the latch then rides netLocalDir's outgoing byte (the
+     mock-transport section pins those wire mechanics). */
+  {
+    const S = G.net.state;
+    S.forceAvailable = true;
+    sandbox.WebSocket = function(){};      // netStart's default transport, inert
+    F.live.reset();
+    let m = 0;
+    while (m < 6000 && F.live.phase !== 'options'){
+      if (m % 16 < 6) kb.press('SPACE'); else kb.releaseAll();
+      F.live.frame(kb, [], m); m++;
+    }
+    kb.releaseAll(); F.live.frame(kb, [], m++);
+    F.live.optSel = F.live.optRows().findIndex(r => r.k === 'start');
+    for (let i = 0; i < 2; i++){ kb.press('ENTER'); F.live.frame(kb, [], m++); }
+    for (let i = 0; i < 3; i++){ kb.releaseAll(); F.live.frame(kb, [], m++); }
+    while (m < 6200 && !F.live.done) F.live.frame(kb, [], m++);
+    checkTrue('with a server ONLINE the screen still finishes on START', F.live.done);
+    F.feHandover();
+    checkTrue('the ONLINE handover contacts the server instead of resetting',
+              S.phase === 'hello');
+    checkTrue('...and START MEANS START crossed to the wire: autoFire armed',
+              S.autoFire === true);
+    S.phase = 'off'; S.tp = null; S.autoFire = false;
+    S.forceAvailable = false;
+    delete sandbox.WebSocket;
+    kb.releaseAll();
+  }
   G.seed({});
 }
 

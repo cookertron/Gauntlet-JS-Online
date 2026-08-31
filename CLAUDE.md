@@ -46,9 +46,14 @@ changes are IN — adaptive lead, playback latencyHint, the 4.2 kHz
 speaker model, the AudioWorklet FIFO transport, the `data:` module
 fallback with `info()`/`wk=` diagnostics — plus the fork-specific piece:
 the hidden-tab clock (`netPump`) feeds the transport, or a hidden tab's
-FIFO would drain dry mid-session.  "START means start" is adapted:
-`Game.autoJoin` joins the local player on the OFFLINE handover only;
-the faithful path and the ONLINE lobby keep attract-until-FIRE.
+FIFO would drain dry mid-session.  "START means start" is adapted
+everywhere (online 2026-08-31): OFFLINE the handover calls
+`Game.autoJoin`; ONLINE it arms `net.autoFire` — a held FIRE in the
+OUTGOING dir byte (`netLocalDir`), because every byte comes from the
+relay's echo — spent the moment the seat's player is IN (a reused
+seat's standing player spends it silently = reconnect resumes him).
+One-shot: only the handover arms it, so game over still returns to
+attract-until-FIRE, and the faithful path is untouched.
 `deviceJoin` declined — `players[1].dir` is the wire's seam.  The
 `faithful` git remote stays wired for future picks.
 
