@@ -10324,6 +10324,23 @@ const TAG_FONT = {
   '3':'E161E', '4':'99F11', '5':'F8E1E', '6':'78E96', '7':'F1244',
   '8':'69696', '9':'6971E',
 };
+/* the name a tag wears: the player's SET name, else his CHARACTER's own.
+   The character text prefers block A's class_names entry (charInfo's
+   source) but only when it DECODES as plain text: the valkyrie's and
+   wizard's entries are block-A tile indices ($81.. and ')*+,-./' --
+   see NOTES on $7E29), letters only through block A's redefined font,
+   which the tag does not draw with.  Those take the game's own four
+   names as constants -- a default that renders blank for two of the
+   four characters would be no default at all. */
+function tagNameFor(g, q){
+  const set = g.names && g.names[q.idx];
+  if (set) return set;
+  const idx = q.charIndex & 3;
+  const cls = FE && FE.class_names && FE.class_names.find(n => n.tag === idx * 8);
+  const txt = cls ? String.fromCharCode.apply(null, cls.codes) : '';
+  return /^[A-Z0-9 ]+$/.test(txt) ? txt
+       : ['WARRIOR', 'VALKYRIE', 'WIZARD', 'ELF'][idx];
+}
 /* one tag, centred on cx, top row at ty, clipped to the PLAYFIELD --
    never over the HUD band, never past the screen edge. */
 function drawNameTag(ctx, text, cx, ty, colour){
@@ -10962,26 +10979,58 @@ function render(ctx,g){
   }
 
   /* ---- the NAME TAGS (ADDED, this fork) -----------------------------
-     One line of the 4x5 micro font centred over each live player, in his
+     One line of the 4x5 micro font centred over each player, in his
      panel ink -- panelInk, so a tag flashes with low health exactly as
      his panel does.  Display-only, the localIdx rule: g.names comes from
      the options screen (offline) or the relay's NAMES table (online), is
-     never fingerprinted, never snapshotted, and no sim rule reads it.
-     The gates are the sprite's own ($A446's dead, $A491's teleport) so a
-     tag never floats where no sprite is -- but it does NOT share the
-     invisibility flicker: the tag is an affordance, not a sprite.  Drawn
-     after every sprite and shot, so it is never buried; within 7 px of
-     the playfield top it drops BELOW the sprite instead of clipping. */
-  for (const q of g.players){
-    if (q.f11 & F_DEAD) continue;
-    if (q.animCtl & 4) continue;
-    const nm = (g.names && g.names[q.idx]) || '';
-    if (!nm) continue;
-    const psx=(((q.x-dcamX)&0x7E)>>1)*8+SPRITE_DX,
-          psy=(((q.y-dcamY)&0x7E)>>1)*8+SPRITE_DY;
-    const ink = panelInk(q, g.frameCtr);
-    const pal = (ink & 0x40) ? PAL_BRT : PAL_DIM;
-    drawNameTag(ctx, nm, psx + 8, psy >= 7 ? psy - 7 : psy + 17, pal[ink & 7]);
+     never fingerprinted, never snapshotted, and no sim rule reads it; an
+     UNSET name falls back to the character's own panel name (see
+     tagNameFor), so a tag always says something.
+     TAGS APPEAR ONLY WHEN PLAYERS MEET: a lone sprite on screen needs no
+     label, so nothing draws until at least TWO players are visible in
+     THIS window -- then every visible player wears one, and both sides
+     learn who is who at the same moment.  Visibility is the sprite
+     draw's own arithmetic ($B557's transform, $A446's dead and $A491's
+     teleport gates) intersected with the playfield, so the tag follows
+     exactly what is on screen -- but it does NOT share the invisibility
+     flicker: the tag is an affordance, not a sprite.  Drawn after every
+     sprite and shot, so it is never buried; within 7 px of the playfield
+     top it drops BELOW the sprite instead of clipping. */
+  {
+    const vis = [];
+    for (const q of g.players){
+      if (q.f11 & F_DEAD) continue;
+      if (q.animCtl & 4) continue;
+      const psx=(((q.x-dcamX)&0x7E)>>1)*8+SPRITE_DX,
+            psy=(((q.y-dcamY)&0x7E)>>1)*8+SPRITE_DY;
+      if (psx > -16 && psx < 256 && psy > -16 && psy < PLAYFIELD_H)
+        vis.push({q, psx, psy});
+    }
+    /* ADJACENT TAGS STACK.  Found by the staged shot: $9689's join ring
+       places players 16 px apart, so two centred tags overlap exactly
+       when tags exist at all -- at a meeting.  Each tag takes the first
+       clear line: up in 6 px steps from the preferred spot, and if the
+       top of the playfield runs out, below the sprite instead. */
+    if (vis.length >= 2){
+      const placed = [];
+      for (const v of vis){
+        const nm = tagNameFor(g, v.q);
+        if (!nm) continue;
+        const w = nm.length * 5 - 1, x0 = v.psx + 8 - (w >> 1);
+        const hits = y => placed.some(r => y < r.y + 5 && r.y < y + 5 &&
+                                           x0 < r.x + r.w && r.x < x0 + w);
+        let y = v.psy >= 7 ? v.psy - 7 : v.psy + 17;
+        while (y >= 0 && hits(y)) y -= 6;
+        if (y < 0){
+          y = v.psy + 17;
+          while (y < PLAYFIELD_H - 5 && hits(y)) y += 6;
+        }
+        placed.push({x: x0, y, w});
+        const ink = panelInk(v.q, g.frameCtr);
+        const pal = (ink & 0x40) ? PAL_BRT : PAL_DIM;
+        drawNameTag(ctx, nm, v.psx + 8, y, pal[ink & 7]);
+      }
+    }
   }
 
   /* ---- the HUD ------------------------------------------------------
@@ -11772,7 +11821,7 @@ globalThis.__GAUNTLET__={
      companion check can see that they shipped and are four distinct sets. */
   __EXIT_FRAMES__:EXIT_FRAMES,
   hud:{FONT,drawGlyph,drawBcdField,drawHud,logoInk,panelInk,
-       TAG_FONT,drawNameTag},
+       TAG_FONT,drawNameTag,tagNameFor},
   /* THE FRONT END.  `run(script)` drives block A the way the harness drives
      the real thing: a list of [frames, keys] steps, one video frame at a
      time, returning the five bytes it hands over.  That is what makes the

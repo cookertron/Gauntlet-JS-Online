@@ -2813,22 +2813,52 @@ if (A.player_frames) {
     const att = paint(gA);
     checkTrue('the attract screen still says PRESS FIRE in BOTH halves',
               cells(att, 4, 10, 23) > 0 && cells(att, 21, 27, 23) > 0);
-    /* --- the NAME TAG: the 4x5 micro font over the player's head, in his
-       own panel ink.  Differential: the SAME frame painted with and
-       without a name -- the extra draws are exactly the tag's pixels
-       (E 13 + L 8 + F 10 = 31 one-by-one rects in the elf's bright
-       green), all inside the playfield.  A name on a player who is OUT
-       draws nothing ($A446's own gate). */
-    const gT = G.seed({});
+    /* --- the NAME TAGS: only when players MEET.  A lone sprite needs no
+       label, so a solo screen never tags, named or not; the moment two
+       players are visible in the window, every visible one wears his
+       name -- the SET name, or his CHARACTER's (class_names, the menu's
+       own table -- the panel's $B890 capture never decoded VALKYRIE).
+       Differentials on the SAME frame: green 1x1 fills isolate player
+       1's tag ('AB' = A 12 + B 13 = 25 px in the elf ink), and moving
+       player 2 off-window (dx 80, past the $B557 mask's window, no
+       wrap) must take BOTH tags with him. */
     const pix = (list, col) => list.filter(c => c[0] === 'fillRect' &&
       c[3] === 1 && c[4] === 1 && c[5] === col && c[2] < 160).length;
-    const base = paint(gT);
-    gT.names = ['ELF', 'X', '', ''];      // player 2 is out -- his X must not draw
-    const tag = paint(gT);
-    check('a named player wears his tag: ELF is 31 micro-font pixels, his ink',
-          pix(tag, '#00ff00') - pix(base, '#00ff00'), 31);
-    check('...and nothing else changed: no tag for the out player',
-          tag.length - base.length, 31);
+    const gT = G.seed({});
+    const b0 = paint(gT).length;
+    gT.names = ['ELF', '', '', ''];
+    check('a LONE player never wears a tag, named or not',
+          paint(gT).length - b0, 0);
+    const gU = G.seed({});
+    gU.onePass({ p2: { fire: true } });
+    for (let i = 0; i < 8; i++) gU.onePass({ p2: {} });
+    check('an unset name falls back to the CHARACTER\'s own, all four decodable',
+          [G.hud.tagNameFor(gU, gU.players[0]), G.hud.tagNameFor(gU, gU.players[1])],
+          ['ELF', 'VALKYRIE']);
+    gU.names = ['AB', '', '', ''];
+    const both = paint(gU);
+    const xWas = gU.players[1].x;
+    gU.players[1].x = gU.camX + 80;            // off the window, no wrap
+    const apart = paint(gU);
+    gU.players[1].x = xWas;
+    check('tags appear exactly when ANOTHER player is on screen: AB is 25 px',
+          pix(both, '#00ff00') - pix(apart, '#00ff00'), 25);
+    checkTrue('...and the met player wears VALKYRIE (81 px) in his own cyan',
+              pix(both, '#00ffff') - pix(apart, '#00ffff') >= 81);
+    /* the join ring puts the two 16 px apart, so their tags collide --
+       the second must take the next line UP.  Positional diff: the
+       pixels only in `both` are p1's tag (green) and p2's tag + sprite
+       (cyan); the sprite sits BELOW the tag band, so exactly the 81
+       VALKYRIE pixels must land strictly above AB's topmost row. */
+    const posOf = (list, col) => new Set(list.filter(c => c[0] === 'fillRect' &&
+      c[3] === 1 && c[4] === 1 && c[5] === col && c[2] < 160)
+      .map(c => c[1] + ',' + c[2]));
+    const diffPos = col => { const B = posOf(apart, col);
+      return [...posOf(both, col)].filter(k => !B.has(k))
+        .map(k => k.split(',').map(Number)); };
+    const gTop = Math.min(...diffPos('#00ff00').map(p => p[1]));
+    check('...and adjacent tags STACK: the 81 VALKYRIE px sit clear above AB',
+          diffPos('#00ffff').filter(p => p[1] < gTop).length, 81);
   }
 
   /* --- both players drain, and the HUD round robin is FOUR passes long */

@@ -134,10 +134,16 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      to end: the options NAME row (max 8; A-Z 0-9 space — the 4x5 micro
      tag font's charset; DELETE=Backspace rubs out) rides HELLO's
      optional trailing field, the relay sanitizes and NAMES broadcasts
-     the seat table, and render() draws the tag over each live player's
-     head in his panel ink.  Never in the sim, the snapshot, or
-     fingerprint(); a SNAPSHOT joiner's name applies (unlike his pick);
-     seat reuse renames; offline the handover writes `game.names[0]`.
+     the seat table.  render() tags players only when they MEET (two+
+     player sprites visible in this window — a lone sprite needs no
+     label), each in his panel ink; an unset name wears the CHARACTER's
+     own (class_names where it decodes — the capture's valkyrie/wizard
+     entries are block-A tile codes, so those two are constants), and
+     adjacent tags STACK ($9689's ring seats joiners 16 px apart, so
+     centred tags collide exactly at a meeting).  Never in the sim, the
+     snapshot, or fingerprint(); a SNAPSHOT joiner's name applies
+     (unlike his pick); seat reuse renames; offline the handover writes
+     `game.names[0]`.
    - `restore()` now repairs `feScr` (attract/rewind shadow screen) —
      found by the e2e: a mid-lobby joiner crashed the page redraw.
    - **The background-tab clock** (found by Anthony's first real test):
