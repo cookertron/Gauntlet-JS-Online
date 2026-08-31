@@ -25,6 +25,7 @@ expected = {
     'MAX_SEATS': P['maxSeats'],
     'DEFAULT_SEATS': P['defaultSeats'],
     'FP_EVERY': P['fpEvery'],
+    'NAME_LEN': P['nameLen'],
     'LIM_FRAME_MAX': P['limits']['frameMax'],
     'LIM_MESSAGE_MAX': P['limits']['messageMax'],
     'LIM_HANDSHAKE_MAX': P['limits']['handshakeMax'],

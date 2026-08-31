@@ -4,6 +4,7 @@
   "maxSeats": 4,
   "defaultSeats": 2,
   "fpEvery": 32,
+  "nameLen": 8,
   "limits": {
     "frameMax": 262144,
     "messageMax": 1048576,
@@ -24,7 +25,8 @@
     "READY": 9,
     "SEATS": 10,
     "ERROR": 11,
-    "CHARS": 12
+    "CHARS": 12,
+    "NAMES": 13
   },
   "errors": {
     "FULL": 1,

@@ -3181,6 +3181,8 @@ class FrontEnd {
     this.optMethod = [3];             // KEYBOARD -- GATE_CONFIG's own default
     this.optBinding = -1;             // -1 idle, else 0..5 = UI_DIRS index mid-capture
     this.optBindReady = false;
+    this.optNaming = false;           // NAME row mid-entry -- see optNameFrame()
+    this.optName = '';                // the player's name: A-Z 0-9 space, max 8
     this.optEdge = {};                // previous-frame nav state, for edge detection
     this.zoneOut = false;             // see optFinish() / zonePotion
     this.netOn = true;                // the SERVER row -- ONLINE by default
@@ -3549,6 +3551,12 @@ class FrontEnd {
       const group = 'p' + p;
       rows.push({k: 'char', p, group, label: 'PLAYER ' + (p + 1),
                  value: () => this.charInfo(p).text, attr: () => this.charInfo(p).ink});
+      /* the NAME -- worn over the character's head in play (see the name
+         tags in render()).  Charset is the tag font's own: A-Z 0-9 space,
+         eight at most.  Empty shows the invitation, never a blank row. */
+      rows.push({k: 'name', p, group, label: 'NAME',
+                 value: () => this.optNaming ? this.optName
+                            : (this.optName || 'SET NAME')});
       rows.push({k: 'input', p, group, label: 'P1 INPUT',
                  value: () => this.optMethod[p] === 1 ? 'CONTROLLER' : 'KEYBOARD'});
       if (this.optMethod[p] === 1)
@@ -3586,6 +3594,9 @@ class FrontEnd {
   optActivate(r){
     if (r.k === 'rebind'){
       this.optBinding = 0; this.optBindReady = false; return;
+    }
+    if (r.k === 'name'){
+      this.optNaming = true; this.optBindReady = false; return;
     }
     if (r.k === 'reset'){ settingsReset(); return; }
     if (r.k === 'start'){ this.optFinish(); return; }
@@ -3646,6 +3657,38 @@ class FrontEnd {
     if (this.optBinding >= UI_DIRS.length){ this.optBinding = -1; settingsSave(); }
     this.optBindReady = false;          // now wait for THIS key's release
   }
+  /* NAME ENTRY -- the same release-gated capture the rebind uses: one key
+     per full press, so a held key never repeats.  A-Z, 0-9 and SPACE spell
+     (the HUD and tag fonts have exactly those glyphs and nothing else);
+     DELETE -- the Backspace key, see KEYMAP -- rubs out; ENTER, or a pad's
+     own confirm (the `finish` argument, so a controller-only player is
+     never trapped in here), keeps what is typed.  Max 8: a tag wider than
+     that dwarfs the 16x16 sprite it floats over. */
+  optNameFrame(finish){
+    if (finish){ this.optNameDone(); return; }
+    const held = this.kb.held;
+    if (!this.optBindReady){
+      if (held.size > 0) return;        // something is still down; wait it out
+      this.optBindReady = true; return;
+    }
+    if (held.size === 0) return;        // ready, but nothing pressed yet
+    let got = null;
+    for (const k of held){ got = k; break; }
+    if (got === 'ENTER'){ this.optNameDone(); return; }
+    if (got === 'DELETE') this.optName = this.optName.slice(0, -1);
+    else {
+      const ch = got === 'SPACE' ? ' ' : got;
+      if (ch.length === 1 && this.optName.length < 8 &&
+          (ch === ' ' || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')))
+        this.optName += ch;
+    }
+    this.optBindReady = false;          // now wait for THIS key's release
+  }
+  optNameDone(){
+    this.optName = this.optName.replace(/^ +| +$/g, '');  // outer spaces die
+    this.optNaming = false;
+    settingsSave();
+  }
   optFinish(){
     this.FFFF = this.optChar[0] & 3;
     /* $FFFE -- player 2's character.  His block still exists (never in
@@ -3702,6 +3745,11 @@ class FrontEnd {
     const pressed = k => now[k] && !this.optEdge[k];
     if (this.optBinding >= 0){
       this.optCaptureFrame();
+      this.optEdge = now;
+      return;
+    }
+    if (this.optNaming){
+      this.optNameFrame(pressed('go') && !this.key(FE_ENTER));
       this.optEdge = now;
       return;
     }
@@ -3831,6 +3879,13 @@ class FrontEnd {
       } else {
         uiText(ctx, ('  ' + text).padEnd(width).slice(0, width), col + 2, y, attr);
       }
+      /* mid-entry the NAME row wears a blinking underline cursor after the
+         typed text -- drawn as a bare rect because the HUD font has no
+         cursor glyph (A-Z, digits and space are all there is). */
+      if (this.optNaming && r.k === 'name' && (this.frameCtr & 16)){
+        ctx.fillStyle = PAL_BRT[7];
+        ctx.fillRect((col + 12 + this.optName.length) * 8, y * 8 + 6, 7, 2);
+      }
     });
 
     /* mid-capture the footer is the guidance line.  (The old capture
@@ -3838,7 +3893,9 @@ class FrontEnd {
        CAPS and SYM have been bindable since their reservations fell.) */
     const foot = (this.optBinding >= 0)
       ? 'ENTER TO SKIP'
-      : 'ARROWS MOVE   ENTER CONFIRM';
+      : this.optNaming
+        ? 'TYPE NAME  ENTER TO KEEP'
+        : 'ARROWS MOVE   ENTER CONFIRM';
     uiText(ctx, foot, col + ((W - foot.length) >> 1), row + H - 2, UI_ATTR);
   }
 }
@@ -4231,6 +4288,12 @@ class Game{
        same session differ in it by construction. */
     this.online = !!cfg.online;
     this.localIdx = 0;
+    /* NAMES are display-only too, the localIdx rule exactly: the tag over
+       each player's head (see render()).  Offline the handover writes the
+       local player's own; online the relay's NAMES table lands here.
+       Never fingerprinted, never in the snapshot manifest, and no sim
+       rule ever reads one. */
+    this.names = ['', '', '', ''];
     for (const q of this.players){
       q.camX = A.player.cam_x; q.camY = A.player.cam_y;
       q.camTgtX = 0; q.camTgtY = 0;
@@ -9664,8 +9727,10 @@ class Game{
   restore(s){
     if (!s || s.v !== 1) throw new Error('SNAPSHOT V' + (s && s.v));
     const li = this.localIdx | 0;       // the receiver's own display choice
+    const nm = this.names;              // ...and the receiver's own name table
     this.reset(s.cfg);
     this.localIdx = li;
+    this.names = nm;
     for (const k of SNAP_GAME) this[k] = s.game[k];
     this.scal = difficulty(this.level); // derived, as levelInit derives it
     this.map = s.map.map(r => r.slice());
@@ -10242,6 +10307,42 @@ function logoInk(frameCtr){
   let a = ((f >> 3) | (f << 5)) & 0xFF;                 // $A2B7 RRCA x3
   if (a & 8) a = (~a) & 0xFF;                           // $A2BE BIT 3 / CPL
   return (a & 7) | 0x40;                                // $A2C3 AND 7 / OR $40
+}
+
+/* ---- the MICRO FONT (ADDED, this fork): 4x5, A-Z and 0-9, for the NAME
+   TAGS over the players' heads.  One hex digit per row, bit 3 the left
+   column.  The HUD font's 8x8 would dwarf the 16x16 sprite a tag floats
+   over; at 4x5 an eight-letter name is 39 px and reads at a glance.
+   Space has no entry on purpose: the advance in drawNameTag IS the
+   glyph. */
+const TAG_FONT = {
+  A:'69F99', B:'E9E9E', C:'78887', D:'E999E', E:'F8E8F', F:'F8E88',
+  G:'78B97', H:'99F99', I:'E444E', J:'71196', K:'9ACA9', L:'8888F',
+  M:'9FF99', N:'9DB99', O:'69996', P:'E9E88', Q:'699A5', R:'E9EA9',
+  S:'7861E', T:'F4444', U:'99996', V:'99964', W:'99FF9', X:'99699',
+  Y:'99644', Z:'F248F', '0':'6BD96', '1':'4C44E', '2':'E168F',
+  '3':'E161E', '4':'99F11', '5':'F8E1E', '6':'78E96', '7':'F1244',
+  '8':'69696', '9':'6971E',
+};
+/* one tag, centred on cx, top row at ty, clipped to the PLAYFIELD --
+   never over the HUD band, never past the screen edge. */
+function drawNameTag(ctx, text, cx, ty, colour){
+  let x = cx - ((text.length * 5 - 1) >> 1);
+  ctx.fillStyle = colour;
+  for (const ch of text){
+    const gl = TAG_FONT[ch];
+    if (gl) for (let r = 0; r < 5; r++){
+      const py = ty + r;
+      if (py < 0 || py >= PLAYFIELD_H) continue;
+      const bits = parseInt(gl[r], 16);
+      for (let b = 0; b < 4; b++){
+        const px = x + b;
+        if ((bits & (8 >> b)) && px >= 0 && px < 256)
+          ctx.fillRect(px, py, 1, 1);
+      }
+    }
+    x += 5;
+  }
 }
 
 /* ---- $B5E8, THE PANEL, once per player -----------------------------
@@ -10860,6 +10961,29 @@ function render(ctx,g){
     }
   }
 
+  /* ---- the NAME TAGS (ADDED, this fork) -----------------------------
+     One line of the 4x5 micro font centred over each live player, in his
+     panel ink -- panelInk, so a tag flashes with low health exactly as
+     his panel does.  Display-only, the localIdx rule: g.names comes from
+     the options screen (offline) or the relay's NAMES table (online), is
+     never fingerprinted, never snapshotted, and no sim rule reads it.
+     The gates are the sprite's own ($A446's dead, $A491's teleport) so a
+     tag never floats where no sprite is -- but it does NOT share the
+     invisibility flicker: the tag is an affordance, not a sprite.  Drawn
+     after every sprite and shot, so it is never buried; within 7 px of
+     the playfield top it drops BELOW the sprite instead of clipping. */
+  for (const q of g.players){
+    if (q.f11 & F_DEAD) continue;
+    if (q.animCtl & 4) continue;
+    const nm = (g.names && g.names[q.idx]) || '';
+    if (!nm) continue;
+    const psx=(((q.x-dcamX)&0x7E)>>1)*8+SPRITE_DX,
+          psy=(((q.y-dcamY)&0x7E)>>1)*8+SPRITE_DY;
+    const ink = panelInk(q, g.frameCtr);
+    const pal = (ink & 0x40) ? PAL_BRT : PAL_DIM;
+    drawNameTag(ctx, nm, psx + 8, psy >= 7 ? psy - 7 : psy + 17, pal[ink & 7]);
+  }
+
   /* ---- the HUD ------------------------------------------------------
      Rows 20-23.  The PANEL ART underneath is still the original's own
      captured rows -- the character name, the "SCORE  HEALTH" legend, the six
@@ -10909,6 +11033,10 @@ const KEYMAP = {
   ArrowLeft:'5', ArrowDown:'6', ArrowUp:'7', ArrowRight:'8',
   Space:'SPACE', Enter:'ENTER', ShiftLeft:'CAPS', ShiftRight:'CAPS',
   ControlLeft:'SYM', ControlRight:'SYM',
+  /* not a Spectrum key: named for the options screen's NAME entry (see
+     optNameFrame).  Bindable like any other key, which is the rebind
+     screen's own rule -- never refuse. */
+  Backspace:'DELETE',
 };
 for (let i=0;i<10;i++) KEYMAP['Digit'+i] = String(i);
 for (const row of KB_HALFROWS) for (const k of row)
@@ -10929,7 +11057,8 @@ function feHandover(){
   if (frontend.netOut && netAvailable()){
     netStart(serverUrl(), { char: frontend.FFFF & 3,
                             method1: frontend.FFFC & 3,
-                            zonePotion: frontend.zoneOut });
+                            zonePotion: frontend.zoneOut,
+                            name: frontend.optName });
     /* START MEANS START, online too.  Game.autoJoin cannot run here --
        every dir byte, the local player's included, comes from the
        relay's echo -- so START becomes a held FIRE in the OUTGOING
@@ -10957,6 +11086,9 @@ function feHandover(){
               buildSeed: freshBuildSeed(),
               zonePotion: frontend.zoneOut});
   game.enterAttract();
+  /* the NAME TAG, offline: the local player is players[0], and his is the
+     only name there is.  (Online the relay's NAMES table fills this.) */
+  game.names[0] = frontend.optName;
   /* START MEANS START -- see Game.autoJoin.  The streamlined screen named
      its player (playersOut 1); he joins here through the real join, and
      the first attractTick's own $B47E arm carries him straight into the
@@ -11017,6 +11149,7 @@ function settingsSave(){
     localStorage.setItem(SETTINGS_KEY, JSON.stringify({
       method1: frontend.optMethod[0] & 3,
       char: frontend.optChar.slice(),
+      name: frontend.optName,
       slowdown: loadSlowdown,
       keys: CTRL_KEYS.map(k => (k ? k.slice() : null)) }));
   } catch(e) {}
@@ -11027,6 +11160,11 @@ function settingsLoad(){
   if (!v) return;
   if (typeof v.slowdown === 'boolean') loadSlowdown = v.slowdown;
   if (typeof v.method1 === 'number') frontend.optMethod[0] = v.method1 & 3;
+  /* the NAME, shape-checked like everything else here: a stored blob must
+     not hand the tag font a character it has no glyph for. */
+  if (typeof v.name === 'string')
+    frontend.optName = v.name.toUpperCase().replace(/[^A-Z0-9 ]/g, '')
+                        .slice(0, 8).replace(/^ +| +$/g, '');
   /* char: length 1 (this build) or 2 (a save from the two-local-player
      era) -- either way only player 1's own pick is restorable now. */
   if (Array.isArray(v.char) && (v.char.length === 1 || v.char.length === 2) &&
@@ -11058,6 +11196,7 @@ function settingsReset(){
   CTRL_DEFAULTS.forEach((k, i) => {
     if (k && CTRL_KEYS[i]) k.forEach((n, j) => { CTRL_KEYS[i][j] = n; }); });
   loadSlowdown = true;
+  frontend.optName = '';
   settingsSave();
 }
 
@@ -11192,6 +11331,7 @@ const net = {
   step: 0,             // the next tick to exchange
   sentInput: false, pendDirs: null,
   autoFire: false,     // START MEANS START, online -- see feHandover/netLocalDir
+  names: null,         // the session name table (NAMES) -- display-only
   acc: 0, lastProgress: 0, desyncs: 0, seatMask: 0,
   pumpTimer: null,         // the hidden-tab pacer -- see netPump()
   forceAvailable: false,   // tests: offer the SERVER row with no location
@@ -11206,6 +11346,17 @@ function netSend(type, bytes){
 }
 const netU32 = v => [v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF];
 const netRdU32 = (b, o) => (b[o] | (b[o+1] << 8) | (b[o+2] << 16) | (b[o+3] << 24)) >>> 0;
+/* HELLO's fixed name field: nameLen bytes, space-padded, uppercase A-Z
+   0-9 space and nothing else -- the tag font's own charset, enforced at
+   both ends (the relay sanitizes again; see PROTOCOL.md). */
+function netNameBytes(s){
+  const t = String(s || '').toUpperCase(), out = [];
+  for (let i = 0; i < NETP.nameLen; i++){
+    const c = i < t.length ? t.charCodeAt(i) : 32;
+    out.push((c === 32 || (c >= 48 && c <= 57) || (c >= 65 && c <= 90)) ? c : 32);
+  }
+  return out;
+}
 /* the default transport is a browser WebSocket; tests hand netStart a
    factory of their own instead -- anything with the same three wires. */
 function netWsTransport(url, h){
@@ -11221,9 +11372,10 @@ function netStart(url, cfgLocal, tpFactory){
   net.cfgLocal = cfgLocal || { char: GATE_CONFIG.char & 3, method1: 3, zonePotion: false };
   net.everLive = false; net.welcomed = false; net.chars = null;
   net.step = 0; net.sentInput = false; net.pendDirs = null;
-  net.acc = 0; net.desyncs = 0; net.autoFire = false;
+  net.acc = 0; net.desyncs = 0; net.autoFire = false; net.names = null;
   const h = {
-    open(){ netSend(NETP.msgs.HELLO, [NETP.version & 0xFF, net.cfgLocal.char & 3]); },
+    open(){ netSend(NETP.msgs.HELLO, [NETP.version & 0xFF, net.cfgLocal.char & 3]
+                    .concat(netNameBytes(net.cfgLocal.name))); },
     message(b){ netOnMessage(b); },
     close(){ if (net.phase !== 'ended'){ net.status = 'DISCONNECTED'; net.phase = 'ended'; } },
   };
@@ -11245,6 +11397,7 @@ function netBoot(){
                method1: net.cfgLocal.method1 & 3,
                zonePotion: !!net.cfgLocal.zonePotion });
   game.localIdx = net.seat;
+  if (net.names) game.names = net.names.slice();   // the reset wiped them
   game.enterAttract();
   net.step = 0; net.sentInput = false; net.pendDirs = null;
   net.everLive = true; net.lastProgress = netNow();
@@ -11319,6 +11472,25 @@ function netOnMessage(b){
     return;
   }
   if (t === M.SEATS){ net.seatMask = b[1] | 0; return; }
+  if (t === M.NAMES){
+    /* the session's per-seat name table, maxSeats fixed fields of nameLen
+       bytes.  Display-only: applied straight to game.names (the tags
+       repaint next frame) and kept on net.names so netBoot can re-apply
+       after the reset a boot performs -- restore() preserves it itself. */
+    if (b.length < 1 + NETP.maxSeats * NETP.nameLen) return;
+    const nm = [];
+    for (let s = 0; s < NETP.maxSeats; s++){
+      let str = '';
+      for (let i = 0; i < NETP.nameLen; i++){
+        const cc = b[1 + s * NETP.nameLen + i];
+        str += String.fromCharCode(cc >= 32 && cc < 127 ? cc : 32);
+      }
+      nm.push(str.replace(/ +$/, ''));
+    }
+    net.names = nm;
+    game.names = nm.slice();
+    return;
+  }
   if (t === M.ERROR){
     const E = NETP.errors, code = b[1] | 0;
     net.status = code === E.FULL ? 'SERVER FULL'
@@ -11599,7 +11771,8 @@ globalThis.__GAUNTLET__={
   /* records 24..31 per character -- $9595's exit set, so tools/exitgate.py's
      companion check can see that they shipped and are four distinct sets. */
   __EXIT_FRAMES__:EXIT_FRAMES,
-  hud:{FONT,drawGlyph,drawBcdField,drawHud,logoInk},
+  hud:{FONT,drawGlyph,drawBcdField,drawHud,logoInk,panelInk,
+       TAG_FONT,drawNameTag},
   /* THE FRONT END.  `run(script)` drives block A the way the harness drives
      the real thing: a list of [frames, keys] steps, one video frame at a
      time, returning the five bytes it hands over.  That is what makes the

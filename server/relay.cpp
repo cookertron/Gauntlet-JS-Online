@@ -56,6 +56,7 @@ constexpr uint16_t DEFAULT_PORT        = 33792;
 constexpr int      MAX_SEATS           = 4;
 constexpr int      DEFAULT_SEATS       = 2;
 constexpr uint32_t FP_EVERY            = 32;
+constexpr int      NAME_LEN            = 8;
 constexpr uint32_t LIM_FRAME_MAX       = 262144;
 constexpr uint32_t LIM_MESSAGE_MAX     = 1048576;
 constexpr uint32_t LIM_HANDSHAKE_MAX   = 8192;
@@ -74,6 +75,7 @@ constexpr uint8_t  MSG_READY           = 9;
 constexpr uint8_t  MSG_SEATS           = 10;
 constexpr uint8_t  MSG_ERROR           = 11;
 constexpr uint8_t  MSG_CHARS           = 12;
+constexpr uint8_t  MSG_NAMES           = 13;
 constexpr uint8_t  ERR_FULL            = 1;
 constexpr uint8_t  ERR_VERSION         = 2;
 constexpr uint8_t  ERR_PROTOCOL        = 3;
@@ -526,6 +528,11 @@ struct Relay {
      character -- and CHARS broadcasts it.  Frozen once the first PASS
      goes out; a late joiner's arrive inside the snapshot instead. */
   uint8_t charBySeat[MAX_SEATS];
+  /* NAMES are display metadata, never sim state: HELLO's optional
+     trailing field lands here (sanitized) and NAMES broadcasts the
+     table.  A leaver's name stays with his standing block mid-game --
+     seat reuse overwrites it -- and clears with his pick pre-start. */
+  uint8_t nameBySeat[MAX_SEATS][NAME_LEN];
   std::string htmlPath;           // what GET / serves; empty = 404
   /* the one pause state: a snapshot in flight, for a joiner or a
      desynced client.  While syncing the loop holds; inputs already
@@ -536,7 +543,8 @@ struct Relay {
   uint64_t syncStartMs = 0;
   std::deque<int> joinQueue;      // conn indices waiting for a sync slot
 
-  Relay(){ for (int i=0;i<MAX_SEATS;i++){ seat[i] = -1; charBySeat[i] = 0xFF; } }
+  Relay(){ for (int i=0;i<MAX_SEATS;i++){ seat[i] = -1; charBySeat[i] = 0xFF;
+                                          memset(nameBySeat[i], ' ', NAME_LEN); } }
   uint64_t now(){ return GetTickCount64(); }
 
   /* ---- socket plumbing ---- */
@@ -587,6 +595,13 @@ struct Relay {
     for (auto& c : conns) if (c->open && c->state == Conn::UP && c->seat >= 0)
       queueMsg(*c, m);
   }
+  void broadcastNames(){
+    std::vector<uint8_t> m; m.push_back(MSG_NAMES);
+    for (int i=0;i<MAX_SEATS;i++)
+      for (int j=0;j<NAME_LEN;j++) m.push_back(nameBySeat[i][j]);
+    for (auto& c : conns) if (c->open && c->state == Conn::UP && c->seat >= 0)
+      queueMsg(*c, m);
+  }
   void sendError(Conn& c, uint8_t code){
     std::vector<uint8_t> m; m.push_back(MSG_ERROR); m.push_back(code);
     queueMsg(c, m);
@@ -600,8 +615,12 @@ struct Relay {
     printf("[relay] drop seat=%d (%s)\n", c.seat, why); fflush(stdout);
     int idx = indexOf(c);
     if (c.seat >= 0){
-      /* pre-start, a leaver's character pick leaves with him */
-      if (pass == 0){ charBySeat[c.seat] = 0xFF; broadcastChars(); }
+      /* pre-start, a leaver's character pick -- and name -- leave with
+         him; mid-game both stay with the standing block until the seat
+         is reused */
+      if (pass == 0){ charBySeat[c.seat] = 0xFF; broadcastChars();
+                      memset(nameBySeat[c.seat], ' ', NAME_LEN);
+                      broadcastNames(); }
       seat[c.seat] = -1; c.seat = -1;
     }
     if (syncing){
@@ -624,7 +643,8 @@ struct Relay {
       fflush(stdout);
       pass = 0; syncing = false; provider = -1;
       buildSeed = freshSeed();
-      for (int i=0;i<MAX_SEATS;i++) charBySeat[i] = 0xFF;
+      for (int i=0;i<MAX_SEATS;i++){ charBySeat[i] = 0xFF;
+                                     memset(nameBySeat[i], ' ', NAME_LEN); }
       orphanTargets();
       while (!joinQueue.empty()){
         int j = joinQueue.front(); joinQueue.pop_front();
@@ -780,6 +800,18 @@ struct Relay {
         if (s < 0){ sendError(c, ERR_FULL); return; }
         if (seatMask() == 0 && pass == 0) buildSeed = freshSeed();
         seat[s] = indexOf(c); c.seat = s; c.ready = false;
+        /* the NAME -- HELLO's optional trailing field, display-only.
+           Sanitized to the tag font's charset (uppercase A-Z, 0-9,
+           space); a short HELLO means a blank name.  Unlike the pick
+           this applies to SNAPSHOT joiners too: snapshots carry no
+           names, the table is the wire's own. */
+        for (int j=0;j<NAME_LEN;j++){
+          uint8_t ch = (n >= size_t(2 + NAME_LEN)) ? p[2 + j] : uint8_t(' ');
+          if (ch >= 'a' && ch <= 'z') ch = uint8_t(ch - 32);
+          if (!(ch == ' ' || (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z')))
+            ch = ' ';
+          nameBySeat[s][j] = ch;
+        }
         uint8_t mode = (pass == 0) ? MODE_FRESH : MODE_SNAPSHOT;
         std::vector<uint8_t> m; m.push_back(MSG_WELCOME);
         m.push_back(uint8_t(s)); m.push_back(uint8_t(seatsN));
@@ -805,6 +837,7 @@ struct Relay {
           charBySeat[s] = ch;
           broadcastChars();
         }
+        broadcastNames();
         broadcastSeats();
         break;
       }

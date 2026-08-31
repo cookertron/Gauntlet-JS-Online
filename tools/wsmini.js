@@ -97,13 +97,15 @@ class Ws {
     }
     this.send(Buffer.concat(bufs));
   }
-  /* pull mode.  `skipType`: broadcast types the caller wants dropped. */
+  /* pull mode.  `skipType`: broadcast type(s) the caller wants dropped --
+     one type or an array of them. */
   async next(timeout, skipType){
     const t0 = Date.now();
     for (;;){
       while (this.q.length){
         const m = this.q.shift();
-        if (skipType !== undefined && m[0] === skipType) continue;
+        if (Array.isArray(skipType) ? skipType.indexOf(m[0]) >= 0
+                                    : m[0] === skipType) continue;
         return m;
       }
       if (this.closed) return null;

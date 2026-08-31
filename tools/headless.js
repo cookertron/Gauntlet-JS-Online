@@ -2813,6 +2813,22 @@ if (A.player_frames) {
     const att = paint(gA);
     checkTrue('the attract screen still says PRESS FIRE in BOTH halves',
               cells(att, 4, 10, 23) > 0 && cells(att, 21, 27, 23) > 0);
+    /* --- the NAME TAG: the 4x5 micro font over the player's head, in his
+       own panel ink.  Differential: the SAME frame painted with and
+       without a name -- the extra draws are exactly the tag's pixels
+       (E 13 + L 8 + F 10 = 31 one-by-one rects in the elf's bright
+       green), all inside the playfield.  A name on a player who is OUT
+       draws nothing ($A446's own gate). */
+    const gT = G.seed({});
+    const pix = (list, col) => list.filter(c => c[0] === 'fillRect' &&
+      c[3] === 1 && c[4] === 1 && c[5] === col && c[2] < 160).length;
+    const base = paint(gT);
+    gT.names = ['ELF', 'X', '', ''];      // player 2 is out -- his X must not draw
+    const tag = paint(gT);
+    check('a named player wears his tag: ELF is 31 micro-font pixels, his ink',
+          pix(tag, '#00ff00') - pix(base, '#00ff00'), 31);
+    check('...and nothing else changed: no tag for the out player',
+          tag.length - base.length, 31);
   }
 
   /* --- both players drain, and the HUD round robin is FOUR passes long */
@@ -7164,10 +7180,45 @@ if (process.argv[2] === '--table') {
   /* --- the rows: ONE local player, so no PLAYERS row at all ------------- */
   {
     const s = toOptions();
-    check('the rows: player 1, its input, its rebind, slowdown, defaults, start',
+    check('the rows: player 1, its name, its input, its rebind, slowdown, defaults, start',
           s.fe.optRows().map(r => r.k),
-          ['char', 'input', 'rebind', 'slow', 'reset', 'start']);
+          ['char', 'name', 'input', 'rebind', 'slow', 'reset', 'start']);
     checkTrue('cursor starts on PLAYER 1', s.fe.optRows()[s.fe.optSel].k === 'char');
+  }
+
+  /* --- the NAME row: release-gated typing in the tag font's charset ----- */
+  {
+    const s = toOptions();
+    s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'name');
+    check('the NAME row invites until one is set',
+          s.fe.optRows()[s.fe.optSel].value(), 'SET NAME');
+    tap(s, 'ENTER', 1);
+    checkTrue('activating NAME starts entry', s.fe.optNaming === true);
+    for (const k of ['A', 'N', 'T']) tap(s, k, 1);
+    check('typed keys land, one per full press', s.fe.optName, 'ANT');
+    tap(s, 'DELETE', 1);
+    check('DELETE -- the Backspace key -- rubs out', s.fe.optName, 'AN');
+    for (const k of ['T', 'H', 'O', 'N', 'Y', '7', '8']) tap(s, k, 1);
+    check('...and the name caps at EIGHT', s.fe.optName, 'ANTHONY7');
+    tap(s, 'ENTER', 1);
+    checkTrue('ENTER keeps it and ends entry',
+              !s.fe.optNaming && s.fe.optName === 'ANTHONY7');
+    check('...and the row wears it', s.fe.optRows()[s.fe.optSel].value(), 'ANTHONY7');
+  }
+
+  /* --- the name persists, and a stored blob is shape-checked ----------- */
+  {
+    F.live.optName = 'NITRO 5';
+    G.settings.save();
+    F.live.optName = '';
+    G.settings.load();
+    check('the name persists through settings', F.live.optName, 'NITRO 5');
+    F.live.optName = 'no!no!no!no!';
+    G.settings.save(); G.settings.load();
+    check('...and a stored blob is SHAPE-CHECKED: junk out, upper, capped at 8',
+          F.live.optName, 'NONONONO');
+    G.settings.reset();
+    check('DEFAULTS clears the name', F.live.optName, '');
   }
 
   /* --- navigation wraps both ways (7/8/... alias ArrowUp etc, see KEYMAP) */
@@ -8073,11 +8124,14 @@ if (process.argv[2] === '--table') {
        overwrites it */
     checkTrue('the wire does not carry localIdx',
               !('localIdx' in JSON.parse(wire).game));
+    checkTrue('...nor names -- both are the receiver\'s own display state',
+              !('names' in JSON.parse(wire).game));
     G.game.reset({});
     g.localIdx = 1;
+    g.names = ['KEEP', '', '', ''];
     g.restore(JSON.parse(wire));
-    check('...and restore preserves the receiver\'s own localIdx',
-          g.localIdx, 1);
+    check('...and restore preserves the receiver\'s own localIdx and names',
+          [g.localIdx, g.names[0]], [1, 'KEEP']);
   }
 
   G.seed({});                            // back to the offline gate baseline
@@ -8107,8 +8161,8 @@ if (process.argv[2] === '--table') {
   /* ---- the handshake: HELLO out, WELCOME/CHARS boot the session ------- */
   G.net.start('ws://mock', { char: 2, method1: 3, zonePotion: false }, tpF);
   H.open();
-  check('HELLO carries the protocol version and the character pick',
-        sent[0], [M.HELLO, NP.version, 2]);
+  check('HELLO carries the protocol version, the pick and a blank padded name',
+        sent[0], [M.HELLO, NP.version, 2].concat(new Array(8).fill(32)));
   H.message(Uint8Array.from([M.WELCOME, 1, 2, ...u32(0xC0FFEE), NP.welcomeModes.FRESH, ...u32(0)]));
   checkTrue('a FRESH welcome waits for the character table', S.phase === 'boot');
   H.message(Uint8Array.from([M.CHARS, 3, 2, 255, 255]));
@@ -8207,6 +8261,18 @@ if (process.argv[2] === '--table') {
     sandbox.document.hidden = false;
   }
 
+  /* ---- NAMES: the session's name table is display metadata -- straight
+     onto net.names and the live game's own tag table, never the sim. */
+  {
+    const enc = s2 => { const o = []; for (let i = 0; i < 8; i++)
+      o.push(i < s2.length ? s2.charCodeAt(i) : 32); return o; };
+    H.message(Uint8Array.from([M.NAMES, ...enc('ANTHONY'), ...enc('NITRO 5'),
+                               ...enc(''), ...enc('')]));
+    check('NAMES lands on net.names AND the live game, padding trimmed',
+          [S.names, G.game.names],
+          [['ANTHONY', 'NITRO 5', '', ''], ['ANTHONY', 'NITRO 5', '', '']]);
+  }
+
   /* ---- START MEANS START, online: the handover arms net.autoFire and
      the latch rides the OUTGOING byte -- the join is the wire's own
      FIRE, indistinguishable from a held key -- until this seat's
@@ -8221,9 +8287,13 @@ if (process.argv[2] === '--table') {
       G.net.overlay(cap);
       return any;
     };
-    G.net.start('ws://mock', { char: 2, method1: 3, zonePotion: false }, tpF);
+    G.net.start('ws://mock', { char: 2, method1: 3, zonePotion: false,
+                               name: 'nitro' }, tpF);
     S.autoFire = true;                     // exactly what the ONLINE handover arms
     H.open();
+    check('HELLO carries the name, upper-cased and space-padded to eight',
+          lastOf(M.HELLO).slice(3),
+          Array.from('NITRO   ').map(ch => ch.charCodeAt(0)));
     H.message(Uint8Array.from([M.WELCOME, 1, 2, ...u32(0xC0FFEE), NP.welcomeModes.FRESH, ...u32(0)]));
     H.message(Uint8Array.from([M.CHARS, 3, 2, 255, 255]));
     checkTrue('the autoFire latch survives the boot into the attract lobby',
@@ -8302,8 +8372,10 @@ if (process.argv[2] === '--table') {
   while (n < 6200 && !F.live.done) F.live.frame(kb, [], n++);
   checkTrue('the screen finished', F.live.done);
   check('START names the one local player for the handover', F.live.playersOut, 1);
+  F.live.optName = 'ANT';
   F.feHandover();
   const g = G.game;
+  check('the OFFLINE handover carries the name to the tag table', g.names[0], 'ANT');
   checkTrue('START MEANS START: player 1 is IN before any FIRE',
             g.players[0].inGame === true);
   check('...through the REAL join: health BCD 2000, the $9440 reset',
@@ -8343,9 +8415,11 @@ if (process.argv[2] === '--table') {
     for (let i = 0; i < 3; i++){ kb.releaseAll(); F.live.frame(kb, [], m++); }
     while (m < 6200 && !F.live.done) F.live.frame(kb, [], m++);
     checkTrue('with a server ONLINE the screen still finishes on START', F.live.done);
+    F.live.optName = 'ANT';
     F.feHandover();
     checkTrue('the ONLINE handover contacts the server instead of resetting',
               S.phase === 'hello');
+    check('...carrying the name for HELLO', S.cfgLocal.name, 'ANT');
     checkTrue('...and START MEANS START crossed to the wire: autoFire armed',
               S.autoFire === true);
     S.phase = 'off'; S.tp = null; S.autoFire = false;

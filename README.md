@@ -17,7 +17,7 @@ C++ server is not started.
 
 ```
 python tools/build.py     # client/template.html -> client/gauntlet.html
-node tools/headless.js    # the client test suite (1195/1195)
+node tools/headless.js    # the client test suite (1310/1310)
 ```
 
 Open `client/gauntlet.html` in a browser to play offline.
@@ -30,10 +30,11 @@ The relay serves the game itself: run it, share the address, done.
 server\build\gauntlet-relay.exe          # builds below; --port/--seats/--html
 ```
 
-Everyone opens `http://<host-ip>:33792/`, picks a character, and STARTs
-with SERVER ONLINE — START drops you straight into the dungeon, joining
-any game already running.  After a game ends the attract screen waits
-for FIRE to begin the next one, exactly as the arcade did.  Opening the
+Everyone opens `http://<host-ip>:33792/`, picks a character and a NAME
+(worn over your head in play, in your own colour), and STARTs with
+SERVER ONLINE — START drops you straight into the dungeon, joining any
+game already running.  After a game ends the attract screen waits for
+FIRE to begin the next one, exactly as the arcade did.  Opening the
 page from disk (or setting SERVER LOCAL) plays offline;
 `?server=host:port` joins a relay from a page hosted elsewhere.
 
@@ -53,7 +54,7 @@ The C++ relay server (`server/relay.cpp`, protocol in
 vcvars64 && cmake -S server -B server\build -G Ninja
          && ninja -C server\build
 python tools/protocheck.py                 # protocol constants in sync
-node tools/relaytest.js                    # the relay's own gate (24 checks)
+node tools/relaytest.js                    # the relay's own gate (33 checks)
 server\build\gauntlet-relay.exe            # run it (--port 33792 --seats 2)
 ```
 

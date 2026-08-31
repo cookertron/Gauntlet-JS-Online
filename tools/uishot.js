@@ -130,6 +130,7 @@ q.health = 0x1500;      // packed BCD, all nibbles valid digits
 q.score  = 0x123450;
 q.keys = 5; q.potions = 3;
 q.p14 = 0x3F;            // in game (bit 7 clear), all six inventory icons lit
+g.names[0] = 'ANTHONY';  // the tag over his head, micro font, his own ink
 save(outdir, 'hud.png', cap => G.render(cap, g));
 
 /* ---------- the options screen, boot-time, replacing the old escape menu */

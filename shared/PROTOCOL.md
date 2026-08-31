@@ -40,7 +40,7 @@ One message = `u8 type` then the fields.  C→S / S→C marks direction.
 
 | type | name    | dir | payload                                            |
 |-----:|---------|-----|----------------------------------------------------|
-| 1    | HELLO   | C→S | `u8 protoVersion, u8 char` (0..3, the character pick) |
+| 1    | HELLO   | C→S | `u8 protoVersion, u8 char` (0..3, the character pick), then optionally `nameLen × u8` name (space-padded) |
 | 2    | WELCOME | S→C | `u8 seat, u8 seats, u32 buildSeed, u8 mode, u32 pass` |
 | 3    | INPUT   | C→S | `u32 pass, u8 dir`                                 |
 | 4    | PASS    | S→C | `u32 pass, u8 seats, seats × u8 dir`               |
@@ -52,6 +52,7 @@ One message = `u8 type` then the fields.  C→S / S→C marks direction.
 | 10   | SEATS   | S→C | `u8 occupiedBitmask`                               |
 | 11   | ERROR   | S→C | `u8 code` — then the server closes                 |
 | 12   | CHARS   | S→C | `maxSeats × u8` character per seat, `0xFF` unset   |
+| 13   | NAMES   | S→C | `maxSeats × nameLen × u8` name per seat, space-padded |
 
 `dir` is the engine's own per-pass direction byte
 (up/down/left/right/fire/potion — the unit the sim always read).
@@ -76,6 +77,16 @@ One message = `u8 type` then the fields.  C→S / S→C marks direction.
   seat's block derives its character deterministically (the client's
   own default rule), and a late joiner takes characters from the
   snapshot, where they already live.
+* **Names are display metadata**, never sim state: they ride HELLO's
+  optional trailing field (a HELLO without it means a blank name — old
+  clients stay parseable), the server stores one per seat — sanitized
+  to uppercase A-Z, 0-9 and space, anything else a space — and NAMES
+  broadcasts the whole table on every seating.  Unlike the character
+  pick, a snapshot joiner's name DOES apply (the snapshot carries no
+  names; each client's table comes only from NAMES).  A leaver's name
+  stays with his standing block mid-game — whoever reuses the seat
+  overwrites it — and clears with his pick pre-start.  Names never
+  enter the sim, the snapshot, or the fingerprint.
 * **The page is the server.**  A plain HTTP `GET /` (no `Upgrade`
   header) on the same port answers with `client/gauntlet.html`, so the
   server's address is the page's own origin and the client needs no

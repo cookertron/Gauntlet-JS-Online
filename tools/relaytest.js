@@ -38,13 +38,14 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 /* ---- the WebSocket client lives in tools/wsmini.js, shared with the
    end-to-end test; here it grows the protocol-conversation helpers
-   (SEATS broadcasts interleave with everything, so expect() drops them
-   unless SEATS is what the test wants). */
+   (SEATS and NAMES broadcasts interleave with everything, so expect()
+   drops them unless one of them is what the test wants). */
 const { Ws: WsBase } = require('./wsmini');
+const BCAST = () => [M.SEATS, M.NAMES];
 class Ws extends WsBase {
   async expect(type, timeout){
     const m = await this.next(timeout || 3000,
-                              type === M.SEATS ? undefined : M.SEATS);
+                              BCAST().filter(t => t !== type));
     if (!m) throw new Error('timed out waiting for type ' + type +
                             (this.closed ? ' (closed)' : ''));
     if (m[0] !== type) throw new Error('expected type ' + type + ', got ' + m[0] +
@@ -52,7 +53,7 @@ class Ws extends WsBase {
     return m;
   }
   async silent(ms){
-    const m = await this.next(ms, M.SEATS);
+    const m = await this.next(ms, BCAST());
     if (m) throw new Error('expected silence, got type ' + m[0]);
   }
 }
@@ -99,16 +100,19 @@ async function main(){
 
     /* ---- seating and the fresh boot -------------------------------- */
     const c0 = await new Ws().connect(PORT);
-    c0.msg(M.HELLO, P.version, 3);                    // the elf
+    c0.msg(M.HELLO, P.version, 3, Buffer.from('anthony!'));   // the elf, named
     const w0 = rdWelcome(await c0.expect(M.WELCOME));
     check('first client seats at 0, fresh, pass 0',
           [w0.seat, w0.seats, w0.mode, w0.pass], [0, 2, MODE.FRESH, 0]);
     checkTrue('...with a nonzero buildSeed', w0.seed !== 0);
     check('...and CHARS carries his pick, other seats unset',
           Array.from((await c0.expect(M.CHARS)).subarray(1)), [3, 255, 255, 255]);
+    check('...and NAMES carries his name SANITIZED (upper, junk to space)',
+          (await c0.expect(M.NAMES)).subarray(1).toString(),
+          'ANTHONY ' + ' '.repeat(24));
 
     const c1 = await new Ws().connect(PORT);
-    c1.msg(M.HELLO, P.version, 3);                    // the SAME pick
+    c1.msg(M.HELLO, P.version, 3, Buffer.from('NITRO   '));   // the SAME pick
     const w1 = rdWelcome(await c1.expect(M.WELCOME));
     check('second client seats at 1, still fresh (pass 0)',
           [w1.seat, w1.mode, w1.pass], [1, MODE.FRESH, 0]);
@@ -117,6 +121,11 @@ async function main(){
           Array.from((await c1.expect(M.CHARS)).subarray(1)), [3, 0, 255, 255]);
     check('...and the first client hears the new table too',
           Array.from((await c0.expect(M.CHARS)).subarray(1)), [3, 0, 255, 255]);
+    check('NAMES now carries both seats, to both clients',
+          [(await c0.expect(M.NAMES)).subarray(1).toString(),
+           (await c1.expect(M.NAMES)).subarray(1).toString()],
+          ['ANTHONY NITRO   ' + ' '.repeat(16),
+           'ANTHONY NITRO   ' + ' '.repeat(16)]);
 
     /* the wrong protocol version is refused */
     const cv = await new Ws().connect(PORT);
@@ -200,6 +209,9 @@ async function main(){
     check('a late joiner takes the freed seat in SNAPSHOT mode at the live pass',
           [w3.seat, w3.mode, w3.pass], [1, MODE.SNAPSHOT, pass]);
     check('...same session, same seed', w3.seed, w0.seed);
+    check('a nameless HELLO is tolerated, and seat reuse OVERWRITES the leaver\'s name',
+          (await c3.expect(M.NAMES)).subarray(1).toString(),
+          'ANTHONY ' + ' '.repeat(24));
     await c0.expect(M.SNAPREQ);
     const big = { v: 1, blob: 'x'.repeat(20000), pass };
     const bigJson = Buffer.from(JSON.stringify(big));
@@ -230,6 +242,8 @@ async function main(){
           [w4.seat, w4.mode, w4.pass], [0, MODE.FRESH, 0]);
     check('...and the character table reset with it',
           Array.from((await c4.expect(M.CHARS)).subarray(1)), [1, 255, 255, 255]);
+    check('...and the name table too',
+          (await c4.expect(M.NAMES)).subarray(1).toString(), ' '.repeat(32));
     c4.close();
   } finally {
     proc.kill();

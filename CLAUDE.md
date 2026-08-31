@@ -23,11 +23,11 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
   `cmake -S server -B server\build -G Ninja && ninja -C server\build`.
 - `shared/PROTOCOL.md` + `shared/protocol.json` — the wire contract, v1.
   The JSON is the source of truth; `python tools/protocheck.py` holds
-  the C++ constants block to it (28 constants, both directions).
-- `tools/relaytest.js` — the relay's empirical gate (29 checks): spawns
+  the C++ constants block to it (31 constants, both directions).
+- `tools/relaytest.js` — the relay's empirical gate (33 checks): spawns
   the exe, speaks real WebSocket at it (own client, every frame byte
   controlled), plays the full protocol conversation.
-- `tools/e2etest.js` — the full stack (18 checks): two real client sims
+- `tools/e2etest.js` — the full stack (20 checks): two real client sims
   (vm sandboxes on the BUILT file) through the real relay; the proof
   that two browser windows play.  `tools/wsmini.js` is the shared WS
   client both tests use.
@@ -130,6 +130,14 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      the table before the first PASS (server bumps clashes — the engine
      never fields two of one character); in practice the first fresh
      boot fixes it and later joiners inherit blocks via snapshot.
+   - **Names are display metadata** (2026-08-31), the localIdx rule end
+     to end: the options NAME row (max 8; A-Z 0-9 space — the 4x5 micro
+     tag font's charset; DELETE=Backspace rubs out) rides HELLO's
+     optional trailing field, the relay sanitizes and NAMES broadcasts
+     the seat table, and render() draws the tag over each live player's
+     head in his panel ink.  Never in the sim, the snapshot, or
+     fingerprint(); a SNAPSHOT joiner's name applies (unlike his pick);
+     seat reuse renames; offline the handover writes `game.names[0]`.
    - `restore()` now repairs `feScr` (attract/rewind shadow screen) —
      found by the e2e: a mid-lobby joiner crashed the page redraw.
    - **The background-tab clock** (found by Anthony's first real test):

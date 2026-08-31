@@ -142,13 +142,18 @@ async function main(){
        blocks as they stand.  The CHARS bump path is relaytest's to
        check; what matters here is that a mid-LOBBY join restores clean. */
     const A = loadClient('A'), B = loadClient('B');
-    A.G.net.start('e2e', { char: 3, method1: 3, zonePotion: false }, vmTransport());
+    A.G.net.start('e2e', { char: 3, method1: 3, zonePotion: false,
+                           name: 'anthony' }, vmTransport());
     await until([A], () => A.net.phase === 'live', 'client A goes live');
-    B.G.net.start('e2e', { char: 3, method1: 3, zonePotion: false }, vmTransport());
+    B.G.net.start('e2e', { char: 3, method1: 3, zonePotion: false,
+                           name: 'NITRO 5' }, vmTransport());
     await until([A, B], () => B.net.phase === 'live',
                 'client B snapshot-joins the live lobby');
     check('seats: A=0 B=1, two-seat session', [A.net.seat, B.net.seat, A.net.seats], [0, 1, 2]);
     check('one buildSeed', A.net.buildSeed === B.net.buildSeed, true);
+    check('NAMES crossed the relay: each sim tags BOTH players, sanitized',
+          [A.G.game.names.slice(0, 2), B.G.game.names.slice(0, 2)],
+          [['ANTHONY', 'NITRO 5'], ['ANTHONY', 'NITRO 5']]);
     check('both sims field the SAME blocks: A\'s pick + the derived default',
           [A.G.game.players.map(q => q.charIndex), B.G.game.players.map(q => q.charIndex)],
           [[3, 1], [3, 1]]);
@@ -202,7 +207,8 @@ async function main(){
 
     /* ---- C late-joins off the live snapshot --------------------------- */
     const C = loadClient('C');
-    C.G.net.start('e2e', { char: 1, method1: 3, zonePotion: false }, vmTransport());
+    C.G.net.start('e2e', { char: 1, method1: 3, zonePotion: false,
+                           name: 'LATE' }, vmTransport());
     await until([A, C], () => C.net.phase === 'live', 'client C restores and goes live', 2000);
     check('C took the freed seat and displays its window', [C.net.seat, C.G.game.localIdx], [1, 1]);
     await barrier(A, C, 'post-late-join');
@@ -210,6 +216,8 @@ async function main(){
               A.G.game.fingerprint() === C.G.game.fingerprint());
     checkTrue('...and C sees B\'s abandoned player standing where he was left',
               C.G.game.players[1].inGame === true);
+    check('a SNAPSHOT joiner\'s name applies too -- seat reuse renames the tag on both',
+          [A.G.game.names[1], C.G.game.names[1]], ['LATE', 'LATE']);
 
     await pump([A, C], 40);
     await barrier(A, C, 'post-late-join play');
