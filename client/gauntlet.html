@@ -10273,16 +10273,32 @@ function drawPanel(ctx, g, q){
   if (!P) return;
   const c0 = q.idx * (HUD_FIELDS.p2_col_offset || 17);
   if (!q.inGame){
-    /* $B864 -- FOUR rows of fifteen codes from $7DB8: the GAUNTLET wordmark
-       over "PRESS FIRE", with rows 20-22 given attribute 0 (which is what
-       makes the ISR colour-cycle them, $A2CE/$A2D6) and row 23 attribute 6.
-       For PLAYER 2 the captured panel art already IS this picture and
-       drawHud's logo block is the measured cycle over exactly the cells the
-       ISR writes, so nothing needs painting there.  For PLAYER 1 it is not:
-       the capture was taken mid-game with him playing, so his half has to be
-       repainted from $7DB8 whenever he is out -- which is every frame of the
-       ATTRACT LOOP, where both players are out and both halves say PRESS
-       FIRE.  Without this the attract screen shows a live SCORE/HEALTH panel
+    /* IN GAME the $B864 invite is RETIRED (this fork).  Offline the
+       client is one player by design, and online the way in is the
+       lobby's START (net.autoFire) with netOverlay carrying the rejoin
+       hint -- a wire seat cannot be claimed from another player's
+       screen, so a colour-cycling PRESS FIRE over the dungeon invited
+       nobody.  An out player's half is BLANKED instead, and must be:
+       the captured art holds a picture for BOTH halves (the wordmark
+       for player 2, a live mid-game panel for player 1) and neither is
+       true. */
+    if (!g.feScr){
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(c0 * 8, PLAYFIELD_H, 15 * 8, 4 * 8);
+      return;
+    }
+    /* ON THE ATTRACT/REWIND SCREENS (g.feScr) the classic picture
+       stays, because there FIRE really is the way in ($B374) -- and
+       offline, after a game over, it is the only prompt there is.
+       $B864 -- FOUR rows of fifteen codes from $7DB8: the GAUNTLET
+       wordmark over "PRESS FIRE", with rows 20-22 given attribute 0
+       (which is what makes the ISR colour-cycle them, $A2CE/$A2D6) and
+       row 23 attribute 6.  For PLAYER 2 the captured panel art already
+       IS this picture and drawHud's logo block is the measured cycle
+       over exactly the cells the ISR writes, so nothing needs painting
+       there.  For PLAYER 1 it is not: the capture was taken mid-game
+       with him playing, so his half has to be repainted from $7DB8 --
+       without this the attract screen shows a live SCORE/HEALTH panel
        for a player who does not exist. */
     if (q.idx !== 0) return;
     ctx.fillStyle = '#000000';
@@ -10343,8 +10359,9 @@ function drawHud(ctx, g){
      panel's own.  ONLY while that half is still empty: $B66F writes 0 into
      the ISR's ink operand for a player who is not in the game and his own
      character's ink for one who is, and $A2CA/$A2D2 skip the cycle when the
-     operand is non-zero. */
-  if (!g.players[1].inGame){
+     operand is non-zero.  And only on the attract/rewind screens: in game
+     an empty half is blanked (see drawPanel) -- the invite is retired. */
+  if (!g.players[1].inGame && g.feScr){
     const ink = logoInk(g.frameCtr);
     const pal = PAL_BRT;                                // $40 -> always BRIGHT
     for (const row of LOGO_ROWS){

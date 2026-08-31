@@ -78,8 +78,11 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
    1211 -> 1161, every retirement deliberate): the client is one-local-
    player.  Gone: the PLAYERS/P2 options rows, the P2 key zone and the
    cross-player rebind-conflict UI, `indepGamepads`/`kempston2`,
-   `CTRL_MAGIC`'s SPACE ($85A7), `controlRead`'s `who` parameter, and the
-   local keyboard feed of `players[1].dir`.  **Deliberately KEPT:** the
+   `CTRL_MAGIC`'s SPACE ($85A7), `controlRead`'s `who` parameter, the
+   local keyboard feed of `players[1].dir`, and (2026-08-31) the IN-GAME
+   $B864 join invite — an out player's half of the HUD is blanked in
+   play/over; the attract/rewind screens keep the classic cycling
+   wordmark+PRESS FIRE halves, offline's only restart prompt.  **Deliberately KEPT:** the
    sim's two player blocks and the join/leash/shove machinery.  The engine
    has NO 1P/2P switch (NOTES: "There is no one-player/two-player switch.
    There never was.") -- both blocks ship marked not-in-game and whoever

@@ -2789,8 +2789,13 @@ if (A.player_frames) {
         for (let x = c0 * 8; x < c1 * 8; x++) n += buf[y * 256 + x];
       return n;
     };
-    checkTrue('before the join his row 23 carries PRESS FIRE',
-              cells(one, 21, 27, 23) > 0 && cells(one, 26, 30, 22) === 0);
+    /* the IN-GAME invite is RETIRED (this fork): the ways in are the
+       lobby's START online and nothing at all offline, so before the
+       join his half is BLANK -- no wordmark, no PRESS FIRE, no
+       counters.  (The attract screen keeps the classic picture; see the
+       check below.) */
+    checkTrue('before the join his half is BLANK, all four rows',
+              [20, 21, 22, 23].every(r => cells(one, 17, 32, r) === 0));
     /* $B694 blanks row 23 for a player who IS in the game, and $B87A's row 2
        plus $B7C7's counters fill row 22 -- health at cols 9..12 of his own
        half, i.e. 26..29 absolute. */
@@ -2798,6 +2803,16 @@ if (A.player_frames) {
               cells(two, 21, 27, 23) === 0 && cells(two, 26, 30, 22) > 0);
     checkTrue('his name is on row 20 of his own half, +17 columns',
               cells(two, 17, 32, 20) > 0);
+    /* the ATTRACT/REWIND screens keep the classic invite: both halves
+       carry the wordmark over PRESS FIRE (row 23, attribute 6 -- the
+       always-visible row; 20-22 spend part of the ISR cycle black).
+       There FIRE really is the way in ($B374), and offline after a
+       game over it is the only prompt there is. */
+    const gA = G.seed({});
+    gA.enterAttract();
+    const att = paint(gA);
+    checkTrue('the attract screen still says PRESS FIRE in BOTH halves',
+              cells(att, 4, 10, 23) > 0 && cells(att, 21, 27, 23) > 0);
   }
 
   /* --- both players drain, and the HUD round robin is FOUR passes long */
