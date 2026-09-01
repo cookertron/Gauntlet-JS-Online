@@ -100,17 +100,6 @@ One message = `u8 type` then the fields.  C→S / S→C marks direction.
   still, exactly as the pinned byte at the client's NETWORK SEAM always
   did) — and the pass number increments.  A client that starves the
   loop past `inputTimeoutMs` is dropped, and its seat frees.
-* **Input pipelining.**  A client may run its INPUT stream up to
-  `pipeDepth` passes ahead of the passes it has received; the server
-  queues them per seat, in order, and the loop consumes one per pass.
-  The tag must be exactly the next pass that seat has not yet supplied:
-  a LOWER tag is a stale duplicate from before a resync and is ignored,
-  a gap or an overflow past `pipeDepth` is a protocol breach and drops
-  the connection.  A seat's queue clears when it re-enters through the
-  snapshot flow (DESYNC), and dies with the connection.  Pipelining is
-  what absorbs internet jitter: the exchange no longer serialises on
-  one round trip per pass, and a latency spike shorter than the pipe
-  simply drains and refills it.
 * **Late join.**  A HELLO after pass 0 gets `WELCOME.mode` SNAPSHOT.
   The loop pauses at the current boundary, the server sends SNAPREQ to
   a provider (the lowest-seat clean client), the provider answers SNAP

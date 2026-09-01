@@ -11261,10 +11261,10 @@ function pollGamepads(){
    LOCAL keyboard builds the byte this client SENDS; the byte that drives
    the sim -- every seat's, this client's included -- is the one the
    relay echoes, so every client steps identical input (readKeys' netDirs
-   arm).  v1 paces one tick per round trip: INPUT goes out when the local
-   clock is due a tick, the tick steps when PASS comes back.  A LAN round
-   trip is far under a tick; input pipelining is a later change to THIS
-   layer alone.                                                         */
+   arm).  The exchange is STOP-AND-WAIT, one tick per round trip: INPUT
+   goes out when the local clock is due a tick, the tick steps when PASS
+   comes back, and one INPUT is ever in flight -- so an input acts at
+   most one tick after it was sampled.                                  */
 const NETP = A.protocol || null;
 function serverUrl(){
   try {
@@ -11277,30 +11277,6 @@ function serverUrl(){
   return null;
 }
 function netAvailable(){ return !!NETP && (net.forceAvailable || !!serverUrl()); }
-/* the INPUT PIPELINE depth this client runs: how many passes of input may
-   be in flight ahead of the applied step.  This is the jitter budget --
-   a latency spike shorter than NET_PIPE ticks (~280 ms in play) drains
-   and refills the pipe with no stall anyone can see -- and the price is
-   nothing on a clean link: sends are paced at the sim's own tick rate,
-   so the depth self-adjusts to about RTT/tick and only reaches the cap
-   during spikes and sim pauses.  The server accepts up to pipeDepth. */
-/* INPUT PIPELINING WAS BUILT HERE AND RETIRED HERE (2026-09-01), and
-   the record matters more than the code: sends ran up to four passes
-   ahead of the applied step, and an ADAPTIVE ceiling then raised that
-   toward the relay's queue cap of eight from a measured "turnaround".
-   The field test over the internet was the verdict -- "far too slow
-   and laggy... the character moves after the key has been lifted" --
-   because an input sampled at send time is consumed DEPTH ticks later,
-   and the ceiling's own measurement included the time a tag queued
-   behind this client's earlier sends: deeper pipe, longer turnaround,
-   higher cap, deeper pipe.  A ratchet to the maximum, invisible on the
-   LAN bench where turnaround never lifted the cap.  So the exchange is
-   STOP-AND-WAIT again -- one tick per round trip, input sampled one
-   tick before it acts -- and chooses responsiveness over smoothness.
-   The RELAY keeps its per-seat input queue (protocol pipeDepth 8):
-   dormant and invisible when a client holds one in flight, and the
-   capability stands if a future scheme measures LINK rtt exclusive of
-   its own queueing and caps the sampling lead honestly. */
 /* manual UTF-8 -- the headless sandbox has no TextEncoder */
 function utf8Enc(s){
   const out = [];
@@ -11530,9 +11506,7 @@ function netApply(dirs){
   const t0 = game.simT;
   game.stepNet(dirs);
   /* pace on what the tick CONSUMED -- a level pause charges simT its
-     whole 4.2 s, and the display sits out exactly that long with it
-     (the apply gate in netFrame; the wire itself runs ahead by at most
-     NET_PIPE and then waits too) */
+     whole 4.2 s, and the wire sits out exactly that long with it */
   net.acc -= (game.simT - t0);
   if (net.acc < -5) net.acc = -5;
   const done = net.step;
@@ -11557,7 +11531,7 @@ function netApply(dirs){
 }
 /* the paste-able one-liner, sound.out.info()'s sibling: the exchange
    rate over the last 5 s window against the sim's own, the worst
-   inter-pass stall seen in it, and the live pipe state. */
+   inter-pass stall seen in it, and whether an INPUT is in flight. */
 function netInfo(){
   const s = net.stat;
   return 'phase=' + net.phase + ' step=' + net.step +
@@ -11640,9 +11614,6 @@ function netFrame(dt){
     const d = net.pendDirs; net.pendDirs = null;
     netApply(d);
   }
-  /* STOP-AND-WAIT, by field verdict (see the pipelining record above):
-     one INPUT in flight, sent when the sim's own clock is owed a tick,
-     sampled at most one tick before it acts. */
   if (!net.sentInput && net.acc >= game.tickSeconds()){
     netSend(NETP.msgs.INPUT, netU32(net.step).concat([netLocalDir()]));
     net.sentInput = true;

@@ -8306,12 +8306,10 @@ if (process.argv[2] === '--table') {
     delete sandbox.performance;
   }
 
-  /* ---- STOP-AND-WAIT, restored by field verdict (the pipelining
-     record lives in template.html's NET section): one INPUT in flight,
-     ever -- the input is sampled at most ONE tick before it acts, so a
-     released key stops the character a round trip later, never a
-     pipeline later.  This pin is what a reintroduced send-ahead
-     mutation fails. */
+  /* ---- STOP-AND-WAIT: one INPUT in flight, ever.  The input is
+     sampled at most ONE tick before it acts, so a released key stops
+     the character a round trip later -- and any send-ahead scheme
+     fails this pin. */
   {
     kb.releaseAll();
     while (S.sentInput){                     // settle: flush any in-flight

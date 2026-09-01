@@ -24,7 +24,7 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
 - `shared/PROTOCOL.md` + `shared/protocol.json` — the wire contract, v1.
   The JSON is the source of truth; `python tools/protocheck.py` holds
   the C++ constants block to it (31 constants, both directions).
-- `tools/relaytest.js` — the relay's empirical gate (33 checks): spawns
+- `tools/relaytest.js` — the relay's empirical gate (37 checks): spawns
   the exe, speaks real WebSocket at it (own client, every frame byte
   controlled), plays the full protocol conversation.
 - `tools/e2etest.js` — the full stack (20 checks): two real client sims
@@ -196,14 +196,15 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      up to ~640 ms before it acted: "far too slow and laggy... the
      character moves after the key has been lifted".  The client is
      STOP-AND-WAIT again — one tick per round trip, one INPUT in
-     flight, responsiveness chosen over smoothness — with the full
-     post-mortem in template.html's NET section and a suite pin that
-     fails any reintroduced send-ahead.  The RELAY KEEPS its per-seat
-     input queue (protocol pipeDepth 8, relaytest-gated): dormant and
-     invisible with a one-in-flight client, standing only for a future
-     scheme that measures LINK rtt exclusive of its own queueing and
-     caps the sampling lead honestly.  `net.info()` survives:
-     inflight, rate vs sim, worst stall.
+     flight, responsiveness chosen over smoothness — and a suite pin
+     fails any reintroduced send-ahead.  Then, at Anthony's request,
+     EVERY trace of the implementation was scrubbed from the source —
+     the relay's per-seat queue reverted to the one-slot input, the
+     protocol's pipeDepth removed, the post-mortem comments taken out
+     — so THIS PARAGRAPH is the only record.  Any future revisit must
+     measure LINK rtt exclusive of its own queueing, cap the sampling
+     lead honestly, and re-earn the wire from scratch.  `net.info()`
+     survives: inflight, rate vs sim, worst stall.
    - **Wire hardening (2026-09-01)**, the surviving keepers of an
      adversarial 18-agent design review (12 proposals, 7 killed —
      notably: input-on-change latching LOSES taps, snapshot
