@@ -187,13 +187,21 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      catch-up credit for a delivered backlog; a sim pause still charges
      its full cost and holds).  The relay queues up to pipeDepth (8)
      per seat, in order: stale tags are ignored, gaps and overflow drop
-     the conn.  Two rules found the hard way: a snapshot PROVIDER
-     drains its queue to the pass boundary before serving (the e2e
-     caught the strand), and applies outside the frame clock (netPump,
-     the SNAPREQ drain) clear the display debt or the tab unhides into
-     a frozen screen.  `net.info()` is the paste-able diagnostic: rate
-     vs sim, worst stall, pipe depth.  **Later polish:** a join-time
-     character pick (the dir byte has two spare bits).
+     the conn.  Rules found the hard way: a snapshot PROVIDER drains
+     its queue to the pass boundary before serving (the e2e caught the
+     strand); applies outside the frame clock (netPump, the SNAPREQ
+     drain) clear the display debt or the tab unhides into a frozen
+     screen; and TWO DRAIN RULES keep the pipe lean (field regression
+     2026-09-01: the level-entry pause filled the pipe and NOTHING
+     drained it — every keypress consumed NET_PIPE ticks late, "the
+     character doesn't move for 0.5s", forever after the first intro):
+     the send bank holds at most ONE tick, so a catch-up burst refills
+     a single slot and an inflated pipe collapses back to depth ~1;
+     and a SIM PAUSE (net.acc < -0.2 — only a pause's charge goes
+     there, a network spike banks acc UP) sits the wire out exactly as
+     stop-and-wait did.  `net.info()` is the paste-able diagnostic:
+     rate vs sim, worst stall, pipe depth.  **Later polish:** a
+     join-time character pick (the dir byte has two spare bits).
 4. **NEXT SESSION — FOUR PLAYERS (agreed with Anthony 2026-09-01).**
    Grow the sim to four player blocks and redesign the in-game HUD to
    fit four panels ("remove or shrink the player information", his

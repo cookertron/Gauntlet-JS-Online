@@ -8336,6 +8336,34 @@ if (process.argv[2] === '--table') {
           [S.step, S.sentThrough - S.step], [base + 1, PIPE]);
     checkTrue('net.info() reports the live pipe, paste-able',
               /depth=\d+ queue=\d+ rate=/.test(G.net.info()));
+    /* THE PIPE MUST DRAIN -- the field regression: the level-entry
+       pause filled the pipe (sends kept firing while the display sat
+       out the charge) and nothing ever drained it, so every keypress
+       from then on was consumed NET_PIPE ticks late -- "the character
+       doesn't move for half a second".  Rule one: a BURST of applies
+       refills ONE slot (the send bank holds a single tick), so an
+       inflated pipe collapses back to lean. */
+    for (let i = 0; i < PIPE; i++)
+      H.message(Uint8Array.from([M.PASS, ...u32(S.step + S.pendQ.length), 2, 0, 0]));
+    /* three 60 fps frames: the burst applies on the first; a lean bank
+       can fund only ONE refill inside a fifth of a tick, where the old
+       surplus bank refilled at FRAME rate and re-pinned the pipe */
+    for (let i = 0; i < 3; i++) G.net.frame(1 / 60);
+    check('a BURST of echoes collapses the pipe: one refill, not a full one',
+          S.sentThrough - S.step, 1);
+    /* Rule two: a SIM PAUSE sits the wire out.  A pause pass charges
+       net.acc seconds of debt (a network spike never does -- applies
+       just stop and acc banks UP); no input may be sampled against a
+       frozen sim. */
+    S.acc = -4;                              // what a level-entry pause leaves
+    const quiet0 = sent.filter(m => m[0] === M.INPUT).length;
+    for (let i = 0; i < 5; i++) G.net.frame(0.1);
+    check('a sim pause sits the wire out: no sends against a pause debt',
+          sent.filter(m => m[0] === M.INPUT).length - quiet0, 0);
+    S.acc = 0;
+    G.net.frame(0.1);
+    check('...and the wire wakes with the display',
+          sent.filter(m => m[0] === M.INPUT).length - quiet0, 1);
   }
 
   /* ---- NAMES: the session's name table is display metadata -- straight

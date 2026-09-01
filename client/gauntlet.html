@@ -11633,15 +11633,29 @@ function netFrame(dt){
     netApply(net.pendQ.shift());
   /* SEND -- the PIPELINE.  One input per tick of REAL time, up to
      NET_PIPE ahead of the applied step, never waiting for an echo: on a
-     clean link the depth floats at about RTT/tick (LAN: zero extra
-     lag), and a spike or a sim pause fills the pipe to the cap and
-     drains it after.  sendAcc is its own clock -- net.acc pays for
-     APPLIES and must not be double-charged. */
+     clean link the depth floats near ONE (each apply frees a slot, each
+     tick refills one), and a network spike fills the pipe -- applies
+     stop, acc BANKS, sends continue -- then a catch-up burst collapses
+     it back.  sendAcc is its own clock: net.acc pays for APPLIES and
+     must not be double-charged.
+     TWO DRAIN RULES, from the bench (the first cut had no restoring
+     force: the level-entry pause filled the pipe and nothing ever
+     drained it, so every keypress from then on was consumed NET_PIPE
+     ticks late -- "the character doesn't move for half a second"):
+     - the send bank holds at most ONE tick, so a burst of applies
+       refills a single slot and an inflated pipe falls back to lean;
+     - a SIM PAUSE is not a spike: while net.acc is deep in a pause's
+       charge (a spike never takes it below about -0.1; the entry pause
+       charges seconds) the wire sits out with the display, exactly as
+       stop-and-wait did -- inputs sampled during a frozen sim are pure
+       lag. */
+  const tick = game.tickSeconds();
   net.sendAcc += dt;
-  if (net.sendAcc > 0.25) net.sendAcc = 0.25;
-  if (net.sendAcc >= game.tickSeconds() &&
-      net.sentThrough - net.step < NET_PIPE){
-    net.sendAcc -= game.tickSeconds();
+  if (net.sendAcc > tick) net.sendAcc = tick;
+  if (net.sendAcc >= tick &&
+      net.sentThrough - net.step < NET_PIPE &&
+      net.acc > -0.2){
+    net.sendAcc -= tick;
     netSend(NETP.msgs.INPUT, netU32(net.sentThrough).concat([netLocalDir()]));
     net.sentThrough++;
   }
