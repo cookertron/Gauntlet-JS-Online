@@ -182,59 +182,47 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      at the sim's average rate).  Tab-out also releases all keys
      (`visibilitychange`/`blur`) — a hidden tab never receives its
      keyups.
-   - **Input pipelining — BUILT 2026-09-01**, the Sheffield fix: v1
-     serialised one tick per round trip, so on the internet every
-     jitter spike stalled the whole session by exactly itself.  Sends
-     now run up to NET_PIPE (4) passes ahead of the applied step, paced
-     at the sim's own tick rate by their own clock (`net.sendAcc`) —
-     depth floats at ~RTT/tick, zero extra lag on LAN, and a spike
-     shorter than the pipe (~280 ms in play) drains and refills it
-     invisibly.  APPLIES are the paced side now (`net.acc >= 0`, with
-     catch-up credit for a delivered backlog; a sim pause still charges
-     its full cost and holds).  The relay queues up to pipeDepth (8)
-     per seat, in order: stale tags are ignored, gaps and overflow drop
-     the conn.  Rules found the hard way: a snapshot PROVIDER drains
-     its queue to the pass boundary before serving (the e2e caught the
-     strand); applies outside the frame clock (netPump, the SNAPREQ
-     drain) clear the display debt or the tab unhides into a frozen
-     screen; and TWO DRAIN RULES keep the pipe lean (field regression
-     2026-09-01: the level-entry pause filled the pipe and NOTHING
-     drained it — every keypress consumed NET_PIPE ticks late, "the
-     character doesn't move for 0.5s", forever after the first intro):
-     the send bank holds at most ONE tick, so a catch-up burst refills
-     a single slot and an inflated pipe collapses back to depth ~1;
-     and a SIM PAUSE (net.acc < -0.2 — only a pause's charge goes
-     there, a network spike banks acc UP) sits the wire out exactly as
-     stop-and-wait did.  `net.info()` is the paste-able diagnostic:
-     rate vs sim, worst stall, pipe depth.
-   - **Wire hardening (2026-09-01)**, the survivors of an adversarial
-     18-agent design review (12 proposals, 7 killed — notably: input-
-     on-change latching LOSES taps, snapshot compression saves nothing
-     because the snapshot wire MEASURES ~7.3 KB, and send-batching
-     shaves syscalls nobody feels; the PAGE, 844 KB, is the real join
-     payload).  Three landed: (1) the pipe CEILING adapts to measured
-     pass turnaround (`netPipeCap`: floor NET_PIPE 4 keeps LAN
-     bit-identical; rises toward pipeDepth 8, holding full sim rate to
-     ~560 ms turnaround in play and ~160 ms in the LOBBY, whose 20 ms
-     tick made the fixed window a mere 80 ms; `turn=`/`cap=` ride
-     net.info(), and turnaround is not pure RTT — the slowest
-     participant's pace is in it); (2) the relay serves
+   - **Input pipelining — BUILT and RETIRED 2026-09-01**, and the
+     record matters: sends ran up to 4 passes ahead of the applied
+     step (then an adaptive ceiling toward 8) to absorb internet
+     jitter.  Two field tests killed it.  First the pipe would not
+     drain — the level-entry pause inflated it and every keypress ran
+     NET_PIPE ticks late ("the character doesn't move for 0.5s");
+     drain rules fixed that.  Then the ADAPTIVE CEILING ratcheted: it
+     measured pass TURNAROUND, which includes the time a tag queues
+     behind this client's own earlier sends — deeper pipe, longer
+     turnaround, higher cap — so on the real internet
+     (cookertron.plus.com) the cap pinned at 8 and input was sampled
+     up to ~640 ms before it acted: "far too slow and laggy... the
+     character moves after the key has been lifted".  The client is
+     STOP-AND-WAIT again — one tick per round trip, one INPUT in
+     flight, responsiveness chosen over smoothness — with the full
+     post-mortem in template.html's NET section and a suite pin that
+     fails any reintroduced send-ahead.  The RELAY KEEPS its per-seat
+     input queue (protocol pipeDepth 8, relaytest-gated): dormant and
+     invisible with a one-in-flight client, standing only for a future
+     scheme that measures LINK rtt exclusive of its own queueing and
+     caps the sampling lead honestly.  `net.info()` survives:
+     inflight, rate vs sim, worst stall.
+   - **Wire hardening (2026-09-01)**, the surviving keepers of an
+     adversarial 18-agent design review (12 proposals, 7 killed —
+     notably: input-on-change latching LOSES taps, snapshot
+     compression saves nothing because the snapshot wire MEASURES
+     ~7.3 KB, and send-batching shaves syscalls nobody feels; the
+     PAGE, 844 KB, is the real join payload): (1) the relay serves
      `client/gauntlet.html.gz` to Accept-Encoding clients (844→307 KB
      on the owner's uplink per joiner; build.py writes the sibling
      ATOMICALLY, and serveHttp's per-request mtime guard serves
-     identity for a rebuilt html until the fresh .gz lands); (3) soft
+     identity for a rebuilt html until the fresh .gz lands); (2) soft
      TCP keepalive on accepted sockets (3 s idle, 1 s apart, 3 probes
      ≈ 6 s: a VANISHED host froze everyone for the full 10 s input
      timeout; wifi's 3-4 s self-healing blackouts stay safely under
      it, and a frozen app is still kernel-ACKed — the input timeout
-     remains the app-death detector).  Also KEPT for later, verified
+     remains the app-death detector).  From the same review, verified
      but unbuilt: relay deadline-advance with movement-latched
-     substitutes (bounded ~300 ms wait when one seat stalls — the one
-     overhead pipelining cannot fix; caveats logged in the review) and
-     non-blocking late-join/resync; build them only if Sheffield's
-     net.info() shows worst= spikes beyond the pipe window.
-     **Later polish:** a join-time character pick (the dir byte has
-     two spare bits).
+     substitutes and non-blocking late-join/resync (caveats logged in
+     the review).  **Later polish:** a join-time character pick (the
+     dir byte has two spare bits).
 4. **NEXT SESSION — FOUR PLAYERS (agreed with Anthony 2026-09-01).**
    Grow the sim to four player blocks and redesign the in-game HUD to
    fit four panels ("remove or shrink the player information", his

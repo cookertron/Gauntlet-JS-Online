@@ -8295,106 +8295,40 @@ if (process.argv[2] === '--table') {
     }
     checkTrue('wire-speed echoes trip the free-run guard inside ONE window',
               timers.length === 1 && n <= Math.ceil(1000 / tickMs) + 1 &&
-              S.sentThrough === S.step,
+              S.sentInput === false,
               'n ' + n + ' timers ' + timers.length);
     fakeT += 1000;
     timers[0].fn();
     checkTrue('...and the held INPUT flows the moment the window turns',
-              S.sentThrough === S.step + 1 && rd32(lastOf(M.INPUT), 1) === S.step);
+              S.sentInput === true && rd32(lastOf(M.INPUT), 1) === S.step);
     sandbox.document.hidden = false;
     delete sandbox.setTimeout;
     delete sandbox.performance;
   }
 
-  /* ---- the INPUT PIPELINE, client side: sends run AHEAD of echoes,
-     one per tick of real time, capped at NET_PIPE -- the jitter budget.
-     The old law was one tick per round trip; a latency spike stalled
-     the whole session by exactly itself.  Now the pipe carries the
-     spike: sends continue while echoes are withheld, and the depth
-     never passes the cap. */
+  /* ---- STOP-AND-WAIT, restored by field verdict (the pipelining
+     record lives in template.html's NET section): one INPUT in flight,
+     ever -- the input is sampled at most ONE tick before it acts, so a
+     released key stops the character a round trip later, never a
+     pipeline later.  This pin is what a reintroduced send-ahead
+     mutation fails. */
   {
     kb.releaseAll();
-    const PIPE = G.net.NET_PIPE;
-    checkTrue('the client pipe depth comes from the protocol (capped at 4)',
-              PIPE === Math.min(4, NP.pipeDepth));
-    const base = S.step, d0 = S.sentThrough - S.step;
-    const sends0 = sent.filter(m => m[0] === M.INPUT).length;
-    for (let i = 0; i < 10; i++) G.net.frame(0.1);
-    const added = sent.filter(m => m[0] === M.INPUT).length - sends0;
-    check('with echoes WITHHELD the pipe fills to NET_PIPE and holds',
-          [S.sentThrough - S.step, added], [PIPE, PIPE - d0]);
-    check('...the in-flight tags are consecutive ahead of the applied step',
-          sent.filter(m => m[0] === M.INPUT).slice(-(PIPE - d0)).map(m => rd32(m, 1)),
-          Array.from({length: PIPE - d0}, (_, i) => base + d0 + i));
-    H.message(Uint8Array.from([M.PASS, ...u32(base), 2, 0, 0]));
-    G.net.frame(0.1);
-    check('an echo drains one and the send clock refills the cap',
-          [S.step, S.sentThrough - S.step], [base + 1, PIPE]);
-    checkTrue('net.info() reports the live pipe, paste-able',
-              /depth=\d+ cap=\d+ queue=\d+ turn=\d+ms rate=/.test(G.net.info()));
-    /* THE PIPE MUST DRAIN -- the field regression: the level-entry
-       pause filled the pipe (sends kept firing while the display sat
-       out the charge) and nothing ever drained it, so every keypress
-       from then on was consumed NET_PIPE ticks late -- "the character
-       doesn't move for half a second".  Rule one: a BURST of applies
-       refills ONE slot (the send bank holds a single tick), so an
-       inflated pipe collapses back to lean. */
-    for (let i = 0; i < PIPE; i++)
-      H.message(Uint8Array.from([M.PASS, ...u32(S.step + S.pendQ.length), 2, 0, 0]));
-    /* three 60 fps frames: the burst applies on the first; a lean bank
-       can fund only ONE refill inside a fifth of a tick, where the old
-       surplus bank refilled at FRAME rate and re-pinned the pipe */
-    for (let i = 0; i < 3; i++) G.net.frame(1 / 60);
-    check('a BURST of echoes collapses the pipe: one refill, not a full one',
-          S.sentThrough - S.step, 1);
-    /* Rule two: a SIM PAUSE sits the wire out.  A pause pass charges
-       net.acc seconds of debt (a network spike never does -- applies
-       just stop and acc banks UP); no input may be sampled against a
-       frozen sim. */
-    S.acc = -4;                              // what a level-entry pause leaves
-    const quiet0 = sent.filter(m => m[0] === M.INPUT).length;
-    for (let i = 0; i < 5; i++) G.net.frame(0.1);
-    check('a sim pause sits the wire out: no sends against a pause debt',
-          sent.filter(m => m[0] === M.INPUT).length - quiet0, 0);
+    while (S.sentInput){                     // settle: flush any in-flight
+      H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
+      const d = S.pendDirs; S.pendDirs = null; if (d) G.net.apply(d);
+    }
     S.acc = 0;
+    const inputs0 = sent.filter(m => m[0] === M.INPUT).length;
+    for (let i = 0; i < 10; i++) G.net.frame(0.1);
+    check('with the echo withheld, exactly ONE input is ever in flight',
+          sent.filter(m => m[0] === M.INPUT).length - inputs0, 1);
+    H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
     G.net.frame(0.1);
-    check('...and the wire wakes with the display',
-          sent.filter(m => m[0] === M.INPUT).length - quiet0, 1);
-    /* ---- the ADAPTIVE CEILING: the cap follows measured TURNAROUND
-       toward the relay's own queue depth (pipeDepth 8), so a slow link
-       holds full sim rate instead of collapsing into slow motion; LAN
-       turnarounds keep cap == NET_PIPE, bit-identical behaviour. */
-    while (S.sentThrough > S.step){          // flush the in-flight tail
-      H.message(Uint8Array.from([M.PASS, ...u32(S.step + S.pendQ.length), 2, 0, 0]));
-      while (S.pendQ.length) G.net.apply(S.pendQ.shift());
-    }
-    check('at LAN turnarounds the cap IS the constant', G.net.pipeCap(), PIPE);
-    let fakeT2 = 700000;
-    sandbox.performance = { now: () => fakeT2 };
-    for (let r = 0; r < 12; r++){
-      G.net.frame(0.1);                      // sends one tag, stamped now
-      fakeT2 += 400;                         // a 400 ms turnaround
-      H.message(Uint8Array.from([M.PASS, ...u32(S.step + S.pendQ.length), 2, 0, 0]));
-      G.net.frame(0.1);                      // applies
-    }
-    checkTrue('slow echoes raise the ceiling toward pipeDepth',
-              G.net.pipeCap() > PIPE && G.net.pipeCap() <= NP.pipeDepth,
-              'cap ' + G.net.pipeCap() + ' turn ' + Math.round(S.rttMs) + 'ms');
-    const capUp = G.net.pipeCap();
-    for (let i = 0; i < 14; i++) G.net.frame(0.1);   // echoes withheld
-    check('...and the send gate honours it: depth fills to the RAISED cap',
-          S.sentThrough - S.step, capUp);
-    for (let r = 0; r < 24; r++){            // fast echoes decay the EWMA
-      if (S.sentThrough === S.step) G.net.frame(0.1);
-      fakeT2 += 5;
-      H.message(Uint8Array.from([M.PASS, ...u32(S.step + S.pendQ.length), 2, 0, 0]));
-      G.net.frame(0.1);
-    }
-    check('fast echoes decay the ceiling back to the constant',
-          G.net.pipeCap(), PIPE);
-    checkTrue('net.info() carries turn= and cap= for the bench',
-              /cap=\d+ queue=\d+ turn=\d+ms/.test(G.net.info()));
-    delete sandbox.performance;
+    check('...and the echo releases exactly the next',
+          sent.filter(m => m[0] === M.INPUT).length - inputs0, 2);
+    checkTrue('net.info() stays paste-able for the bench',
+              /inflight=[01] rate=.* sim=.* worst=\d+ms/.test(G.net.info()));
   }
 
   /* ---- NAMES: the session's name table is display metadata -- straight
