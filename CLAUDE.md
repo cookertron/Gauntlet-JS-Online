@@ -238,6 +238,32 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      and the counter round-robin ($B717) rewrite around it; the RIP
      tags and meeting tags need nothing.
    - e2e grows a 3rd/4th client scenario; relaytest a --seats 4 run.
+5. **QUEUED — SPEECH BUBBLES (Anthony, 2026-09-01).**  Chat messages
+   drawn as a speech bubble from the player's sprite, in the game's
+   own graphical style.  His spec, verbatim where it matters: max 32
+   characters; ENTER opens the text box in game; ESC closes it, ENTER
+   again sends.  Design notes from the survey:
+   - Display metadata end to end, the NAMES pattern exactly: a new
+     MSG_CHAT (13 is NAMES, so 14) client->server with the text, the
+     relay sanitizes (the tag font's charset: upper A-Z 0-9 space —
+     the micro font has no other glyphs) and broadcasts it stamped
+     with the SEAT.  Never in the sim, the snapshot, or fingerprint().
+     A light rate limit relay-side (spam guard).  protocheck +1.
+   - The bubble rides the TAG PASS machinery (position over the
+     sprite, stacking, playfield clipping): Spectrum-styled box (1 px
+     border, paper behind micro-font text, a small tail to the
+     sprite), 32 chars wrapped as two 16-char lines (16x5 = 79 px;
+     one 160 px line would span most of the window), shown ~4-5 s,
+     newest replaces.  The MEETING gate does NOT apply — a bubble is
+     deliberate speech — but it clips like a tag: a viewer whose
+     window doesn't hold the speaker misses it (v1; acceptable).
+   - ENTER is FREE in play (only the options screen reads it) and ESC
+     is unmapped (KEYMAP grows Escape).  While composing, the keydown
+     handler feeds a compose buffer directly (real typing, not the
+     rebind's release-gated capture) and `netLocalDir()` returns 0 —
+     the player stands, which is just a byte on the wire, sim-safe.
+     Compose UI candidate: the bubble itself, live over your own head
+     as you type.  ONLINE-only (offline has nobody to talk to).
 3. Netcode design — **SETTLED with Anthony 2026-08-29:**
    - **LOCKSTEP RELAY.**  Every client runs the JS sim it already has; the
      C++ server relays one direction byte per player per pass, owns the
