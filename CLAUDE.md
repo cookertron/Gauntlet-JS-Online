@@ -193,8 +193,43 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      the SNAPREQ drain) clear the display debt or the tab unhides into
      a frozen screen.  `net.info()` is the paste-able diagnostic: rate
      vs sim, worst stall, pipe depth.  **Later polish:** a join-time
-     character pick (the dir byte has two spare bits); growing the sim
-     to four player blocks, which is what unlocks `--seats 3/4`.
+     character pick (the dir byte has two spare bits).
+4. **NEXT SESSION — FOUR PLAYERS (agreed with Anthony 2026-09-01).**
+   Grow the sim to four player blocks and redesign the in-game HUD to
+   fit four panels ("remove or shrink the player information", his
+   words).  The survey, done ahead:
+   - **Already four-ready, untouched:** the protocol (maxSeats 4; PASS
+     carries seats×dir; CHARS and NAMES are 4-wide tables), the relay
+     (`--seats` just moves to 4 once the sim can), the character bump
+     rule (4 seats × 4 characters = every session fields each at most
+     once), the join-in model itself ($9440 has no player count), the
+     name tags (stacking already handles n), the per-player vcams and
+     every any-window rule, fingerprint/snapshot (loops over players).
+     The client's `net.seats > 2` WELCOME guard is the one latch to
+     lift.
+   - **The sim's two-player assumption sites** (grepped, ~a dozen):
+     `other(p)` = `idx^1` and its callers ($96B4 join ring, $AAC4
+     shove, the leash — pairwise-over-all or nearest instead), the
+     $B076 player-2-only arm at 7705ish, $94C3's level max (max over
+     all), $B6DA's drain (all), `potionBy & 1` / `bannerBy & 1` /
+     `localIdx & 1` masks (→ & 3), reset()'s block2 build (blocks 3/4
+     are synthesized clones with their own character), the abstract
+     input path (`input.p2` → p2..p4 or an array), $8503's both-dead
+     test (all-dead).  Blocks 3/4 have NO Z80 reference — the original
+     never had them — so the gates are SYMMETRY and DEGENERACY, not
+     faithfulness: with ≤2 players in game the four-block sim must
+     digest-match today's two-block sim pass for pass (the vcam proof
+     pattern), and the extra blocks must be provably inert while out.
+   - **The HUD:** four panels of EIGHT columns (4×8 = 32, the arcade's
+     own four-column layout — and the 8-character name cap already
+     fits an 8-column panel exactly).  Per quarter: NAME row, score
+     (7 digits fits), health, a compressed keys/potions/icons row.
+     IN PLAY only — the attract/rewind screens keep the classic
+     captured two halves (wordmark + PRESS FIRE), and an out player's
+     quarter stays blank (the retired-invite rule).  drawPanel/drawHud
+     and the counter round-robin ($B717) rewrite around it; the RIP
+     tags and meeting tags need nothing.
+   - e2e grows a 3rd/4th client scenario; relaytest a --seats 4 run.
 3. Netcode design — **SETTLED with Anthony 2026-08-29:**
    - **LOCKSTEP RELAY.**  Every client runs the JS sim it already has; the
      C++ server relays one direction byte per player per pass, owns the
