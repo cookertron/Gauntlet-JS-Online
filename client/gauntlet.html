@@ -11286,6 +11286,24 @@ function netAvailable(){ return !!NETP && (net.forceAvailable || !!serverUrl());
    so the depth self-adjusts to about RTT/tick and only reaches the cap
    during spikes and sim pauses.  The server accepts up to pipeDepth. */
 const NET_PIPE = NETP ? Math.max(1, Math.min(4, NETP.pipeDepth | 0)) : 1;
+/* THE CEILING ADAPTS to the measured pass TURNAROUND (send of a tag to
+   the arrival of its echo -- the slowest participant's pace rides in it,
+   so it is not pure link RTT, and netInfo labels it turn=).  At or under
+   NET_PIPE nothing changes: LAN keeps today's behaviour bit for bit.
+   When turnaround exceeds the pipe window the sim throttles into slow
+   motion (cap 4 in play collapses beyond ~320 ms; the LOBBY tick is
+   20 ms, so its window is a mere 80 ms and ordinary internet pings
+   already throttled it) -- so the ceiling rises toward the relay's own
+   queue cap (pipeDepth 8, the contract both ends already hold), which
+   holds FULL sim rate out to ~560 ms in play.  Depth self-regulates to
+   ~turnaround/tick below whatever the cap is (the drain rules), so the
+   raised room is only ever occupied while the link needs it. */
+function netPipeCap(){
+  if (!net.rttMs) return NET_PIPE;
+  const need = 1 + Math.ceil((net.rttMs / 1000) / game.tickSeconds());
+  return Math.max(NET_PIPE,
+                  Math.min(need, Math.min(8, NETP.pipeDepth | 0 || NET_PIPE)));
+}
 /* manual UTF-8 -- the headless sandbox has no TextEncoder */
 function utf8Enc(s){
   const out = [];
@@ -11322,6 +11340,8 @@ const net = {
   sentThrough: 0,      // the next tick to SEND -- [step, sentThrough) in flight
   pendQ: [],           // echoed passes not yet applied, in order
   sendAcc: 0,          // real time banked toward the next pipelined send
+  rttMs: 0,            // EWMA of pass TURNAROUND (send -> echo); 0 = no sample
+  sentAt: [],          // 16-slot ring of {tag, at} for the turnaround sampler
   autoFire: false,     // START MEANS START, online -- see feHandover/netLocalDir
   names: null,         // the session name table (NAMES) -- display-only
   acc: 0, lastProgress: 0, desyncs: 0, seatMask: 0,
@@ -11368,6 +11388,7 @@ function netStart(url, cfgLocal, tpFactory){
   net.step = 0; net.sentThrough = 0; net.pendQ = []; net.sendAcc = 0;
   net.acc = 0; net.desyncs = 0; net.autoFire = false; net.names = null;
   net.pumpT0 = 0; net.pumpN = 0;
+  net.rttMs = 0; net.sentAt = [];
   net.stat = {lastAt: 0, worst: 0, worstShown: 0, n: 0, t0: 0, rate: 0};
   const h = {
     open(){ netSend(NETP.msgs.HELLO, [NETP.version & 0xFF, net.cfgLocal.char & 3]
@@ -11396,6 +11417,7 @@ function netBoot(){
   if (net.names) game.names = net.names.slice();   // the reset wiped them
   game.enterAttract();
   net.step = 0; net.sentThrough = 0; net.pendQ = []; net.sendAcc = 0;
+  net.sentAt = [];                     // tag numbering restarts: old samples lie
   net.everLive = true; net.lastProgress = netNow();
   netSend(NETP.msgs.READY, netU32(0));
   net.phase = 'live'; net.status = '';
@@ -11433,6 +11455,17 @@ function netOnMessage(b){
   if (t === M.PASS){
     const n = netRdU32(b, 1), count = b[5];
     if (n !== net.step + net.pendQ.length) return;   // stale; the wire is ordered
+    /* the turnaround sampler feeds the adaptive ceiling -- sampled at
+       ARRIVAL, not apply, so a sim pause's display debt never inflates
+       it.  Negative or absurd samples (a clock jump, a stale ring slot
+       from before a resync) are discarded. */
+    const slot = net.sentAt[n & 15];
+    if (slot && slot.tag === n){
+      const ms = netNow() - slot.at;
+      if (ms >= 0 && ms < 60000)
+        net.rttMs = net.rttMs ? net.rttMs * 0.9 + ms * 0.1 : ms;
+      net.sentAt[n & 15] = null;
+    }
     const dirs = [];
     for (let i = 0; i < count; i++) dirs.push(b[6 + i] | 0);
     net.pendQ.push(dirs);              // stepped by netFrame, on the clock
@@ -11448,6 +11481,7 @@ function netOnMessage(b){
     game.localIdx = net.seat;          // restore preserves the receiver's own
     game.restore(snap);
     net.step = pass; net.sentThrough = pass; net.pendQ = []; net.sendAcc = 0;
+    net.sentAt = [];                   // the rebase reuses tags: old samples lie
     net.everLive = true; net.lastProgress = netNow();
     netSend(NETP.msgs.READY, netU32(pass));
     net.phase = 'live'; net.status = '';
@@ -11559,7 +11593,9 @@ function netInfo(){
   const s = net.stat;
   return 'phase=' + net.phase + ' step=' + net.step +
          ' depth=' + (net.sentThrough - net.step) +
+         ' cap=' + netPipeCap() +
          ' queue=' + net.pendQ.length +
+         ' turn=' + Math.round(net.rttMs) + 'ms' +
          ' rate=' + (s.rate ? s.rate.toFixed(1) : '?') +
          ' sim=' + (1 / game.tickSeconds()).toFixed(1) +
          ' worst=' + Math.round(s.worstShown || s.worst) + 'ms' +
@@ -11629,6 +11665,7 @@ function netPump(){
     return;
   }
   net.pumpN++;
+  net.sentAt[net.sentThrough & 15] = {tag: net.sentThrough, at: netNow()};
   netSend(NETP.msgs.INPUT, netU32(net.sentThrough).concat([netLocalDir()]));
   net.sentThrough++;
 }
@@ -11667,9 +11704,10 @@ function netFrame(dt){
   net.sendAcc += dt;
   if (net.sendAcc > tick) net.sendAcc = tick;
   if (net.sendAcc >= tick &&
-      net.sentThrough - net.step < NET_PIPE &&
+      net.sentThrough - net.step < netPipeCap() &&
       net.acc > -0.2){
     net.sendAcc -= tick;
+    net.sentAt[net.sentThrough & 15] = {tag: net.sentThrough, at: netNow()};
     netSend(NETP.msgs.INPUT, netU32(net.sentThrough).concat([netLocalDir()]));
     net.sentThrough++;
   }
@@ -11797,7 +11835,7 @@ globalThis.__GAUNTLET__={
   Game,game,render,assets:A,
   net:{ state:net, start:netStart, frame:netFrame, overlay:netOverlay,
         onMessage:netOnMessage, apply:netApply, boot:netBoot, pump:netPump,
-        localDir:netLocalDir, info:netInfo, NET_PIPE,
+        localDir:netLocalDir, info:netInfo, NET_PIPE, pipeCap:netPipeCap,
         serverUrl, netAvailable, utf8Enc, utf8Dec },
   /* SETTINGS persistence -- the WIDGETS and the SCREEN that edits them are
      under `frontend` below (optRows()/optFrame()/optRender() on the live

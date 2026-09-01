@@ -32,8 +32,11 @@
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <mstcpip.h>
 #include <windows.h>
 #include <iphlpapi.h>
+
+#include <sys/stat.h>
 
 #include <cctype>
 #include <cstdint>
@@ -927,18 +930,56 @@ struct Relay {
     size_t qm = path.find('?');
     if (qm != std::string::npos) path = path.substr(0, qm);
     std::string body, head;
+    bool gzipped = false;
     if ((path == "/" || path == "/index.html") && !htmlPath.empty()){
-      FILE* f = fopen(htmlPath.c_str(), "rb");
-      if (f){
-        fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
-        if (sz > 0){ body.resize((size_t)sz);
-                     if (fread(&body[0], 1, (size_t)sz, f) != (size_t)sz) body.clear(); }
-        fclose(f);
+      /* the GZIP ARM: tools/build.py writes an atomically-replaced .gz
+         sibling (~1/3 the bytes), and the page is the largest payload of
+         every join -- felt on the --forward internet case, where the
+         owner's home uplink carries it to each joiner.  The relay gains
+         no dependency: compression happened at build time.  The mtime
+         guard (gz at least as fresh as the html) keeps a REBUILT html
+         honest while its sibling has not landed yet -- identity is
+         served until build.py's os.replace drops the fresh .gz, so the
+         per-request no-restart property survives. */
+      size_t ae = req.size();
+      { std::string low; low.reserve(req.size());
+        for (char ch : req) low += (char)tolower((unsigned char)ch);
+        ae = low.find("accept-encoding:");
+        if (ae != std::string::npos){
+          size_t eol = low.find("\r\n", ae), gz = low.find("gzip", ae);
+          if (gz == std::string::npos || (eol != std::string::npos && gz > eol))
+            ae = std::string::npos;
+        }
+      }
+      if (ae != std::string::npos){
+        struct _stat64 sh{}, sg{};
+        std::string gzPath = htmlPath + ".gz";
+        if (_stat64(htmlPath.c_str(), &sh) == 0 &&
+            _stat64(gzPath.c_str(), &sg) == 0 && sg.st_mtime >= sh.st_mtime){
+          FILE* f = fopen(gzPath.c_str(), "rb");
+          if (f){
+            fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+            if (sz > 0){ body.resize((size_t)sz);
+                         if (fread(&body[0], 1, (size_t)sz, f) != (size_t)sz) body.clear(); }
+            fclose(f);
+            gzipped = !body.empty();
+          }
+        }
+      }
+      if (!gzipped){
+        FILE* f = fopen(htmlPath.c_str(), "rb");
+        if (f){
+          fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+          if (sz > 0){ body.resize((size_t)sz);
+                       if (fread(&body[0], 1, (size_t)sz, f) != (size_t)sz) body.clear(); }
+          fclose(f);
+        }
       }
     }
     if (!body.empty()){
       head = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
-             "Cache-Control: no-store\r\nConnection: close\r\n"
+             "Cache-Control: no-store\r\nConnection: close\r\n" +
+             std::string(gzipped ? "Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n" : "") +
              "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
     } else {
       body = "NOT FOUND\n";
@@ -1112,6 +1153,35 @@ struct Relay {
           u_long nb = 1; ioctlsocket(s, FIONBIO, &nb);
           BOOL nd = TRUE;
           setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (const char*)&nd, sizeof nd);
+          /* KEEPALIVE: a VANISHED host (lid closed, wifi dead, power cut)
+             freezes the whole session at the advance gate for the full
+             10 s input timeout before its seat drops.  A stalled session
+             is quiescent in BOTH directions (the relay initiates no
+             pings and broadcasts no PASS while the gate waits), so the
+             idle timer genuinely runs: probes at 3 s idle, 1 s apart,
+             3 misses = the conn resets in ~6 s and takes the existing
+             recv-error drop path (0x00 substitution resumes the rest).
+             Tuned SOFT on purpose: real wifi has 3-4 s blackouts that
+             TCP retransmission self-heals today and must keep healing
+             (a false drop costs a snapshot rejoin).  A frozen APP is
+             still kernel-ACKed -- the 10 s input timeout remains the
+             app-death detector.  The Win10 1709+ POSIX trio first; the
+             Vista SIO_KEEPALIVE_VALS fallback (fixed 10 probes) is
+             tuned to ~7 s, still under the 10 s it exists to beat. */
+          BOOL ka = TRUE;
+          setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, (const char*)&ka, sizeof ka);
+          DWORD kIdle = 3, kIntvl = 1, kCnt = 3;
+          if (setsockopt(s, IPPROTO_TCP, TCP_KEEPIDLE,
+                         (const char*)&kIdle, sizeof kIdle) ||
+              setsockopt(s, IPPROTO_TCP, TCP_KEEPINTVL,
+                         (const char*)&kIntvl, sizeof kIntvl) ||
+              setsockopt(s, IPPROTO_TCP, TCP_KEEPCNT,
+                         (const char*)&kCnt, sizeof kCnt)){
+            struct tcp_keepalive kav{1, 2000, 500};
+            DWORD kOut = 0;
+            WSAIoctl(s, SIO_KEEPALIVE_VALS, &kav, sizeof kav,
+                     nullptr, 0, &kOut, nullptr, nullptr);
+          }
           auto c = std::make_unique<Conn>();
           c->s = s; c->bornMs = now();
           conns.push_back(std::move(c));

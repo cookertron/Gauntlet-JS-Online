@@ -241,12 +241,25 @@ def main():
     json.loads(m.group(1).replace('<\\/', '</'))
 
     open(OUT, 'w', encoding='utf-8').write(out)
+    # a gzipped SIBLING for the relay's Accept-Encoding arm (~1/3 the
+    # bytes on the owner's uplink per joiner).  Written ATOMICALLY via a
+    # temp name + os.replace: the relay reads the .gz per request, and a
+    # fetch racing this write must never see a torn gzip -- a truncated
+    # html merely looks broken, a truncated gzip is a blank page.  The
+    # relay's mtime guard (gz >= html) keeps a rebuilt html honest until
+    # this lands.
+    import gzip
+    gz_bytes = gzip.compress(out.encode('utf-8'), 9)
+    tmp = OUT + '.gz.tmp'
+    with open(tmp, 'wb') as f:
+        f.write(gz_bytes)
+    os.replace(tmp, OUT + '.gz')
     print(f'payload {len(payload)} bytes -> escaped {len(escaped)} bytes, re-parsed OK')
     tc = assets['tile_closure']
     print(f'map {assets["map"]["w"]}x{assets["map"]["h"]}  '
           f'tiles={len(assets["tiles"])}  '
           f'tile closure {tc["pct"]}% ({tc["same"]}/{tc["total"]})')
-    print(f'wrote {OUT} ({len(out)} bytes)')
+    print(f'wrote {OUT} ({len(out)} bytes; .gz {len(gz_bytes)} bytes)')
 
 
 if __name__ == '__main__':

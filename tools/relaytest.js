@@ -12,6 +12,7 @@
 'use strict';
 const net = require('net');
 const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 
@@ -97,6 +98,45 @@ async function main(){
       s.on('connect', () =>
         s.write('GET / HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n'));
     });
+
+    /* ---- the gzip arm: Accept-Encoding gets the build-time .gz sibling,
+       and a REBUILT html with a stale .gz falls back to identity ------- */
+    const httpGet = hdrs => new Promise((resolve, reject) => {
+      const s = net.connect(PORT, '127.0.0.1');
+      let got = Buffer.alloc(0);
+      s.on('data', d => { got = Buffer.concat([got, d]); });
+      s.on('close', () => {
+        const he = got.indexOf('\r\n\r\n');
+        resolve({ head: got.subarray(0, he).toString('latin1'),
+                  body: got.subarray(he + 4) });
+      });
+      s.on('error', reject);
+      s.on('connect', () =>
+        s.write('GET / HTTP/1.1\r\nHost: t\r\n' + hdrs + 'Connection: close\r\n\r\n'));
+    });
+    const htmlP = path.join(ROOT, 'client', 'gauntlet.html');
+    {
+      const r = await httpGet('Accept-Encoding: gzip\r\n');
+      checkTrue('Accept-Encoding gzip serves the .gz sibling, magic bytes and all',
+                / 200 OK/.test(r.head) && /content-encoding: gzip/i.test(r.head) &&
+                r.body[0] === 0x1f && r.body[1] === 0x8b &&
+                parseInt(/content-length: (\d+)/i.exec(r.head)[1], 10) === r.body.length &&
+                r.body.length < 500000,
+                'len ' + r.body.length);
+      /* _stat64 mtimes are SECOND-granular, so the bumps must clear a
+         whole second -- as any real rebuild-vs-stale-sibling gap does */
+      const now = new Date(Date.now() + 2000);
+      fs.utimesSync(htmlP, now, now);              // html now NEWER than .gz
+      const r2 = await httpGet('Accept-Encoding: gzip\r\n');
+      checkTrue('a REBUILT html with a stale .gz serves IDENTITY, never a stale page',
+                / 200 OK/.test(r2.head) && !/content-encoding/i.test(r2.head) &&
+                r2.body.length > 500000);
+      const later = new Date(Date.now() + 4000);
+      fs.utimesSync(htmlP + '.gz', later, later);  // sibling fresh again
+      const r3 = await httpGet('Accept-Encoding: gzip\r\n');
+      checkTrue('...and the freshness test is PER REQUEST: a fresh .gz serves again',
+                /content-encoding: gzip/i.test(r3.head));
+    }
 
     /* ---- seating and the fresh boot -------------------------------- */
     const c0 = await new Ws().connect(PORT);

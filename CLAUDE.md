@@ -206,8 +206,35 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      and a SIM PAUSE (net.acc < -0.2 — only a pause's charge goes
      there, a network spike banks acc UP) sits the wire out exactly as
      stop-and-wait did.  `net.info()` is the paste-able diagnostic:
-     rate vs sim, worst stall, pipe depth.  **Later polish:** a
-     join-time character pick (the dir byte has two spare bits).
+     rate vs sim, worst stall, pipe depth.
+   - **Wire hardening (2026-09-01)**, the survivors of an adversarial
+     18-agent design review (12 proposals, 7 killed — notably: input-
+     on-change latching LOSES taps, snapshot compression saves nothing
+     because the snapshot wire MEASURES ~7.3 KB, and send-batching
+     shaves syscalls nobody feels; the PAGE, 844 KB, is the real join
+     payload).  Three landed: (1) the pipe CEILING adapts to measured
+     pass turnaround (`netPipeCap`: floor NET_PIPE 4 keeps LAN
+     bit-identical; rises toward pipeDepth 8, holding full sim rate to
+     ~560 ms turnaround in play and ~160 ms in the LOBBY, whose 20 ms
+     tick made the fixed window a mere 80 ms; `turn=`/`cap=` ride
+     net.info(), and turnaround is not pure RTT — the slowest
+     participant's pace is in it); (2) the relay serves
+     `client/gauntlet.html.gz` to Accept-Encoding clients (844→307 KB
+     on the owner's uplink per joiner; build.py writes the sibling
+     ATOMICALLY, and serveHttp's per-request mtime guard serves
+     identity for a rebuilt html until the fresh .gz lands); (3) soft
+     TCP keepalive on accepted sockets (3 s idle, 1 s apart, 3 probes
+     ≈ 6 s: a VANISHED host froze everyone for the full 10 s input
+     timeout; wifi's 3-4 s self-healing blackouts stay safely under
+     it, and a frozen app is still kernel-ACKed — the input timeout
+     remains the app-death detector).  Also KEPT for later, verified
+     but unbuilt: relay deadline-advance with movement-latched
+     substitutes (bounded ~300 ms wait when one seat stalls — the one
+     overhead pipelining cannot fix; caveats logged in the review) and
+     non-blocking late-join/resync; build them only if Sheffield's
+     net.info() shows worst= spikes beyond the pipe window.
+     **Later polish:** a join-time character pick (the dir byte has
+     two spare bits).
 4. **NEXT SESSION — FOUR PLAYERS (agreed with Anthony 2026-09-01).**
    Grow the sim to four player blocks and redesign the in-game HUD to
    fit four panels ("remove or shrink the player information", his

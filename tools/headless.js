@@ -8331,7 +8331,7 @@ if (process.argv[2] === '--table') {
     check('an echo drains one and the send clock refills the cap',
           [S.step, S.sentThrough - S.step], [base + 1, PIPE]);
     checkTrue('net.info() reports the live pipe, paste-able',
-              /depth=\d+ queue=\d+ rate=/.test(G.net.info()));
+              /depth=\d+ cap=\d+ queue=\d+ turn=\d+ms rate=/.test(G.net.info()));
     /* THE PIPE MUST DRAIN -- the field regression: the level-entry
        pause filled the pipe (sends kept firing while the display sat
        out the charge) and nothing ever drained it, so every keypress
@@ -8360,6 +8360,41 @@ if (process.argv[2] === '--table') {
     G.net.frame(0.1);
     check('...and the wire wakes with the display',
           sent.filter(m => m[0] === M.INPUT).length - quiet0, 1);
+    /* ---- the ADAPTIVE CEILING: the cap follows measured TURNAROUND
+       toward the relay's own queue depth (pipeDepth 8), so a slow link
+       holds full sim rate instead of collapsing into slow motion; LAN
+       turnarounds keep cap == NET_PIPE, bit-identical behaviour. */
+    while (S.sentThrough > S.step){          // flush the in-flight tail
+      H.message(Uint8Array.from([M.PASS, ...u32(S.step + S.pendQ.length), 2, 0, 0]));
+      while (S.pendQ.length) G.net.apply(S.pendQ.shift());
+    }
+    check('at LAN turnarounds the cap IS the constant', G.net.pipeCap(), PIPE);
+    let fakeT2 = 700000;
+    sandbox.performance = { now: () => fakeT2 };
+    for (let r = 0; r < 12; r++){
+      G.net.frame(0.1);                      // sends one tag, stamped now
+      fakeT2 += 400;                         // a 400 ms turnaround
+      H.message(Uint8Array.from([M.PASS, ...u32(S.step + S.pendQ.length), 2, 0, 0]));
+      G.net.frame(0.1);                      // applies
+    }
+    checkTrue('slow echoes raise the ceiling toward pipeDepth',
+              G.net.pipeCap() > PIPE && G.net.pipeCap() <= NP.pipeDepth,
+              'cap ' + G.net.pipeCap() + ' turn ' + Math.round(S.rttMs) + 'ms');
+    const capUp = G.net.pipeCap();
+    for (let i = 0; i < 14; i++) G.net.frame(0.1);   // echoes withheld
+    check('...and the send gate honours it: depth fills to the RAISED cap',
+          S.sentThrough - S.step, capUp);
+    for (let r = 0; r < 24; r++){            // fast echoes decay the EWMA
+      if (S.sentThrough === S.step) G.net.frame(0.1);
+      fakeT2 += 5;
+      H.message(Uint8Array.from([M.PASS, ...u32(S.step + S.pendQ.length), 2, 0, 0]));
+      G.net.frame(0.1);
+    }
+    check('fast echoes decay the ceiling back to the constant',
+          G.net.pipeCap(), PIPE);
+    checkTrue('net.info() carries turn= and cap= for the bench',
+              /cap=\d+ queue=\d+ turn=\d+ms/.test(G.net.info()));
+    delete sandbox.performance;
   }
 
   /* ---- NAMES: the session's name table is display metadata -- straight
