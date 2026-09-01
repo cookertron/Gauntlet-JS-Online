@@ -134,6 +134,18 @@ g.autoJoin(2);           // both players in and adjacent: tags show on a MEETING
 g.names[0] = 'ANTHONY';  // player 2's tag defaults to his character's name
 save(outdir, 'hud.png', cap => G.render(cap, g));
 
+/* ---------- death: the RIP hold over the frozen dungeon ----------------- */
+{
+  const d = G.seed({});
+  d.names[0] = 'ANTHONY';
+  d.health = 0;
+  for (let i = 0; i < 6 && d.mode === 'play'; i++){
+    d.onePass({});
+    if (d.levelDone) d.levelOver();
+  }
+  save(outdir, 'rip.png', cap => G.render(cap, d));
+}
+
 /* ---------- the options screen, boot-time, replacing the old escape menu */
 const F = G.frontend;
 function toOptions(){

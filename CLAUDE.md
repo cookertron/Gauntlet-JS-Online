@@ -144,6 +144,17 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      snapshot, or fingerprint(); a SNAPSHOT joiner's name applies
      (unlike his pick); seat reuse renames; offline the handover writes
      `game.names[0]`.
+   - **Death is just death** (2026-09-01): the $B3B9 three-letter
+     high-score entry is RETIRED — it asked for a name the player
+     already has, at the least welcome moment, and online it was a
+     desync by construction ($930C read the LOCAL keyboard inside a
+     lockstep tick).  Death shows RIP <name> (tagNameFor) over the
+     bones ($9404's drop, the corpse marker died/diedX/diedY at the
+     $93F2-snapped cell — snapshot-carried, display-only) for
+     OVER_RIP_FRAMES (250), immune to input, then $B35A's own tail:
+     dungeon 1, fresh block, attract.  Nothing files into the ranked
+     tables — hsInsert/hsDrawPage stay ported (attract furniture, tool
+     gates).  `overFrames` is fingerprinted now: it ends the hold.
    - `restore()` now repairs `feScr` (attract/rewind shadow screen) —
      found by the e2e: a mid-lobby joiner crashed the page redraw.
    - **The background-tab clock** (found by Anthony's first real test):

@@ -2243,8 +2243,12 @@ if (A.player_frames) {
   checkTrue('health 0000 -> dead, the main loop returns, and the engine is ' +
             'in the $B3B9 game-over loop', g.dead && g.levelDone &&
             g.mode === 'over', `mode ${g.mode}`);
-  check('the name field starts "AAA" with the cursor in column 0',
-        [g.name.slice(), g.nameCol], [[0x41, 0x41, 0x41], 0]);
+  /* THE NAME ENTRY IS RETIRED (this fork): the player has a NAME already,
+     so death records the CORPSE instead -- the $93F2-snapped cell, where
+     $9404's drop put the bones, for render()'s RIP <name> tag. */
+  check('death records the corpse at the $93F2-snapped cell',
+        [g.players[0].died, g.players[0].diedX, g.players[0].diedY],
+        [true, g.players[0].x & 0x7C, g.players[0].y & 0x7C]);
   /* THE WORLD STOPS.  $8491 advanced 0 over 100 video frames of $B3B9 on the
      real machine; here the pass counter and the whole map must be frozen. */
   {
@@ -2257,89 +2261,48 @@ if (A.player_frames) {
     check('but the VIDEO FRAME counter is the clock and it runs',
           g.overFrames >= 100, true);
   }
-  /* $930D..$931C -- the gate is 8 VIDEO FRAMES on the direction bits.
-     MEASURED: 30 gaps holding UP, all 8 frames (6.25 Hz). */
+  /* THE RIP HOLD: OVER_RIP_FRAMES video frames, and NOTHING ends it early
+     -- FIRE, SHIFT and the directions included, which keeps the original's
+     "no continue" truth by other means (the retired entry's FIRE was
+     measured dead for 400 frames too).  Then $B35A's own new-game tail
+     runs: dungeon 1, fresh block, the attract screen.  And the ranked
+     tables are NEVER written -- no scoreboard, just death. */
   {
-    const h = toGameOver();
-    const steps = [];
-    let last = h.name[0];
-    for (let i = 0; i < 200; i++) {
-      h.advance(1 / 50.08, { up: true });
-      if (h.name[0] !== last) { steps.push(i); last = h.name[0]; }
+    const RIP = G.constants.OVER_RIP_FRAMES;
+    const t0 = JSON.stringify(G.hiscore.tables.map(t => Array.from(t)));
+    const h = G.seed({});
+    h.score = 0x420000;      // would TOP the ranked table -- and must not
+    h.health = 0;
+    for (let i = 0; i < 6 && h.mode === 'play'; i++){
+      h.onePass({});
+      if (h.levelDone) h.levelOver();
     }
-    const gaps = [];
-    for (let i = 1; i < steps.length; i++) gaps.push(steps[i] - steps[i - 1]);
-    check('holding UP steps one letter every 8 video frames',
-          Array.from(new Set(gaps)), [8]);
-    /* $930D's gate reads a stamp $92C1 set one pass EARLIER (it runs from
-       $8509 inside the last live pass), so the FIRST step comes early.
-       MEASURED holding UP from the death: 4.72, 8.00, 8.00, 7.97, 8.00 ...
-       -- the engine's pass is a flat 4 frames, so it gives 4 then 8. */
-    check('and the first step comes early, because the stamp predates the loop',
-          steps[0] + 1, 4);
-    /* $937B/$9388/$9395 -- 27 slots, SPACE between Z and A */
-    const seen = [];
-    const k = toGameOver();
-    for (let i = 0; i < 8 * 30; i++) {
-      k.advance(1 / 50.08, { up: true });
-      if (!seen.length || seen[seen.length - 1] !== k.name[0]) seen.push(k.name[0]);
-    }
-    const alphabet = seen.slice(0, 28).map(c => String.fromCharCode(c)).join('');
-    check('the alphabet is 27 slots with SPACE between Z and A',
-          alphabet, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ A');
-    check('...and it is 27, not 26', new Set(seen).size, 27);
-  }
-  /* $932C..$9342 -- LEFT and RIGHT clamp at 0 and 2 */
-  {
-    const h = toGameOver();
-    const cols = [];
-    for (const inp of [{ right: 1 }, { right: 1 }, { right: 1 }, { left: 1 },
-                       { left: 1 }, { left: 1 }]) {
-      for (let i = 0; i < 8; i++) h.advance(1 / 50.08, inp);
-      cols.push(h.nameCol);
-    }
-    check('the cursor column clamps at 0 and 2', cols, [1, 2, 2, 1, 0, 0]);
-  }
-  /* $931A AND $20 -- the mask keeps BIT 5, so SHIFT commits even with the
-     repeat gate shut, and $93A8/$B3C6 end the loop on the SAME iteration. */
-  {
-    const h = toGameOver();
-    h.advance(1 / 50.08, {});                       // gate now shut
-    const before = h.mode;
-    h.advance(1 / 50.08, { potion: true });         // SHIFT
-    /* THIS EXPECTATION MOVED, and it moved because the port now reproduces a
-       rule it used to skip, not to keep a test green.  $93A8 (IX+14) = 0 /
-       JP $948C ends the $B3BC loop and $B3C6 falls into $B35A, whose $B374
-       is CALL $B470 -- THE ATTRACT SCREEN.  RE-MEASURED on the real Z80
-       rather than read off the disassembly: `python tools/fegate.py attract`
-       arms $842E = $80, marks player 1 dead, enters $B3B9 holding CAPS, and
-       the first of {$B470, $8767, $8503} the machine reaches is $B470, after
-       5,444 instructions.  So a committed name entry goes to the ranked
-       table and needs FIRE to get back into play; it does NOT drop straight
-       into a dungeon, which is what this check used to assert while the
-       attract loop was unported. */
-    checkTrue('SHIFT commits through a SHUT repeat gate, on the same iteration',
-              before === 'over' && h.mode === 'attract');
+    h.acc = 0;
+    for (let i = 0; i < RIP - 1; i++)
+      h.advance(1 / 50.08, { fire: true, potion: true, up: true });
+    check('held FIRE, SHIFT and UP never end the RIP hold early',
+          [h.mode, h.overFrames], ['over', RIP - 1]);
+    h.advance(1 / 50.08, {});
+    checkTrue('at OVER_RIP_FRAMES the hold ends BY ITSELF -- the attract screen',
+              h.mode === 'attract');
     check('and the new game is dungeon 1 with the score zeroed',
           [h.level, h.score, h.health, h.keys, h.dead],
           [1, 0, 0x2000, 0, false]);
-    check('the committed name is the one that was typed', h.hiscore.name, 'AAA');
-    /* FIRE does nothing at all during the entry (measured: held 400 frames,
-       no exit), so a ONE-player game has no continue. */
-    const f = toGameOver();
-    for (let i = 0; i < 400; i++) f.advance(1 / 50.08, { fire: true });
-    check('FIRE never ends the game-over loop in a one-player game',
-          f.mode, 'over');
+    check('...and the corpse marker went with the old dungeon',
+          h.players[0].died, false);
+    check('the ranked tables were never written: no scoreboard, just death',
+          JSON.stringify(G.hiscore.tables.map(t => Array.from(t))) === t0, true);
   }
   /* $84CC/$84CD are NOT cleared by $B35A.  MEASURED with a write-watch over
      $84B0..$84CF while running $B35A..$B381: the only writes are $84C8,
      $84C9 and $84BA.  So the REWIND TAPE prompt at $B48F is a cold-boot-only
      path, and a new game reuses the stash it still holds. */
   {
+    const RIP = G.constants.OVER_RIP_FRAMES;
     const h = toGameOver();
     h.tape.mask = 0x80; h.tape.want = 0xC0; h.tape.pos = 9;
     const loads = h.tape.loads;
-    for (let i = 0; i < 8; i++) h.advance(1 / 50.08, { potion: true });
+    for (let i = 0; i < RIP; i++) h.advance(1 / 50.08, {});
     check('a new game does NOT reset $84CC/$84CD or re-read the tape',
           [h.tape.mask, h.tape.want, h.tape.pos, h.tape.loads],
           [0x80, 0xC0, 9, loads]);
@@ -2350,7 +2313,7 @@ if (A.player_frames) {
        $B48F only looks at bit 7 on a cold boot. */
     const k = toGameOver();
     k.tape.mask = 0x06; k.tape.pos = 9;              // bit 7 already gone
-    for (let i = 0; i < 8; i++) k.advance(1 / 50.08, { potion: true });
+    for (let i = 0; i < RIP; i++) k.advance(1 / 50.08, {});
     check('but a mask with bit 7 gone makes dungeon 1 demand the $80 block',
           [k.tape.mask, k.tape.pos], [0x80, 0]);
   }
@@ -2859,6 +2822,19 @@ if (A.player_frames) {
     const gTop = Math.min(...diffPos('#00ff00').map(p => p[1]));
     check('...and adjacent tags STACK: the 81 VALKYRIE px sit clear above AB',
           diffPos('#00ffff').filter(p => p[1] < gTop).length, 81);
+    /* --- the RIP tag: a corpse wears RIP <name> ALWAYS -- no meeting
+       needed, the death is the show -- in the character's own ink held
+       STEADY (no low-health flash on a tombstone).  RIP+space is 31 px,
+       VALKYRIE 81: 112 cyan one-by-ones at the poked corpse cell. */
+    const gR = G.seed({});
+    const baseR = paint(gR);
+    gR.players[1].died = true;
+    gR.players[1].diedX = (gR.camX + 24) & 0xFF;
+    gR.players[1].diedY = (gR.camY + 24) & 0xFF;
+    const ripped = paint(gR);
+    check('a corpse wears RIP VALKYRIE, no meeting needed: 112 px, his ink',
+          pix(ripped, '#00ffff') - pix(baseR, '#00ffff'), 112);
+    gR.players[1].died = false;
   }
 
   /* --- both players drain, and the HUD round robin is FOUR passes long */

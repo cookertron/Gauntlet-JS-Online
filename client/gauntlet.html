@@ -4185,9 +4185,13 @@ class Player{
        carry, so $C2 + $40 = $02 and bit 1 survives the wrap.  MEASURED on the
        real Z80 while stuck against a lone pad: $842E = 42 40 82 80 02 00. */
     this.eBits = 0; this.lastBlocked = ''; this.symHeld = false;
-    /* $92A6's per-player name entry: (IX+$19) the cursor and (IX+$1A) the
-       8-video-frame stamp, printed at $5086 (p1) or $5097 (p2). */
-    this.name = [0x41,0x41,0x41]; this.nameCol = 0; this.nameStamp = 0;
+    /* the CORPSE MARKER (ADDED, this fork -- the $92A6 name entry it
+       replaced is retired, see overTick): deathPass records the
+       $93F2-snapped death cell, where $9404's drop puts the bones, and
+       render() writes RIP <name> over it.  Cleared by the join ($9451
+       is a revive) and by startLevel -- a new dungeon has no old
+       corpses.  Display reads it, no rule does. */
+    this.died = false; this.diedX = 0; this.diedY = 0;
   }
   /* (IX+$14) bit 7 -- the ONE flag that says whether this player exists.
      Cleared only at $9451, set at $93EE (death) and $9460 (join refused). */
@@ -4242,9 +4246,9 @@ class Game{
   get teleportFlight(){return (this.p.animCtl & 4) !== 0;}
   set teleportFlight(v){this.p.animCtl = v ? (this.p.animCtl | 4)
                                            : (this.p.animCtl & ~4);}
-  get name(){return this.p.name;}           set name(v){this.p.name=v;}
-  get nameCol(){return this.p.nameCol;}     set nameCol(v){this.p.nameCol=v;}
-  get nameStamp(){return this.p.nameStamp;} set nameStamp(v){this.p.nameStamp=v;}
+  get died(){return this.p.died;}           set died(v){this.p.died=v;}
+  get diedX(){return this.p.diedX;}         set diedX(v){this.p.diedX=v;}
+  get diedY(){return this.p.diedY;}         set diedY(v){this.p.diedY=v;}
   /* THE OTHER BLOCK.  `LD A,IXL / AND $20` appears fourteen times in the
      image and in six of them ($96B4, $A924, $A944, $AAC4 and the two shove
      entries) it means "give me the OTHER player".  IXL is $20 for $8420 and
@@ -4561,11 +4565,7 @@ class Game{
        tape.mask's bit 7 early -- so the flag $B48F tests is carried here
        instead of read back out of the mask. */
     this.packHeld = false;
-    this.name = [0x41,0x41,0x41];   // the pending record's name field, "AAA"
-    this.nameCol = 0;               // (IX+$19), the cursor column 0..2
-    this.nameStamp = 0;             // (IX+$1A), the 8-video-frame repeat stamp
-    this.overFrames = 0;            // frames spent in $B3B9
-    this.hiscore = null;            // the committed {name, score} record
+    this.overFrames = 0;            // frames spent in $B3B9 (the RIP hold)
     /* ---- PLAYER 2, exactly as the tape ships him -------------------
        Block C's own bytes at $8440 (read straight off tape side 1, block
        flag $82, offset $40, and confirmed by a write-watch over a whole
@@ -4758,6 +4758,8 @@ class Game{
 
   startLevel(level){
     this.level = level & 0xFF;                          // $8403
+    /* a new dungeon has no old corpses: the RIP markers die with the map */
+    if (this.players) for (const q of this.players) q.died = false;
     this.hurry = 0;                                     // $B3D1 $84B8 = 0
     this.levelDone = false; this.gameOver = false;      // $B3D7 $847D = 0
     this.hurryDoors = false; this.hurryExits = false;   // $B3D7, the same byte
@@ -5078,6 +5080,7 @@ class Game{
     if (this.animCtl !== 0) return;                      // $9445 -> $92A6
     if (!(this.dir & DIR_FIRE)) return;                  // $944C BIT 4,(IX+7)
     this.p14 &= 0x7F; this.dead = false;                 // $9451 RES 7
+    this.died = false;                    // a revive takes the RIP marker down
     const placed = this.place();                         // $9455 CALL $9689
     if (!placed && this.level !== 1){                    // $945A DEC A / JR z
       this.p14 |= 0x80; this.dead = true;                // $9460 SET 7
@@ -8081,6 +8084,9 @@ class Game{
     this.f11 |= 0xC3;                                    // $93E6 OR $C3
     this.p14 |= 0x80; this.dead = true;                  // $93EE SET 7
     const C = this.x & 0x7C, B = this.y & 0x7C;          // $93F2 AND $7C
+    /* the corpse marker (ADDED): render() writes RIP <name> here -- the
+       same snapped cell $9404's drop puts the bones on */
+    this.died = true; this.diedX = C; this.diedY = B;
     /* $93FE CALL $B23B -- and this one is easy to miss, because it reads like
        bookkeeping: it runs the PLAYER'S OWN 7x7 scan at the snapped death
        position and swap-removes every actor it finds, looping until the box
@@ -9011,115 +9017,59 @@ class Game{
   /* =====================================================================
      $B3B9 -- THE POST-DEATH LOOP.  THE WORLD STOPS HERE.
      =====================================================================
-     $9354, which every profile of a dead machine shows as the hot PC, is not
-     a loop of its own: it is the middle of $930C, the three-letter HIGH-SCORE
-     NAME ENTRY, and the loop around it is
+     The loop is $B3B9 CALL $9432 / $B3BC test / $B3C6 DI JP $B35A -- a
+     brand-new game -- and on the original what runs inside it is $930C,
+     the three-letter HIGH-SCORE NAME ENTRY (the AAA field, the 8-frame
+     input gate, the 27-slot alphabet, SHIFT committing through $93A8).
 
-        $B3B9  CALL $9432
-        $B3BC  LD A,($842E) / OR ($844E) / AND $FE / JR nz,$B3B9
-        $B3C6  ($84BB) -> ($84C5) / DI / JP $B35A        a BRAND NEW GAME
+     THE NAME ENTRY IS RETIRED (this fork).  The player already HAS a
+     name -- the options row, worn over his head in play -- so a
+     three-letter entry asked for something known, at the least welcome
+     moment; and ONLINE it was unrunnable anyway: $930C reads the LOCAL
+     keyboard inside a lockstep tick, which is a desync by construction
+     (nameCol and nameStamp sat in fingerprint()).  Death now shows the
+     frozen dungeon, the bones ($9404's drop, untouched), and RIP <name>
+     over the corpse (see the tag pass in render()) for OVER_RIP_FRAMES
+     -- clocked on $8497, the VIDEO FRAME counter, the loop's only clock
+     ($8491, the pass counter, is frozen; measured 0 over 100 frames) --
+     and then $B35A's own new-game tail runs unchanged: fresh block,
+     dungeon one, the attract loop.  No table is written.
 
-     FIVE THINGS A PORT MUST GET RIGHT, in order of how easy they are to get
-     wrong.  All five are transcribed below and the first three were measured
-     on the real Z80 rather than read:
-
-     1. THE LOOP IS UNPACED.  It contains no HALT; the frozen dungeon is
-        redrawn 27 times a video frame.  $8491, the PASS counter, is FROZEN
-        throughout, so nothing here may be driven per pass -- the only clock
-        is $8497, the VIDEO FRAME counter.  The engine therefore ticks this
-        loop once per video frame: within one frame the gate below is open on
-        at most one iteration, so one tick per frame and 27 are
-        indistinguishable in everything except sub-frame commit latency.
-     2. THE INPUT GATE IS EIGHT VIDEO FRAMES AND IT DOES NOT MASK SHIFT.
-          $930D  LD A,($8497) / SUB (IX+$1A) / CP 8 / JR nc,$9321
-          $9317  LD A,(IX+7) / AND $20 / LD (IX+7),A
-        -- the four DIRECTION bits are discarded while the gate is shut and
-        bit 5 SURVIVES, so a held SHIFT commits instantly while a held UP
-        steps at 6.25 Hz.
-     3. THE ALPHABET IS 27 SLOTS, NOT 26.  $937B INC A / CP $5B -> $40 and
-        $9388 DEC A / CP $3F -> $5A, with $9395 CP $40 -> $20 folding the
-        pseudo-slot to SPACE on the way out and $9374 CP $20 -> $40 folding
-        it back on the way in.  SPACE sits BETWEEN Z AND A.
-     4. THE CURSOR IS AN ATTRIBUTE SWAP OF THE CELL ONE ROW BELOW.  $9350
-        reads the attribute at fieldOrigin+$0A20 (row 21, static panel art),
-        $9358 swaps its ink and paper nibbles and ORs $40, and $9369 writes
-        that at row 20.  It is a STABLE inverse-video block, not a flash: a
-        port that toggles the attribute in place gets a 1.4 kHz flicker.
-     5. COMMITTING ENDS THE LOOP ON THE SAME ITERATION ($93A3 BIT 5 / $93A8
-        (IX+14)=0 / JP $948C), so in a ONE-PLAYER game the rejoin at $9440 is
-        unreachable and the only outcome is a brand-new game at dungeon 1.
-        AN ENGINE THAT POLLS FIRE AFTER THE COMMIT INVENTS A CONTINUE THE
-        ORIGINAL DOES NOT HAVE.
-
-     THE RANKED TABLES ARE PORTED: the four 60-byte tables at $8826
-     (HS_TABLES), the insertion sort $86ED (hsInsert, gated by `python
-     tools/fegate.py hiscore`) and the four-page attract display $8767, one
-     page per 256 video frames (hsDrawPage, gated byte for byte by `python
-     tools/rankgate.py`).  A note here once read "NOT PORTED, deliberately"
-     of all three and it was already false when it was written -- reading it
-     instead of grepping cost a whole duplicate renderer.
-     STILL NOT PORTED, and deliberately: the REWIND TAPE prompt ($B48F), a
-     cold-boot-only path because $84CC bit 7 is set by $91D4 and never
+     THE RANKED TABLES REMAIN PORTED AND SHOWN: the four 60-byte tables
+     at $8826 (HS_TABLES), the insertion sort $86ED (hsInsert, still
+     gated by `python tools/fegate.py hiscore`) and the four-page attract
+     display $8767 (hsDrawPage, gated by `python tools/rankgate.py`).
+     Nothing files into them any more -- the attract cycle shows the
+     capture's own residents, as arcade furniture.
+     STILL NOT PORTED, and deliberately: the REWIND TAPE prompt ($B48F),
+     a cold-boot-only path because $84CC bit 7 is set by $91D4 and never
      cleared, and left out because the tape prompts do not belong in this
-     port.  The committed name is kept in `hiscore` and shown.             */
+     port. */
+  static get OVER_RIP_FRAMES(){ return 250; }   // five seconds of RIP
   enterGameOver(){
     this.mode = 'over';
-    /* $93E2 LD (IX+14),$80 arms it; $92C1 sets it up: $B694 blanks 15 cells
-       from column 0 of this player's half of row 20 (so the character name
-       goes), three $41s print "AAA", (IX+$19) = 0 and (IX+$1A) = ($8497). */
-    this.name = [0x41,0x41,0x41];
-    this.nameCol = 0;
-    /* $92C1's setup is reached from $8509 CALL $A38A -> $9432 on the pass
-       AFTER the death, i.e. while the main loop is still running, so the
-       stamp (IX+$1A) is already about one pass old by the time $B3B9 starts.
-       MEASURED holding UP from the death: the gaps between letters are
-       4.72, 8.00, 8.00, 7.97, 8.00 ... video frames -- the first one short.
-       The engine's pass is exactly 4 frames, so backdating the stamp by one
-       pass reproduces the short first gap; the 0.72 is the part of a pass
-       that the engine's fixed 4 cannot carry. */
-    this.nameStamp = (this.frameCtr - FRAMES_PER_PASS) & 0xFF;
+    /* $93E2 LD (IX+14),$80 arms the chain; the entry's own setup ($92C1's
+       AAA, cursor and stamp) is retired with it -- the hold is a timer. */
     this.overFrames = 0;
     this.gameOver = true;
-    this.hiscore = null;
   }
 
-  /* One iteration of $B3B9 -> $9432 -> $930C, driven once per VIDEO FRAME. */
-  overTick(input){
+  /* One iteration of $B3B9, driven once per VIDEO FRAME.  No input: the
+     entry is retired (see above), so death holds its RIP picture for
+     OVER_RIP_FRAMES and nothing -- FIRE included -- can cut it short,
+     which keeps the original's "no continue" truth by other means. */
+  overTick(){
     this.frameCtr = (this.frameCtr + 1) & 0xFF;          // the ISR's $8497
     this.overFrames++;
-    /* $B3B9's loop still runs $9432, so the name entry reads the SAME
-       ($8427) that $855D's dispatch writes -- its direction keys change with
-       ($FFFC) while its commit ("MAGIC BUTTON SETS NAME") is CAPS SHIFT in
-       all four methods, because $857E is outside the dispatch. */
-    let d = 0;
-    if (input && input.kb) d = controlRead(this.method1, input.kb);
-    else {
-      if(input.up) d|=DIR_UP; if(input.down) d|=DIR_DOWN;
-      if(input.left) d|=DIR_LEFT; if(input.right) d|=DIR_RIGHT;
-      if(input.fire) d|=DIR_FIRE; if(input.potion) d|=DIR_POTION;
-    }
-    /* $930D: the gate, on the VIDEO FRAME counter, and note the subtraction
-       is a byte subtraction -- ($8497 - stamp) & $FF. */
-    if (((this.frameCtr - this.nameStamp) & 0xFF) < 8) d &= 0x20;  // $931A
-    else this.nameStamp = this.frameCtr;                 // $9324
-    if ((d & DIR_LEFT) && this.nameCol > 0) this.nameCol--;   // $932C..$9336
-    if ((d & DIR_RIGHT) && this.nameCol < 2) this.nameCol++;  // $9337..$9342
-    let a = this.name[this.nameCol];
-    if (a === 0x20) a = 0x40;                            // $9374 CP $20
-    if (d & DIR_UP)  { a = (a+1)&0xFF; if (a === 0x5B) a = 0x40; }  // $937B
-    if (d & DIR_DOWN){ a = (a-1)&0xFF; if (a === 0x3F) a = 0x5A; }  // $9388
-    if (a === 0x40) a = 0x20;                            // $9395
-    this.name[this.nameCol] = a;                         // $939B
-    if (d & DIR_POTION){                                 // $93A3 BIT 5 -- SHIFT
-      this.commitName();
+    if (this.overFrames >= Game.OVER_RIP_FRAMES){
+      this.endGameOver();
       return true;
     }
     return false;
   }
 
-  /* $93A8 (IX+14) = 0 / JP $948C, which is what clears $842E and therefore
-     what ends the $B3BC loop test on THIS iteration; then $B3C6 falls through
-     to $B35A, the new game:
+  /* $93A8 (IX+14) = 0 / JP $948C ends the $B3BC loop test; then $B3C6
+     falls through to $B35A, the new game:
         $B35A  clear $7F1B..$7F2A, $84C8 = $84C9 = 0 (the million counters)
         $B36B  $8403 = $842C = $844C = 1        <-- dungeon ONE
         $B374  CALL $B470 -- THE ATTRACT SCREEN, now ported (enterAttract)
@@ -9127,20 +9077,11 @@ class Game{
         $B381  DI / CALL $B3D0 / ... / CALL $8503
      The score is NOT carried over: $B35A's new game starts a fresh player
      block.  $84CC/$84CD and the stash are NOT cleared, which is why the
-     REWIND TAPE prompt is a cold-boot-only path.                           */
-  commitName(){
-    this.hiscore = {name: this.name.map(c=>String.fromCharCode(c)).join(''),
-                    score: this.score, level: this.level};
-    /* $93AF/$93B5 allocate the PENDING RECORD at $7F2B + 8*($84C6) and bump
-       the count; $869F then files every pending record into the table its
-       OWN tag names ($8818), which is why a two-player game over writes two
-       different tables.  The record is 8 bytes: score[3] high first, name[3]
-       ASCII, the character tag ($8433/$8453), and the millions counter
-       ($84C8/$84C9, planted by $92B7 self-modifying $9304's operand). */
-    const filed = hsInsert(HS_TABLES[(this.shotTag >> 3) & 3],
-                           hsKey({score: this.score, name: this.name.slice(),
-                                  millions: this.millions}));
-    this.hiscore.filed = filed;      // false = it beat nobody and was thrown away
+     REWIND TAPE prompt is a cold-boot-only path.  The $93AF pending
+     record -- the hiscore filing that used to sit at the top of this
+     tail -- is retired with the name entry; everything below it is
+     $B35A's own, unchanged. */
+  endGameOver(){
     this.millions = 0;                                   // $B364/$B367
     this.score = 0;                                      // a new player block
     this.health = 0x2000; this.keys = 0; this.potions = 0;
@@ -9428,7 +9369,7 @@ class Game{
   stepTick(input){
     const s = this.tickSeconds();
     this.acc -= s; this.simT += s;
-    if (this.mode === 'over') return this.overTick(input);
+    if (this.mode === 'over') return this.overTick();
     /* $B470 and $B494 are VIDEO-FRAME loops with no HALT in them and no
        passes at all -- the third and fourth clocks in this file.  $8491 is
        not touched while either runs, exactly as it is not during $B3B9. */
@@ -9617,8 +9558,6 @@ class Game{
     for(const q of this.players){
       mix(q.shot.x);mix(q.shot.y);mix(q.shot.state);
       mix(q.shotTag);mix(q.charIndex);mix(q.dead?1:0);
-      mix(q.name[0]);mix(q.name[1]);mix(q.name[2]);
-      mix(q.nameCol);mix(q.nameStamp);
     }
     mix(this.b3);
     mix(this.levelDone?1:0);mix(this.gameOver?1:0);
@@ -9631,11 +9570,13 @@ class Game{
        orientations the map is built in and $84B6/$84B7 how long a treasure
        room lasts -- every one of them changes the dungeon you get.  The
        stash and the tape position are the same state in another shape.
-       The name-entry letters and the cursor column are in as well: they are
-       the input state of the $B3B9 loop, and they decide when it ends.
-       DISPLAY-ONLY and therefore excluded, as ever: `hiscore` (the record
-       this engine shows) and overFrames.  `feScr` is display too -- it is
-       the shadow screen $B470 and $B494 draw into.                        */
+       The game-over clock is in as well: overFrames is what ends the
+       $B3B9 RIP hold, so it is simulation now (it was display-only while
+       the retired name entry decided the ending).  DISPLAY-ONLY and
+       therefore excluded, as ever: the corpse markers (died/diedX/diedY
+       -- carried in the snapshot so a late joiner shows the same RIP,
+       but no rule reads them) and `feScr`, the shadow screen $B470 and
+       $B494 draw into.                                                  */
     mix(this.tape.mask);mix(this.tape.want);mix(this.tape.pos);
     mix(this.tape.loads);
     for(const s of this.tape.stash) mix(s===null?0xFF:s);
@@ -9643,7 +9584,7 @@ class Game{
     mix(this.treasureTimer);mix(this.treasureDiv);mix(this.forcedOver?1:0);
     mix(this.brngState);mix(this.brngState>>8);
     mix(this.brngState>>16);mix(this.brngState>>24);
-    mix(this.mode==='over'?1:0);
+    mix(this.mode==='over'?1:0);mix(this.overFrames);
     /* $84CB and $84CC bit 7 -- THE ATTRACT SCREEN'S OWN STATE, and both are
        simulation.  $84CB is the page counter and $B35A does NOT reset it, so
        a second game resumes the rotation rather than restarting at WARRIOR;
@@ -9695,7 +9636,6 @@ class Game{
       const o = {};
       for (const k of SNAP_PLAYER) o[k] = q[k];
       o.shot = {x: q.shot.x, y: q.shot.y, state: q.shot.state};
-      o.name = q.name.slice();
       o.dmgRow = q.dmgRow.slice();
       o.ghostDmg = q.ghostDmg.slice();
       o.foeDmg = q.foeDmg.slice();
@@ -9752,7 +9692,6 @@ class Game{
       for (const k of SNAP_PLAYER) q[k] = sp[k];
       q.shot.x = sp.shot.x; q.shot.y = sp.shot.y; q.shot.state = sp.shot.state;
       q.shot.drawX = sp.shot.x; q.shot.drawY = sp.shot.y; q.shot.drawn = false;
-      q.name = sp.name.slice();
       q.dmgRow = sp.dmgRow.slice();
       q.ghostDmg = sp.ghostDmg.slice();
       q.foeDmg = sp.foeDmg.slice();
@@ -9800,7 +9739,7 @@ const SNAP_PLAYER = [
   'x', 'y', 'dir', 'health', 'score', 'keys', 'potions', 'timer', 'f11',
   'levelOwn', 'bannerBonus', 'frameSlot', 'animCtl', 'shotTag', 'p14',
   'p15', 'exitCtr', 'exitFrames', 'dead', 'millions', 'hoardKey',
-  'charIndex', 'eBits', 'nameCol', 'nameStamp',
+  'charIndex', 'eBits', 'died', 'diedX', 'diedY',
   'camX', 'camY', 'camTgtX', 'camTgtY', 'camLive',
   'pend', 'pendCol', 'pendRow',
 ];
@@ -10492,6 +10431,9 @@ function drawHud(ctx, g){
     }
   }
   for (const q of g.players) drawPanel(ctx, g, q);
+  /* (the $92C1 game-over NAME ENTRY that used to draw here is retired --
+     see overTick: death shows RIP <name> over the bones instead, drawn by
+     the tag pass in render().) */
   /* the live counters, per player.  $B7C7's `LD A,L / ADD A,$20` is how the
      same hardcoded $8422/$8424 reach player 2's block, and $B722's $50DA is
      how they reach his half of the screen. */
@@ -10524,41 +10466,6 @@ function drawHud(ctx, g){
         drawGlyph(ctx, 0x20, col, kRow, null);
     }
   }
-  if (g.mode === 'over') drawNameEntry(ctx, g);
-}
-
-/* $92C1..$930B and $9344..$9372 -- WHAT THE GAME-OVER LOOP PUTS ON SCREEN.
-   The world behind it is the frozen dungeon; the only thing that changes is
-   this, in player 1's half of HUD row 20:
-
-     $92C2  HL = DE - 6 -> $5080, and $B694 blanks FIFTEEN cells from there,
-            which is why the character name ("ELF") disappears
-     $92CE  LD B,3 / LD A,$41 / CALL $B6C0 -- three "A"s at $5086, i.e. row
-            20 columns 6,7,8
-     $9350  HL = $0A20 + DE: the attribute the cursor uses is read from the
-            cell ONE CHARACTER ROW BELOW ($5AA6 = row 21, static panel art)
-     $9358  C = ((a & 7) << 3) | ((a >> 3) & 7) | $40 -- ink and paper
-            swapped, forced BRIGHT
-     $9369  and written at $5A00 + E + column, i.e. row 20's attribute
-
-   MEASURED on the real Z80: row 21's attributes are $44 all the way across,
-   the swap makes $60, and $5A86 read $60 on 60 of 60 consecutive iterations
-   of $B3B9 -- a STABLE inverse-video block, not a flash.  Moving the cursor
-   writes the UNSWAPPED value back to the old column, which is the erase.  */
-const NAME_ROW = PLAYFIELD_ROWS, NAME_COL = 6;
-/* $92A6 chooses $5086 or $5097 by `LD A,IXL / AND $20`, so a dead player
-   types his name in HIS OWN half of the panel -- 17 columns apart -- while
-   the other one is still playing.  PROVISIONAL: this engine's `over` mode is
-   still one global loop and only player 1's entry is driven; the geometry is
-   ported, the two-player game-over chain is not.  See NOTES-engine.md. */
-function drawNameEntry(ctx, g){
-  const c0 = 0;
-  for (let i = 0; i < 15; i++) drawGlyph(ctx, 0x20, c0 + i, NAME_ROW, null);
-  const src = HUD_ATTR[(NAME_ROW + 1 - PLAYFIELD_ROWS)*32 + NAME_COL + g.nameCol];
-  const cur = (((src & 7) << 3) | ((src >> 3) & 7) | 0x40) & 0xFF;   // $9358
-  for (let i = 0; i < 3; i++)
-    drawGlyph(ctx, g.name[i], NAME_COL + i, NAME_ROW,
-              i === g.nameCol ? cur : null);
 }
 
 /* ---- a whole Spectrum display file, $4000..$5AFF ---------------------
@@ -10998,6 +10905,40 @@ function render(ctx,g){
      sprite and shot, so it is never buried; within 7 px of the playfield
      top it drops BELOW the sprite instead of clipping. */
   {
+    /* ADJACENT TAGS STACK.  Found by the staged shot: $9689's join ring
+       places players 16 px apart, so two centred tags overlap exactly
+       when tags exist at all -- at a meeting.  Each tag takes the first
+       clear line: up in 6 px steps from the preferred spot, and if the
+       top of the playfield runs out, below the sprite instead. */
+    const placed = [];
+    const put = (text, psx, psy, ink) => {
+      if (!text) return;
+      const w = text.length * 5 - 1, x0 = psx + 8 - (w >> 1);
+      const hits = y => placed.some(r => y < r.y + 5 && r.y < y + 5 &&
+                                         x0 < r.x + r.w && r.x < x0 + w);
+      let y = psy >= 7 ? psy - 7 : psy + 17;
+      while (y >= 0 && hits(y)) y -= 6;
+      if (y < 0){
+        y = psy + 17;
+        while (y < PLAYFIELD_H - 5 && hits(y)) y += 6;
+      }
+      placed.push({x: x0, y, w});
+      const pal = (ink & 0x40) ? PAL_BRT : PAL_DIM;
+      drawNameTag(ctx, text, psx + 8, y, pal[ink & 7]);
+    };
+    /* RIP TAGS FIRST -- every corpse wears one, meeting or not: the death
+       IS the show (this fork's whole game-over screen; see overTick).
+       diedX/diedY are the $93F2-snapped death cell, where $9404's drop
+       put the bones; the ink is the character's own held STEADY (panelInk
+       at frame 0 -- a corpse's zero health would otherwise flash the tag
+       black forever). */
+    for (const q of g.players){
+      if (!q.died) continue;
+      const psx=(((q.diedX-dcamX)&0x7E)>>1)*8+SPRITE_DX,
+            psy=(((q.diedY-dcamY)&0x7E)>>1)*8+SPRITE_DY;
+      if (psx > -16 && psx < 256 && psy > -16 && psy < PLAYFIELD_H)
+        put('RIP ' + tagNameFor(g, q), psx, psy, panelInk(q, 0));
+    }
     const vis = [];
     for (const q of g.players){
       if (q.f11 & F_DEAD) continue;
@@ -11007,31 +10948,8 @@ function render(ctx,g){
       if (psx > -16 && psx < 256 && psy > -16 && psy < PLAYFIELD_H)
         vis.push({q, psx, psy});
     }
-    /* ADJACENT TAGS STACK.  Found by the staged shot: $9689's join ring
-       places players 16 px apart, so two centred tags overlap exactly
-       when tags exist at all -- at a meeting.  Each tag takes the first
-       clear line: up in 6 px steps from the preferred spot, and if the
-       top of the playfield runs out, below the sprite instead. */
-    if (vis.length >= 2){
-      const placed = [];
-      for (const v of vis){
-        const nm = tagNameFor(g, v.q);
-        if (!nm) continue;
-        const w = nm.length * 5 - 1, x0 = v.psx + 8 - (w >> 1);
-        const hits = y => placed.some(r => y < r.y + 5 && r.y < y + 5 &&
-                                           x0 < r.x + r.w && r.x < x0 + w);
-        let y = v.psy >= 7 ? v.psy - 7 : v.psy + 17;
-        while (y >= 0 && hits(y)) y -= 6;
-        if (y < 0){
-          y = v.psy + 17;
-          while (y < PLAYFIELD_H - 5 && hits(y)) y += 6;
-        }
-        placed.push({x: x0, y, w});
-        const ink = panelInk(v.q, g.frameCtr);
-        const pal = (ink & 0x40) ? PAL_BRT : PAL_DIM;
-        drawNameTag(ctx, nm, v.psx + 8, y, pal[ink & 7]);
-      }
-    }
+    if (vis.length >= 2) for (const v of vis)
+      put(tagNameFor(g, v.q), v.psx, v.psy, panelInk(v.q, g.frameCtr));
   }
 
   /* ---- the HUD ------------------------------------------------------
@@ -11791,6 +11709,7 @@ globalThis.__GAUNTLET__={
       get slowdown(){ return loadSlowdown; },
       set slowdown(v){ loadSlowdown = !!v; }},
   constants:{FRAMES_PER_PASS,FRAME_HZ,PASS_SECONDS,STEP,MAP_W,MAP_H,UNITS,PXU,
+             OVER_RIP_FRAMES:Game.OVER_RIP_FRAMES,
              CELL,PLAYFIELD_ROWS,CAM_MIN,CAM_CX,CAM_CY,
              CAM_MAX_X,CAM_MAX_Y,ACT_CULL_X,ACT_CULL_Y,ACT_DIRMASK,ACT_DEFLECT,
              DIR_UP,DIR_DOWN,DIR_LEFT,DIR_RIGHT,
