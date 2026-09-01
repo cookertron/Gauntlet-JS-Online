@@ -60,7 +60,7 @@ The C++ relay server (`server/relay.cpp`, protocol in
 vcvars64 && cmake -S server -B server\build -G Ninja
          && ninja -C server\build
 python tools/protocheck.py                 # protocol constants in sync
-node tools/relaytest.js                    # the relay's own gate (33 checks)
+node tools/relaytest.js                    # the relay's own gate (37 checks)
 server\build\gauntlet-relay.exe            # run it (--port 33792 --seats 2)
 ```
 
