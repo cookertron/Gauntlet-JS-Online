@@ -5,6 +5,7 @@
   "defaultSeats": 2,
   "fpEvery": 32,
   "nameLen": 8,
+  "pipeDepth": 8,
   "limits": {
     "frameMax": 262144,
     "messageMax": 1048576,

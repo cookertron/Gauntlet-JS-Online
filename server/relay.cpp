@@ -57,6 +57,7 @@ constexpr int      MAX_SEATS           = 4;
 constexpr int      DEFAULT_SEATS       = 2;
 constexpr uint32_t FP_EVERY            = 32;
 constexpr int      NAME_LEN            = 8;
+constexpr int      PIPE_DEPTH          = 8;
 constexpr uint32_t LIM_FRAME_MAX       = 262144;
 constexpr uint32_t LIM_MESSAGE_MAX     = 1048576;
 constexpr uint32_t LIM_HANDSHAKE_MAX   = 8192;
@@ -505,8 +506,11 @@ struct Conn {
   std::vector<uint8_t> frag;
   int seat = -1;
   bool ready = false;             // sim booted/restored; counted by the loop
-  bool hasInput = false;
-  uint32_t inPass = 0; uint8_t inDir = 0;
+  /* the INPUT PIPELINE: a client may run up to PIPE_DEPTH passes ahead
+     of the loop, and the bytes queue here in order.  `inBase` is the
+     pass the FRONT byte is for (meaningful only while non-empty). */
+  std::deque<uint8_t> inputs;
+  uint32_t inBase = 0;
   bool hasFp = false;
   uint32_t fpPass = 0, fpVal = 0;
   uint64_t bornMs = 0;            // for the handshake timeout
@@ -720,8 +724,8 @@ struct Relay {
         if (idx < 0) continue;                         // empty: 0x00
         Conn& c = *conns[idx];
         if (!c.ready) return;
-        if (!c.hasInput || c.inPass != pass) return;
-        dirs[i] = c.inDir;
+        if (c.inputs.empty() || c.inBase != pass) return;
+        dirs[i] = c.inputs.front();
       }
       if (seatMask() == 0) return;                     // nobody to advance for
       std::vector<uint8_t> m; m.push_back(MSG_PASS);
@@ -731,9 +735,18 @@ struct Relay {
       for (auto& c : conns)
         if (c->open && c->state == Conn::UP && c->seat >= 0 && c->ready)
           queueMsg(*c, m);
+      /* consume this pass's byte from every contributing queue; the
+         rest of a pipeline stays for the passes it names */
+      for (int i=0;i<seatsN;i++){
+        int idx = seat[i];
+        if (idx < 0) continue;
+        Conn& c2 = *conns[idx];
+        if (!c2.inputs.empty() && c2.inBase == pass){
+          c2.inputs.pop_front(); c2.inBase++;
+        }
+      }
       pass++;
       passStartMs = now();
-      for (auto& c : conns) c->hasInput = false;
     }
   }
 
@@ -779,7 +792,7 @@ struct Relay {
        snapshot flow a joiner uses */
     for (int idx : bad){
       Conn& c = *conns[idx];
-      c.ready = false; c.hasInput = false;
+      c.ready = false; c.inputs.clear();
       std::vector<uint8_t> m; m.push_back(MSG_DESYNC); putU32(m, want);
       queueMsg(c, m);
       joinQueue.push_back(idx);
@@ -858,8 +871,16 @@ struct Relay {
       case MSG_INPUT: {
         if (n < 5 || c.seat < 0){ drop(c, "bad INPUT"); return; }
         uint32_t ip = getU32(p);
-        if (ip != pass) break;        // stale (a pass it already got) -- ignore
-        c.hasInput = true; c.inPass = ip; c.inDir = p[4];
+        /* the pipeline: the tag must be exactly the NEXT pass this seat
+           has not yet supplied.  Lower = a stale duplicate from before
+           a resync (ignore); a gap or an overflow is a breach.  TCP
+           orders the stream, so an honest client can produce neither. */
+        uint32_t expect = c.inputs.empty() ? pass : c.inBase + uint32_t(c.inputs.size());
+        if (ip < expect) break;                          // stale -- ignore
+        if (ip != expect){ drop(c, "input gap"); return; }
+        if (c.inputs.size() >= size_t(PIPE_DEPTH)){ drop(c, "input overflow"); return; }
+        if (c.inputs.empty()) c.inBase = ip;
+        c.inputs.push_back(p[4]);
         tryAdvance();
         break;
       }
@@ -1049,14 +1070,14 @@ struct Relay {
       for (int i=0;i<seatsN;i++){
         int idx = seat[i];
         if (idx >= 0 && conns[idx]->ready &&
-            (!conns[idx]->hasInput || conns[idx]->inPass != pass))
+            (conns[idx]->inputs.empty() || conns[idx]->inBase != pass))
           anyWaiting = true;
       }
       if (anyWaiting){
         for (int i=0;i<seatsN;i++){
           int idx = seat[i];
           if (idx >= 0 && conns[idx]->ready &&
-              (!conns[idx]->hasInput || conns[idx]->inPass != pass))
+              (conns[idx]->inputs.empty() || conns[idx]->inBase != pass))
             drop(*conns[idx], "input timeout");
         }
         passStartMs = t;

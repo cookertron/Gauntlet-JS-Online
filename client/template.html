@@ -11263,6 +11263,14 @@ function serverUrl(){
   return null;
 }
 function netAvailable(){ return !!NETP && (net.forceAvailable || !!serverUrl()); }
+/* the INPUT PIPELINE depth this client runs: how many passes of input may
+   be in flight ahead of the applied step.  This is the jitter budget --
+   a latency spike shorter than NET_PIPE ticks (~280 ms in play) drains
+   and refills the pipe with no stall anyone can see -- and the price is
+   nothing on a clean link: sends are paced at the sim's own tick rate,
+   so the depth self-adjusts to about RTT/tick and only reaches the cap
+   during spikes and sim pauses.  The server accepts up to pipeDepth. */
+const NET_PIPE = NETP ? Math.max(1, Math.min(4, NETP.pipeDepth | 0)) : 1;
 /* manual UTF-8 -- the headless sandbox has no TextEncoder */
 function utf8Enc(s){
   const out = [];
@@ -11295,11 +11303,14 @@ const net = {
   cfgLocal: null,      // {char, method1, zonePotion} -- this client's own
   seat: -1, seats: 0, buildSeed: 0, welcomed: false,
   chars: null,         // the session character table (CHARS)
-  step: 0,             // the next tick to exchange
-  sentInput: false, pendDirs: null,
+  step: 0,             // the next tick to APPLY
+  sentThrough: 0,      // the next tick to SEND -- [step, sentThrough) in flight
+  pendQ: [],           // echoed passes not yet applied, in order
+  sendAcc: 0,          // real time banked toward the next pipelined send
   autoFire: false,     // START MEANS START, online -- see feHandover/netLocalDir
   names: null,         // the session name table (NAMES) -- display-only
   acc: 0, lastProgress: 0, desyncs: 0, seatMask: 0,
+  stat: {lastAt: 0, worst: 0, worstShown: 0, n: 0, t0: 0, rate: 0},
   pumpTimer: null,         // the hidden-tab pacer -- see netPump()
   pumpT0: 0, pumpN: 0,     // its trailing-window budget (the free-run guard)
   forceAvailable: false,   // tests: offer the SERVER row with no location
@@ -11339,9 +11350,10 @@ function netStart(url, cfgLocal, tpFactory){
   net.phase = 'hello'; net.status = 'CONTACTING SERVER';
   net.cfgLocal = cfgLocal || { char: GATE_CONFIG.char & 3, method1: 3, zonePotion: false };
   net.everLive = false; net.welcomed = false; net.chars = null;
-  net.step = 0; net.sentInput = false; net.pendDirs = null;
+  net.step = 0; net.sentThrough = 0; net.pendQ = []; net.sendAcc = 0;
   net.acc = 0; net.desyncs = 0; net.autoFire = false; net.names = null;
   net.pumpT0 = 0; net.pumpN = 0;
+  net.stat = {lastAt: 0, worst: 0, worstShown: 0, n: 0, t0: 0, rate: 0};
   const h = {
     open(){ netSend(NETP.msgs.HELLO, [NETP.version & 0xFF, net.cfgLocal.char & 3]
                     .concat(netNameBytes(net.cfgLocal.name))); },
@@ -11368,7 +11380,7 @@ function netBoot(){
   game.localIdx = net.seat;
   if (net.names) game.names = net.names.slice();   // the reset wiped them
   game.enterAttract();
-  net.step = 0; net.sentInput = false; net.pendDirs = null;
+  net.step = 0; net.sentThrough = 0; net.pendQ = []; net.sendAcc = 0;
   net.everLive = true; net.lastProgress = netNow();
   netSend(NETP.msgs.READY, netU32(0));
   net.phase = 'live'; net.status = '';
@@ -11405,10 +11417,10 @@ function netOnMessage(b){
   }
   if (t === M.PASS){
     const n = netRdU32(b, 1), count = b[5];
-    if (n !== net.step) return;        // a stale echo; the wire is ordered
+    if (n !== net.step + net.pendQ.length) return;   // stale; the wire is ordered
     const dirs = [];
     for (let i = 0; i < count; i++) dirs.push(b[6 + i] | 0);
-    net.pendDirs = dirs;               // stepped by netFrame, on the clock
+    net.pendQ.push(dirs);              // stepped by netFrame, on the clock
     netPump();                         // -- or by THIS, when the tab is hidden
     return;
   }
@@ -11420,16 +11432,22 @@ function netOnMessage(b){
     if (!snap){ net.status = 'BAD SNAPSHOT'; net.phase = 'ended'; return; }
     game.localIdx = net.seat;          // restore preserves the receiver's own
     game.restore(snap);
-    net.step = pass; net.sentInput = false; net.pendDirs = null;
+    net.step = pass; net.sentThrough = pass; net.pendQ = []; net.sendAcc = 0;
     net.everLive = true; net.lastProgress = netNow();
     netSend(NETP.msgs.READY, netU32(pass));
     net.phase = 'live'; net.status = '';
     return;
   }
   if (t === M.SNAPREQ){
-    /* serve the joiner: land on the boundary first (a PASS can be in
-       flight), then hand the whole game over -- verbatim on the far side */
-    if (net.pendDirs){ const d = net.pendDirs; net.pendDirs = null; netApply(d); }
+    /* serve the joiner: land on the PASS BOUNDARY the relay is holding
+       first.  Under pipelining the queue can hold several echoed passes
+       the display has not yet paid for (the apply gate), and a snapshot
+       taken behind the boundary strands the joiner on a pass the loop
+       has moved past -- found by the e2e the moment the pipe existed.
+       The drain is outside the display clock, so clear its debt (the
+       netPump rule). */
+    while (net.pendQ.length) netApply(net.pendQ.shift());
+    if (net.acc < 0) net.acc = 0;
     netSend(NETP.msgs.SNAP,
             netU32(net.step).concat(utf8Enc(JSON.stringify(game.snapshot()))));
     return;
@@ -11437,7 +11455,7 @@ function netOnMessage(b){
   if (t === M.DESYNC){
     net.desyncs++;
     net.phase = 'snap'; net.status = 'RESYNCING';
-    net.sentInput = false; net.pendDirs = null;
+    net.pendQ = [];
     return;
   }
   if (t === M.SEATS){ net.seatMask = b[1] | 0; return; }
@@ -11490,13 +11508,47 @@ function netApply(dirs){
   const t0 = game.simT;
   game.stepNet(dirs);
   /* pace on what the tick CONSUMED -- a level pause charges simT its
-     whole 4.2 s, and the wire sits out exactly that long with it */
+     whole 4.2 s, and the display sits out exactly that long with it
+     (the apply gate in netFrame; the wire itself runs ahead by at most
+     NET_PIPE and then waits too) */
   net.acc -= (game.simT - t0);
   if (net.acc < -5) net.acc = -5;
   const done = net.step;
-  net.step++; net.sentInput = false; net.lastProgress = netNow();
+  net.step++;
+  /* the send window never trails the applied step: an echo can land for
+     a pass this client never fed (tests inject them; the relay itself
+     cannot), and a stale-tagged send after that would be a breach */
+  if (net.sentThrough < net.step) net.sentThrough = net.step;
+  const nowMs = netNow();
+  /* the diagnostic's raw feed: inter-pass gaps and rate, 5 s windows */
+  const st = net.stat;
+  if (st.lastAt){
+    const gap = nowMs - st.lastAt;
+    if (gap > st.worst) st.worst = gap;
+  }
+  st.lastAt = nowMs; st.n++;
+  if (!st.t0) st.t0 = nowMs;
+  else if (nowMs - st.t0 >= 5000){
+    st.rate = st.n * 1000 / (nowMs - st.t0);
+    st.worstShown = st.worst;
+    st.n = 0; st.worst = 0; st.t0 = nowMs;
+  }
+  net.lastProgress = nowMs;
   if (((done + 1) % NETP.fpEvery) === 0)
     netSend(NETP.msgs.FP, netU32(done).concat(netU32(game.fingerprint())));
+}
+/* the paste-able one-liner, sound.out.info()'s sibling: the exchange
+   rate over the last 5 s window against the sim's own, the worst
+   inter-pass stall seen in it, and the live pipe state. */
+function netInfo(){
+  const s = net.stat;
+  return 'phase=' + net.phase + ' step=' + net.step +
+         ' depth=' + (net.sentThrough - net.step) +
+         ' queue=' + net.pendQ.length +
+         ' rate=' + (s.rate ? s.rate.toFixed(1) : '?') +
+         ' sim=' + (1 / game.tickSeconds()).toFixed(1) +
+         ' worst=' + Math.round(s.worstShown || s.worst) + 'ms' +
+         ' desyncs=' + net.desyncs;
 }
 /* THE BACKGROUND-TAB CLOCK.  A hidden tab gets no requestAnimationFrame
    at all, so the frame loop -- and with it every INPUT -- simply stops,
@@ -11514,10 +11566,12 @@ function netHidden(){
 }
 function netPump(){
   if (net.phase !== 'live' || !netHidden()) return;
-  while (net.pendDirs){
-    const d = net.pendDirs; net.pendDirs = null;
-    netApply(d);
-  }
+  while (net.pendQ.length) netApply(net.pendQ.shift());
+  /* the pump applies OUTSIDE the display clock (a hidden tab paces by
+     budget, not by frames), so it must not leave netFrame's apply gate
+     in debt: without this, a tab that spent a while hidden came back
+     to a display frozen for the seconds the debt took to bank off. */
+  if (net.acc < 0) net.acc = 0;
   /* THE HIDDEN TAB STILL FEEDS THE SPEAKER.  The worklet FIFO drains on
      the AUDIO thread regardless of rAF throttling (browsers keep hidden
      tabs audible), so the sim stepping here must keep flushing or the
@@ -11525,7 +11579,7 @@ function netPump(){
      permanently ratcheted lead -- for a tab that was playing fine. */
   if (typeof sound !== 'undefined' && sound.flush)
     sound.flush(game.sound.log, game.simFrame);
-  if (net.sentInput) return;
+  if (net.sentThrough > net.step) return;   // an answer is already in flight
   /* HIDDEN PACING, SECOND CUT.  The first slept one tick per pass
      through setTimeout -- and a browser CLAMPS a hidden tab's timers
      to about a second, so a hidden participant fed one INPUT a second
@@ -11560,20 +11614,35 @@ function netPump(){
     return;
   }
   net.pumpN++;
-  netSend(NETP.msgs.INPUT, netU32(net.step).concat([netLocalDir()]));
-  net.sentInput = true;
+  netSend(NETP.msgs.INPUT, netU32(net.sentThrough).concat([netLocalDir()]));
+  net.sentThrough++;
 }
 function netFrame(dt){
   if (net.phase !== 'live') return;
   net.acc += dt;
-  if (net.acc > 0.25) net.acc = 0.25;
-  while (net.pendDirs){
-    const d = net.pendDirs; net.pendDirs = null;
-    netApply(d);
-  }
-  if (!net.sentInput && net.acc >= game.tickSeconds()){
-    netSend(NETP.msgs.INPUT, netU32(net.step).concat([netLocalDir()]));
-    net.sentInput = true;
+  /* the acc cap is 0.25 plus catch-up credit for whatever the wire has
+     already delivered: after a latency spike the backlog applies at
+     once instead of trailing reality for good.  A SIM PAUSE is the
+     opposite case and stays a pause -- the pause pass charges acc its
+     whole cost (netApply), and no queue depth credits that back. */
+  const cap = 0.25 + net.pendQ.length * game.tickSeconds();
+  if (net.acc > cap) net.acc = cap;
+  /* APPLY -- paced on the sim time each pass consumed */
+  while (net.pendQ.length && net.acc >= 0)
+    netApply(net.pendQ.shift());
+  /* SEND -- the PIPELINE.  One input per tick of REAL time, up to
+     NET_PIPE ahead of the applied step, never waiting for an echo: on a
+     clean link the depth floats at about RTT/tick (LAN: zero extra
+     lag), and a spike or a sim pause fills the pipe to the cap and
+     drains it after.  sendAcc is its own clock -- net.acc pays for
+     APPLIES and must not be double-charged. */
+  net.sendAcc += dt;
+  if (net.sendAcc > 0.25) net.sendAcc = 0.25;
+  if (net.sendAcc >= game.tickSeconds() &&
+      net.sentThrough - net.step < NET_PIPE){
+    net.sendAcc -= game.tickSeconds();
+    netSend(NETP.msgs.INPUT, netU32(net.sentThrough).concat([netLocalDir()]));
+    net.sentThrough++;
   }
 }
 /* the local FIRE key's NAME, for the join hint -- the one thing the
@@ -11595,7 +11664,7 @@ function netOverlay(ctx){
   let line = net.status;
   if (net.phase === 'live'){
     const q = game.players[net.seat];
-    line = (net.sentInput && netNow() - net.lastProgress > 700)
+    line = (net.sentThrough > net.step && netNow() - net.lastProgress > 700)
       ? 'WAITING FOR PLAYERS'
       : (net.everLive && q && !q.inGame && !net.autoFire)
         ? 'PRESS ' + netFireKey() + ' TO JOIN'
@@ -11699,7 +11768,8 @@ globalThis.__GAUNTLET__={
   Game,game,render,assets:A,
   net:{ state:net, start:netStart, frame:netFrame, overlay:netOverlay,
         onMessage:netOnMessage, apply:netApply, boot:netBoot, pump:netPump,
-        localDir:netLocalDir, serverUrl, netAvailable, utf8Enc, utf8Dec },
+        localDir:netLocalDir, info:netInfo, NET_PIPE,
+        serverUrl, netAvailable, utf8Enc, utf8Dec },
   /* SETTINGS persistence -- the WIDGETS and the SCREEN that edits them are
      under `frontend` below (optRows()/optFrame()/optRender() on the live
      instance), same reasoning as tapePrompts: an options screen no test can

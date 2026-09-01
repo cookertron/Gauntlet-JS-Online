@@ -8299,15 +8299,43 @@ if (process.argv[2] === '--table') {
     }
     checkTrue('wire-speed echoes trip the free-run guard inside ONE window',
               timers.length === 1 && n <= Math.ceil(1000 / tickMs) + 1 &&
-              S.sentInput === false,
+              S.sentThrough === S.step,
               'n ' + n + ' timers ' + timers.length);
     fakeT += 1000;
     timers[0].fn();
     checkTrue('...and the held INPUT flows the moment the window turns',
-              S.sentInput === true && rd32(lastOf(M.INPUT), 1) === S.step);
+              S.sentThrough === S.step + 1 && rd32(lastOf(M.INPUT), 1) === S.step);
     sandbox.document.hidden = false;
     delete sandbox.setTimeout;
     delete sandbox.performance;
+  }
+
+  /* ---- the INPUT PIPELINE, client side: sends run AHEAD of echoes,
+     one per tick of real time, capped at NET_PIPE -- the jitter budget.
+     The old law was one tick per round trip; a latency spike stalled
+     the whole session by exactly itself.  Now the pipe carries the
+     spike: sends continue while echoes are withheld, and the depth
+     never passes the cap. */
+  {
+    kb.releaseAll();
+    const PIPE = G.net.NET_PIPE;
+    checkTrue('the client pipe depth comes from the protocol (capped at 4)',
+              PIPE === Math.min(4, NP.pipeDepth));
+    const base = S.step, d0 = S.sentThrough - S.step;
+    const sends0 = sent.filter(m => m[0] === M.INPUT).length;
+    for (let i = 0; i < 10; i++) G.net.frame(0.1);
+    const added = sent.filter(m => m[0] === M.INPUT).length - sends0;
+    check('with echoes WITHHELD the pipe fills to NET_PIPE and holds',
+          [S.sentThrough - S.step, added], [PIPE, PIPE - d0]);
+    check('...the in-flight tags are consecutive ahead of the applied step',
+          sent.filter(m => m[0] === M.INPUT).slice(-(PIPE - d0)).map(m => rd32(m, 1)),
+          Array.from({length: PIPE - d0}, (_, i) => base + d0 + i));
+    H.message(Uint8Array.from([M.PASS, ...u32(base), 2, 0, 0]));
+    G.net.frame(0.1);
+    check('an echo drains one and the send clock refills the cap',
+          [S.step, S.sentThrough - S.step], [base + 1, PIPE]);
+    checkTrue('net.info() reports the live pipe, paste-able',
+              /depth=\d+ queue=\d+ rate=/.test(G.net.info()));
   }
 
   /* ---- NAMES: the session's name table is display metadata -- straight

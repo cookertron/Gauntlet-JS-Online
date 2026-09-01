@@ -39,6 +39,13 @@ FIRE to begin the next one, exactly as the arcade did.  Opening the
 page from disk (or setting SERVER LOCAL) plays offline;
 `?server=host:port` joins a relay from a page hosted elsewhere.
 
+Internet play is smoothed by input pipelining (a few passes of input
+ride ahead of the echo, so latency spikes shorter than ~a quarter
+second are absorbed).  If a session still stutters, paste
+`__GAUNTLET__.net.info()` from the browser console (F12) on BOTH
+machines — it names the exchange rate, the worst stall and the pipe
+depth, which is everything needed to see whose link is hurting.
+
 For play from OUTSIDE the network, `--forward` asks the router to open
 the port itself (NAT-PMP first, then UPnP), prints the public address
 to share, renews the lease, and removes the mapping on Ctrl+C

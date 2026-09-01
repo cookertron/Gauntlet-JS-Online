@@ -106,13 +106,16 @@ async function until(clients, pred, label, iters){
 }
 /* a lockstep barrier: both at the same step with nothing buffered --
    the moment their two Game objects are comparable byte for byte.
-   frame(0) DRAINS deliveries without advancing the send clock, so the
-   exchange quiesces instead of always having a PASS in flight (localhost
-   answers inside the sleep, which starved the naive predicate). */
+   Deliveries are drained through net.apply DIRECTLY (no frame(), so no
+   pacing and no new sends): the pipeline's in-flight inputs echo back
+   during the sleeps and drain too, and the exchange then quiesces
+   because nothing sends without a frame clock. */
 async function barrier(a, b, label){
   for (let i = 0; i < 1500; i++){
-    a.G.net.frame(0); b.G.net.frame(0);
-    if (a.net.step === b.net.step && !a.net.pendDirs && !b.net.pendDirs &&
+    for (const c of [a, b])
+      while (c.net.pendQ.length) c.G.net.apply(c.net.pendQ.shift());
+    if (a.net.step === b.net.step &&
+        !a.net.pendQ.length && !b.net.pendQ.length &&
         a.net.phase === 'live' && b.net.phase === 'live') return true;
     await sleep(2);
   }

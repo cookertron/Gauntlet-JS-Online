@@ -161,6 +161,27 @@ async function main(){
     check('...and releases the moment it arrives', [held.pass, held.dirs], [pass, [0x11, 0x22]]);
     await c1.expect(M.PASS); pass++;
 
+    /* ---- the INPUT PIPELINE: a client may run pipeDepth ahead --------- */
+    c0.msg(M.INPUT, U32(pass), 0x01);
+    c0.msg(M.INPUT, U32(pass + 1), 0x02);
+    c0.msg(M.INPUT, U32(pass + 2), 0x03);
+    await c0.silent(250);
+    checkTrue('three inputs ahead QUEUE silently -- pure lockstep still holds', true);
+    for (let i = 0; i < 3; i++){
+      c1.msg(M.INPUT, U32(pass), 0x30 + i);
+      const pp = rdPass(await c0.expect(M.PASS));
+      check('...and queued byte ' + i + ' releases the moment the partner feeds that pass',
+            [pp.pass, pp.dirs], [pass, [0x01 + i, 0x30 + i]]);
+      await c1.expect(M.PASS); pass++;
+    }
+    /* a stale duplicate (a tag from before a resync) is ignored, not a breach */
+    c0.msg(M.INPUT, U32(pass - 2), 0x3F);
+    c0.msg(M.INPUT, U32(pass), 7); c1.msg(M.INPUT, U32(pass), 8);
+    const ps = rdPass(await c0.expect(M.PASS));
+    check('a STALE input tag is ignored and the loop runs on',
+          [ps.pass, ps.dirs], [pass, [7, 8]]);
+    await c1.expect(M.PASS); pass++;
+
     /* ---- fingerprints: agreement is silent --------------------------- */
     c0.msg(M.FP, U32(pass - 1), U32(0xDEAD1234));
     c1.msg(M.FP, U32(pass - 1), U32(0xDEAD1234));
@@ -244,6 +265,18 @@ async function main(){
           Array.from((await c4.expect(M.CHARS)).subarray(1)), [1, 255, 255, 255]);
     check('...and the name table too',
           (await c4.expect(M.NAMES)).subarray(1).toString(), ' '.repeat(32));
+    /* ---- the pipeline's guards: overflow and gaps are breaches -------- */
+    for (let i = 0; i <= P.pipeDepth; i++) c4.msg(M.INPUT, U32(i), 1);
+    await sleep(300);
+    checkTrue('an input OVERFLOW past pipeDepth drops the connection', c4.closed);
+    const c5 = await new Ws().connect(PORT);
+    c5.msg(M.HELLO, P.version, 2);
+    await c5.expect(M.WELCOME);
+    c5.msg(M.INPUT, U32(0), 1);
+    c5.msg(M.INPUT, U32(2), 1);                    // pass 1 skipped: a GAP
+    await sleep(300);
+    checkTrue('an input GAP drops the connection', c5.closed);
+    c5.close();
     c4.close();
   } finally {
     proc.kill();

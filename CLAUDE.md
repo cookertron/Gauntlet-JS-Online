@@ -176,10 +176,25 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      at the sim's average rate).  Tab-out also releases all keys
      (`visibilitychange`/`blur`) — a hidden tab never receives its
      keyups.
-   - v1 paces one tick per round trip (LAN-ideal).  **Later polish:**
-     input pipelining (net layer only); a join-time character pick (the
-     dir byte has two spare bits); growing the sim to four player
-     blocks, which is what unlocks `--seats 3/4`.
+   - **Input pipelining — BUILT 2026-09-01**, the Sheffield fix: v1
+     serialised one tick per round trip, so on the internet every
+     jitter spike stalled the whole session by exactly itself.  Sends
+     now run up to NET_PIPE (4) passes ahead of the applied step, paced
+     at the sim's own tick rate by their own clock (`net.sendAcc`) —
+     depth floats at ~RTT/tick, zero extra lag on LAN, and a spike
+     shorter than the pipe (~280 ms in play) drains and refills it
+     invisibly.  APPLIES are the paced side now (`net.acc >= 0`, with
+     catch-up credit for a delivered backlog; a sim pause still charges
+     its full cost and holds).  The relay queues up to pipeDepth (8)
+     per seat, in order: stale tags are ignored, gaps and overflow drop
+     the conn.  Two rules found the hard way: a snapshot PROVIDER
+     drains its queue to the pass boundary before serving (the e2e
+     caught the strand), and applies outside the frame clock (netPump,
+     the SNAPREQ drain) clear the display debt or the tab unhides into
+     a frozen screen.  `net.info()` is the paste-able diagnostic: rate
+     vs sim, worst stall, pipe depth.  **Later polish:** a join-time
+     character pick (the dir byte has two spare bits); growing the sim
+     to four player blocks, which is what unlocks `--seats 3/4`.
 3. Netcode design — **SETTLED with Anthony 2026-08-29:**
    - **LOCKSTEP RELAY.**  Every client runs the JS sim it already has; the
      C++ server relays one direction byte per player per pass, owns the
