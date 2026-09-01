@@ -79,10 +79,16 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
    player.  Gone: the PLAYERS/P2 options rows, the P2 key zone and the
    cross-player rebind-conflict UI, `indepGamepads`/`kempston2`,
    `CTRL_MAGIC`'s SPACE ($85A7), `controlRead`'s `who` parameter, the
-   local keyboard feed of `players[1].dir`, and (2026-08-31) the IN-GAME
+   local keyboard feed of `players[1].dir`, (2026-08-31) the IN-GAME
    $B864 join invite — an out player's half of the HUD is blanked in
    play/over; the attract/rewind screens keep the classic cycling
-   wordmark+PRESS FIRE halves, offline's only restart prompt.  **Deliberately KEPT:** the
+   wordmark+PRESS FIRE halves, offline's only restart prompt — and
+   (2026-09-01) the SLOWDOWN options row: redundant in the multiplayer
+   build (online forces the smooth cap on every client; offline is
+   FIXED at the faithful ON default).  `loadSlowdown` survives only as
+   the suite's boundary hook (`G.settings.slowdown`), a legacy blob's
+   `slowdown` key is ignored on load, and the heavy-scene cap gates
+   still drive the flag directly.  **Deliberately KEPT:** the
    sim's two player blocks and the join/leash/shove machinery.  The engine
    has NO 1P/2P switch (NOTES: "There is no one-player/two-player switch.
    There never was.") -- both blocks ship marked not-in-game and whoever

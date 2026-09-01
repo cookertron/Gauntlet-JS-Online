@@ -7186,9 +7186,10 @@ if (process.argv[2] === '--table') {
   /* --- the rows: ONE local player, so no PLAYERS row at all ------------- */
   {
     const s = toOptions();
-    check('the rows: player 1, its name, its input, its rebind, slowdown, defaults, start',
+    check('the rows: player 1, its name, its input, its rebind, defaults, start'
+          + ' -- and NO slowdown row, retired as redundant online',
           s.fe.optRows().map(r => r.k),
-          ['char', 'name', 'input', 'rebind', 'slow', 'reset', 'start']);
+          ['char', 'name', 'input', 'rebind', 'reset', 'start']);
     checkTrue('cursor starts on PLAYER 1', s.fe.optRows()[s.fe.optSel].k === 'char');
   }
 
@@ -7566,28 +7567,22 @@ if (process.argv[2] === '--table') {
     G.settings.reset();
   }
 
-  /* --- DEFAULTS restores keys and slowdown ------------------------------ */
+  /* --- DEFAULTS restores keys ------------------------------------------- */
   {
     const s = toOptions();
     F.CTRL_KEYS[3][0] = 'N';                        // dirty it first
-    G.settings.slowdown = false;
     s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'reset');
     tap(s, 'ENTER', 1);
     check('DEFAULTS restores the key map', F.CTRL_KEYS[3][0], '1');
-    checkTrue('...and turns SLOWDOWN back on', G.settings.slowdown === true);
     check('...and the POTION default holds: CAPS', F.CTRL_KEYS[3][5], 'CAPS');
     checkTrue('...and the six default keys are all distinct',
               new Set(F.CTRL_KEYS[3]).size === 6);
   }
 
-  /* --- SLOWDOWN is real, and ON by default ------------------------------ */
+  /* --- SLOWDOWN is FIXED faithful-ON: the row is retired (redundant in
+     the multiplayer build -- online forces the smooth cap anyway), and
+     the flag survives only as the suite's boundary hook below. */
   checkTrue('the load slowdown is ON by default', G.settings.slowdown === true);
-  {
-    const s = toOptions();
-    s.fe.optSel = s.fe.optRows().findIndex(r => r.k === 'slow');
-    check('activating SLOWDOWN toggles it off', (tap(s, 'ENTER', 1), G.settings.slowdown), false);
-    check('...and again toggles it back on', (tap(s, 'ENTER', 1), G.settings.slowdown), true);
-  }
   /* A GENUINELY HEAVY SCENE.  The seeded dungeon's own worst pass is 5.03
      frames, so measuring on it made the check pass on a 0.03 margin -- true,
      but no evidence the toggle does what it is for.  140 actors parked on

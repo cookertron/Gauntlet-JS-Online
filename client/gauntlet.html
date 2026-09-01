@@ -3567,7 +3567,10 @@ class FrontEnd {
         rows.push({k: 'rebind', p, group, label: '', value: () => 'REBIND KEYS'});
     };
     push(0);
-    rows.push({k: 'slow', group: 'misc', label: 'SLOWDOWN', value: () => (loadSlowdown ? 'ON' : 'OFF')});
+    /* (the SLOWDOWN row is retired -- redundant in the multiplayer
+       build: online forces the smooth cap on every client, and offline
+       keeps the faithful ON default.  The flag itself survives as the
+       suite's boundary hook -- see loadSlowdown.) */
     /* ONLINE: offered only when a server is discoverable (the page came
        from a relay, or ?server= names one) -- see serverUrl().  Opening
        the file directly never shows the row and plays offline. */
@@ -3589,7 +3592,6 @@ class FrontEnd {
        there is no other local player any more. */
     if (r.k === 'char'){ this.optChar[0] = (this.optChar[0] + d + 4) & 3; return; }
     if (r.k === 'input'){ this.optToggleInput(); return; }
-    if (r.k === 'slow'){ loadSlowdown = !loadSlowdown; return; }
     if (r.k === 'net'){ this.netOn = !this.netOn; return; }
   }
   optActivate(r){
@@ -11110,7 +11112,12 @@ const SETTINGS_KEY = 'gauntlet-settings';
    the load slowdown off, no pass is charged more than that. */
 const SMOOTH_CAP = 5;
 const CTRL_DEFAULTS = CTRL_KEYS.map(k => (k ? k.slice() : null));
-let loadSlowdown = true;            // the original's behaviour, and the default
+/* the original's behaviour, FIXED: the menu row that toggled this is
+   retired (redundant in the multiplayer build -- online forces the
+   smooth cap on every client regardless).  The flag survives only as
+   the faithful/added boundary the suite drives (G.settings.slowdown):
+   the heavy-scene gates prove the cap does what it claims. */
+let loadSlowdown = true;
 
 function settingsSave(){
   try {
@@ -11118,7 +11125,6 @@ function settingsSave(){
       method1: frontend.optMethod[0] & 3,
       char: frontend.optChar.slice(),
       name: frontend.optName,
-      slowdown: loadSlowdown,
       keys: CTRL_KEYS.map(k => (k ? k.slice() : null)) }));
   } catch(e) {}
 }
@@ -11126,7 +11132,8 @@ function settingsLoad(){
   let v = null;
   try { v = JSON.parse(localStorage.getItem(SETTINGS_KEY) || 'null'); } catch(e) {}
   if (!v) return;
-  if (typeof v.slowdown === 'boolean') loadSlowdown = v.slowdown;
+  /* a legacy blob's `slowdown` key is ignored: the row is retired and
+     the flag is fixed (faithful ON offline, capped online) */
   if (typeof v.method1 === 'number') frontend.optMethod[0] = v.method1 & 3;
   /* the NAME, shape-checked like everything else here: a stored blob must
      not hand the tag font a character it has no glyph for. */
@@ -11163,7 +11170,6 @@ function settingsLoad(){
 function settingsReset(){
   CTRL_DEFAULTS.forEach((k, i) => {
     if (k && CTRL_KEYS[i]) k.forEach((n, j) => { CTRL_KEYS[i][j] = n; }); });
-  loadSlowdown = true;
   frontend.optName = '';
   settingsSave();
 }
