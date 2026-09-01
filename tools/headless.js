@@ -7096,11 +7096,12 @@ if (process.argv[2] === '--table') {
     for (let i = 1; i < items.length; i++)
       if (items[i].r.group !== items[i - 1].r.group){
         checkTrue('a group boundary (' + items[i-1].r.group + ' -> ' + items[i].r.group +
-                  ') skips exactly one line', items[i].y === items[i - 1].y + 2);
+                  ') skips TWO lines (the spread plus the section gap)',
+                  items[i].y === items[i - 1].y + 3);
         gaps++;
       } else {
-        checkTrue('...and within a group (' + items[i].r.group + ') there is no gap',
-                  items[i].y === items[i - 1].y + 1);
+        checkTrue('...and within a group (' + items[i].r.group + ') rows are SPREAD one apart',
+                  items[i].y === items[i - 1].y + 2);
       }
     check('the one-player screen has its two section boundaries (p0 -> misc -> start)',
           gaps, 2);

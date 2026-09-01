@@ -3793,9 +3793,17 @@ class FrontEnd {
        CENTRED in the space between the title and the footer instead of
        jammed to the top, which is most of it on the common 1-player,
        keyboard-only screen. */
+    /* SPREAD ROWS: a blank line under every row, one more at a group
+       boundary -- the retired PLAYERS and SLOWDOWN rows left the room,
+       and the dense single-spaced list read as cramped once they were
+       gone ("spread out the options a bit").  Worst case is 7 rows and
+       2 boundaries = 15 lines in the 16 the area holds. */
     let lines = 0, seenGroup = null;
     for (const r of rows){
-      if (seenGroup !== null && r.group !== seenGroup) lines++;
+      if (seenGroup !== null){
+        lines++;                                  // the blank between rows
+        if (r.group !== seenGroup) lines++;       // plus one at a boundary
+      }
       lines++; seenGroup = r.group;
     }
     const areaTop = row + 2 + FE_LOGO_ROWS, areaBot = row + H - 3;
@@ -3815,7 +3823,7 @@ class FrontEnd {
     const pCol = col + 2 + NARROW_W;
     let y = rowStart, group = null;
     const items = rows.map((r, i) => {
-      if (group !== null && r.group !== group) y++;
+      if (group !== null){ y++; if (r.group !== group) y++; }
       group = r.group;
       return {r, i, y: y++};
     });
