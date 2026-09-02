@@ -63,9 +63,9 @@ One message = `u8 type` then the fields.  C→S / S→C marks direction.
 
 * **Seating.**  HELLO with the right version takes the lowest free seat
   below the server's seat count, else `ERROR FULL`.  The protocol
-  allows up to `maxSeats` (4); the server defaults to
-  `defaultSeats` (2) because the shipped sim carries two player blocks
-  today — raise it with `--seats` when the sim grows.
+  allows up to `maxSeats` (4) and the server defaults to
+  `defaultSeats` (4): the sim carries four player blocks (2026-09-02).
+  `--seats` lowers it for a smaller table.
 * **Boot.**  `WELCOME.mode` is FRESH while the session is at pass 0:
   the client boots `reset({online:true, buildSeed})` and sends READY.
   The buildSeed is the server's one die roll, shared by everyone.

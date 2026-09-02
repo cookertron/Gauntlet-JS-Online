@@ -4263,8 +4263,36 @@ class Game{
      entries) it means "give me the OTHER player".  IXL is $20 for $8420 and
      $40 for $8440, so the SET bit selects player 1's block -- i.e. the test
      branches the opposite way to what an earlier note in this file claimed.
-     Here it is just the other index. */
+     Here it is just the other index.
+     FOUR BLOCKS (this fork): "the OTHER player" became "each other
+     player".  other(p) survives as the CLASSIC PARTNER -- block 2 for
+     block 1 and back, block 4 for block 3 -- for the one rule that reads
+     a specific block first ($96B4's placement anchor); every other rule
+     walks others(p), in block order.  Blocks 3 and 4 have no Z80
+     reference (the original never had them), so the gate on all of it
+     is DEGENERACY: with at most two players in the game the four-block
+     sim matches the two-block sim pass for pass (tools/fourblock.js,
+     replayed by tools/headless.js against a fixture recorded on the
+     two-block build). */
   other(p){ return this.players[p.idx ^ 1]; }
+  others(p){ return this.players.filter(q => q !== p); }
+  /* every block is dead or out: $B3AB's "both players dead", for four */
+  allDead(){ return this.players.every(q => q.dead); }
+  /* the four characters, one per block: the first two are the menu's
+     ($FFFF / $FFFE); blocks 3 and 4 take what is given or else the
+     lowest characters not yet fielded -- the engine never fields two of
+     one character, and four blocks by four characters is exactly one
+     each.  A block never in the game only ever shows this in its
+     armour row and shot tag, which nothing reads while it is out. */
+  static charTable(c1, c2, c3, c4){
+    const t = [c1, c2, c3, c4].map(c => (c === undefined || c === null) ? -1 : c);
+    const used = new Set(t.filter(c => c >= 0).map(c => c & 3));
+    for (let i = 2; i < 4; i++) if (t[i] < 0){
+      let c = 0; while (used.has(c) && c < 3) c++;
+      t[i] = c; used.add(c);
+    }
+    return t;
+  }
   reset(cfg){
     /* THE FIVE BYTES, and they are the whole of block A's contract.  $FFFD
        is not stored here because the sound branch is a build-time constant
@@ -4287,9 +4315,11 @@ class Game{
        next load asks for, $84BA the treasure countdown, $84C7 the mirror
        byte.  All five are simulation state and all five are fingerprinted.
        $84CC/$84CD are NOT cleared by a new game -- see Tape.               */
-    /* The two blocks, and `p` = IX.  Everything below this line that says
-       `this.x` is writing player 1's block because `p` names him. */
-    this.players = [new Player(0), new Player(1)];
+    /* The blocks, and `p` = IX.  Everything below this line that says
+       `this.x` is writing player 1's block because `p` names him.
+       FOUR of them (this fork): the original's two at $8420/$8440 and
+       two more cut to the same pattern -- see other() above. */
+    this.players = [0, 1, 2, 3].map(i => new Player(i));
     this.p = this.players[0];
     /* ---- ONLINE (this fork): PER-PLAYER CAMERA WINDOWS ---------------
        See vcamPass() beside camera().  Each player carries his own
@@ -4323,7 +4353,10 @@ class Game{
        refilled with $FF by $AB94 at the top of every actor pass.  And $5B20,
        the shot array itself: $84A8 is its count (capped at 16) and $84A9 the
        append cursor, both of which `mshots.length` stands for. */
-    this.ring = new Uint8Array(64).fill(0xFF);
+    /* FOUR BLOCKS: the $5B90 ring is eight facings x two players, 4
+       bytes a slot; blocks 3 and 4 get the same eight slots each at +$40
+       and +$60, so the first 64 bytes ARE the original ring. */
+    this.ring = new Uint8Array(128).fill(0xFF);
     this.mshots = [];
     /* $8499 and $847E bit 1 -- the animation's own countdown and its pending
        flag, both from the captured machine.  See animTick below. */
@@ -4594,15 +4627,20 @@ class Game{
        CHAR2_INDEX and says so out loud -- and it picks the VALKYRIE
        because her ink is $45 BRIGHT CYAN against the elf's $44 BRIGHT
        GREEN, so the two are told apart on screen at a glance. */
-    this.p = this.players[1];
-    this.x = 0; this.y = 0;
-    this.health = 0; this.score = 0;
-    this.f11 = 0xC0;                                    // $844B
-    this.p14 = 0x80;                                    // $8454
-    this.dead = true;
-    this.levelOwn = A.player.block2 ? A.player.block2[0x0C] : 1;
-    this.setCharacter(cfg.char2);               // $BE64 LD A,($FFFE)
-    this.shot = {x:0, y:0, state:0xFF, drawX:0, drawY:0, drawn:false};
+    /* ...and blocks 3 and 4 are cut from the same tape bytes, each with
+       its own character (Game.charTable). */
+    const chars = Game.charTable(cfg.char, cfg.char2, cfg.char3, cfg.char4);
+    for (let i = 1; i < this.players.length; i++){
+      this.p = this.players[i];
+      this.x = 0; this.y = 0;
+      this.health = 0; this.score = 0;
+      this.f11 = 0xC0;                                  // $844B
+      this.p14 = 0x80;                                  // $8454
+      this.dead = true;
+      this.levelOwn = A.player.block2 ? A.player.block2[0x0C] : 1;
+      this.setCharacter(chars[i]);              // $BE64 LD A,($FFFE)
+      this.shot = {x:0, y:0, state:0xFF, drawX:0, drawY:0, drawn:false};
+    }
     this.p = this.players[0];
   }
 
@@ -5043,7 +5081,7 @@ class Game{
          The abstract path below (input.p2) is untouched: it is how the
          tests -- and one day the server -- drive player 2. */
       this.players[0].dir = controlRead(this.method1, input.kb);
-      this.players[1].dir = 0;
+      for (let n = 1; n < this.players.length; n++) this.players[n].dir = 0;
       return;
     }
     const bits = i => {
@@ -5054,7 +5092,8 @@ class Game{
       return d;
     };
     this.players[0].dir = bits(input || {});
-    this.players[1].dir = bits((input && input.p2) || {});
+    for (let n = 1; n < this.players.length; n++)     // p2, p3, p4
+      this.players[n].dir = bits((input && input['p' + (n + 1)]) || {});
   }
 
   /* ====================================================================
@@ -5086,7 +5125,26 @@ class Game{
   }
   joinOne(){
     if (this.p.inGame) return;                           // $9440 BIT 7 / RET z
-    if (this.animCtl !== 0) return;                      // $9445 -> $92A6
+    if (this.animCtl !== 0){                             // $9445 -> $92A6
+      /* THE DEAD PLAYER'S NAME ENTRY IS RETIRED (this fork; see
+         overTick).  On the original, $93E2's mark ($80 in (IX+14))
+         routed a dead player here to $92A6 every pass until he had
+         typed three letters, whereupon $93A8 cleared (IX+14) and JP
+         $948C stripped the block -- and only THEN could a later FIRE
+         bring him back through $9440.  With nothing to type, the mark
+         is spent on the first poll after death: cleared, the block
+         stripped, the RIP marker kept until he does come back (cleared
+         below).  Bit 4 -- $AB24's shove flag, which $A48D clears only
+         for the living -- is spent with it: an out block shoved where
+         it lay must not be locked out for ever.  Anything else in the
+         byte (a walk phase, the low bits) is the original's own refusal.
+         Without this a dead player in a running game could never
+         rejoin, and after a game over neither could the second block. */
+      if (this.animCtl & ~0x90) return;
+      this.animCtl = 0;                                  // $93A8 (IX+14) = 0
+      this.p14 &= 0x80;                                  // $948C AND $80
+      return;
+    }
     if (!(this.dir & DIR_FIRE)) return;                  // $944C BIT 4,(IX+7)
     this.p14 &= 0x7F; this.dead = false;                 // $9451 RES 7
     this.died = false;                    // a revive takes the RIP marker down
@@ -5124,7 +5182,7 @@ class Game{
      the wire's own FIRE byte, so START arms net.autoFire and holds
      that byte in the outgoing dir until the join echoes back. */
   autoJoin(n){
-    for (const q of this.players.slice(0, n & 3)){
+    for (const q of this.players.slice(0, Math.min(n | 0, this.players.length))){
       const save = this.p, saveDir = q.dir;
       this.p = q; q.dir = DIR_FIRE;                      // the $944C gate, satisfied
       this.joinOne();                                    // the real join
@@ -5162,8 +5220,17 @@ class Game{
     this.frameSlot = 0xFF;                               // $96A7 (IX+13)=$FF
     this.animCtl = 1;                                    // $96AB materialising
     this.installArmour();                                // $96AF CALL $AB6F
-    const o = this.other(this.p);                        // $96B4 the OTHER
-    let C = o.x & 0x7C, B = o.y & 0x7C;                  // $96C2/$96C8 AND $7C
+    /* $96B4 reads THE other block's cell.  FOUR BLOCKS: the classic
+       partner first, then the rest in block order -- the first whose
+       snapped cell is not (0,0) anchors the ring.  A block never in the
+       game sits at (0,0), so with blocks 3/4 out this is the two-block
+       read exactly. */
+    let C = 0, B = 0;
+    const partner = this.other(this.p);
+    for (const o of [partner].concat(this.others(this.p).filter(q => q !== partner))){
+      C = o.x & 0x7C; B = o.y & 0x7C;                    // $96C2/$96C8 AND $7C
+      if ((B | C) !== 0) break;
+    }
     if ((B | C) === 0){ C = this.levelStart[0]; B = this.levelStart[1]; } // $96D4
     let col = (C >> 2) & (MAP_W-1), row = (B >> 2) & (MAP_H-1);
     if (!this.placeFree(col, row)){                      // $96E0 CALL $B2E3
@@ -5351,8 +5418,8 @@ class Game{
        per-player windows (vcamPass) are what replace the shared screen
        the leash existed to keep both players inside. */
     if (this.online) return false;
-    const o = this.other(this.p);
-    if (!(o.f11 & F_DEAD)) {                             // $A92A BIT 7 -- in play
+    for (const o of this.others(this.p)){                // FOUR BLOCKS: each other
+      if (o.f11 & F_DEAD) continue;                      // $A92A BIT 7 -- in play
       const d = wrapAbs(((horiz ? o.x : o.y) - (horiz ? cand.x : cand.y)) & 0xFF);
       if (d >= (horiz ? 0x3D : 0x25)) return true;       // $A936 CP $3D / CCF
     }
@@ -5377,12 +5444,14 @@ class Game{
      clear on entry, because $AAC6's AND has already reset it.
      Bit 3 of (IX+$0E) is what $A39B reads NEXT pass to swap the order.   */
   otherPlayerBox(cand){
-    const o = this.other(this.p);
-    if (o.f11 & F_EXITING) return false;                 // $AACA / $AAD5 BIT 6
-    if (((o.x + 3 - cand.x) & 0x7F) >= 7) return false;  // $AADE
-    if (((o.y + 3 - cand.y) & 0x7F) >= 7) return false;  // $AAE7
-    this.animCtl |= 0x08;                                // $AAF0 SET 3,(IX+14)
-    return true;
+    for (const o of this.others(this.p)){                // FOUR BLOCKS: each other
+      if (o.f11 & F_EXITING) continue;                   // $AACA / $AAD5 BIT 6
+      if (((o.x + 3 - cand.x) & 0x7F) >= 7) continue;    // $AADE
+      if (((o.y + 3 - cand.y) & 0x7F) >= 7) continue;    // $AAE7
+      this.animCtl |= 0x08;                              // $AAF0 SET 3,(IX+14)
+      return true;
+    }
+    return false;
   }
 
   /* ====================================================================
@@ -5442,7 +5511,7 @@ class Game{
      a condition the CALL then ignores, so on a reversed pass player 2 shoves
      player 1 whether or not they touched.  Reproduced.                  */
   playerPass(){
-    const [p1, p2] = this.players;
+    const p1 = this.players[0];
     /* $A38D RES 3,(IY-1) / $A391 BIT 0,(IY-1) / JR z / $A397 SET 3,(IY-1).
        THE SWEEP IS DISARMED AT THE TOP OF EVERY PASS and re-armed only while
        $847E bit 0 is set.  So a thrown potion kills for the REMAINDER OF THE
@@ -5456,15 +5525,25 @@ class Game{
        carried items detonates it and borrows the sweep for the next pass at
        one point of damage.  See the detonate() arm in shotCell(). */
     this.potionArmed = !!(this.f847E_bit0);              // $A38D / $A397
-    if (p1.animCtl & 0x08){                              // $A39B BIT 3,$842E
-      this.shove(p1, p2);                                // $A3BE CALL $AAF5
-      this.playerUpdate(p2);                             // $A3C1 PLAYER 2
-      this.shove(p2, p1);                                // $A3CF -- see above
-      this.playerUpdate(p1);                             // $A3D2
-    } else {
-      if (p2.animCtl & 0x08) this.shove(p2, p1);         // $A3A5 CALL nz,$AB06
-      this.playerUpdate(p1);                             // $A3A8
-      this.playerUpdate(p2);                             // $A3B2
+    /* FOUR BLOCKS: $A38A's own structure with "the other player" read
+       as "each other player".  $A39B reads BLOCK 1's contact bit and
+       that alone decides the direction of the walk; in the reversed walk
+       every shove is unconditional ($A3BE, and $A3CF's bug), in the
+       forward walk only a player whose own bit is set shoves ($A3A5's
+       CALL nz).  The bits are read once at the top, as $A39B/$A3A1 read
+       them before any shove's RES 3 can clear one.  Two blocks give the
+       original sequence exactly:
+         reversed  shove(p1,p2) update(p2) shove(p2,p1) update(p1)
+         forward   [shove(p2,p1) if p2's bit] update(p1) update(p2)   */
+    const rev = (p1.animCtl & 0x08) !== 0;               // $A39B BIT 3,$842E
+    const bit = this.players.map(q => (q.animCtl & 0x08) !== 0);
+    const order = rev ? this.players.slice().reverse() : this.players;
+    for (const q of order){
+      for (const o of this.players){
+        if (o === q) continue;
+        if (rev || bit[o.idx]) this.shove(o, q);         // $A3BE/$A3CF, $A3A5
+      }
+      this.playerUpdate(q);                              // $A4DD, each in turn
     }
   }
 
@@ -6681,25 +6760,34 @@ class Game{
        $8550 near the BOTTOM.  This engine increments at the top of onePass
        and then runs the body, so `passCtr` here is that same value -- which
        is what the four one-player differentials already pin down. */
-    const q = this.players[(this.passCtr & 2) ? 1 : 0];  // $B717 BIT 1
-    const save = this.p; this.p = q;
-    try {
-      if (!(this.passCtr & 1)){                          // $B726 BIT 0
-        if (this.f11 & F_HEALTH_D){ this.f11 &= ~F_HEALTH_D; return; } // $B72C
-      } else {
-        if (this.f11 & F_SCORE_D){ this.f11 &= ~F_SCORE_D; return; }   // $B73E
-      }
-      // $B756 -- gain and spend in the same window CANCEL, and draw nothing
-      if ((this.f11 & (F_KEY_GAIN|F_KEY_SPEND)) === (F_KEY_GAIN|F_KEY_SPEND))
-        this.f11 &= ~(F_KEY_GAIN|F_KEY_SPEND);
-      if ((this.f11 & (F_POT_GAIN|F_POT_SPEND)) === (F_POT_GAIN|F_POT_SPEND))
-        this.f11 &= ~(F_POT_GAIN|F_POT_SPEND);
-      // $B770.. -- at most ONE icon, in this priority order
-      if (this.f11 & F_KEY_GAIN)       this.f11 &= ~F_KEY_GAIN;
-      else if (this.f11 & F_KEY_SPEND) this.f11 &= ~F_KEY_SPEND;
-      else if (this.f11 & F_POT_GAIN)  this.f11 &= ~F_POT_GAIN;
-      else if (this.f11 & F_POT_SPEND) this.f11 &= ~F_POT_SPEND;
-    } finally { this.p = save; }
+    /* FOUR BLOCKS: the robin keeps its four-pass cadence for blocks 1-2
+       and serves blocks 3-4 on the same passes, two blocks apart.  A
+       block never in the game has no dirty bits, so with two blocks in
+       play this is $B717's own schedule exactly. */
+    const i = (this.passCtr & 2) ? 1 : 0;                // $B717 BIT 1
+    for (const q of [this.players[i], this.players[i + 2]]){
+      if (!q) continue;
+      const save = this.p; this.p = q;
+      try { this.hudServe(); } finally { this.p = save; }
+    }
+  }
+  /* $B726..$B7B1 -- one block's dirty flags, `p` = IX */
+  hudServe(){
+    if (!(this.passCtr & 1)){                            // $B726 BIT 0
+      if (this.f11 & F_HEALTH_D){ this.f11 &= ~F_HEALTH_D; return; } // $B72C
+    } else {
+      if (this.f11 & F_SCORE_D){ this.f11 &= ~F_SCORE_D; return; }   // $B73E
+    }
+    // $B756 -- gain and spend in the same window CANCEL, and draw nothing
+    if ((this.f11 & (F_KEY_GAIN|F_KEY_SPEND)) === (F_KEY_GAIN|F_KEY_SPEND))
+      this.f11 &= ~(F_KEY_GAIN|F_KEY_SPEND);
+    if ((this.f11 & (F_POT_GAIN|F_POT_SPEND)) === (F_POT_GAIN|F_POT_SPEND))
+      this.f11 &= ~(F_POT_GAIN|F_POT_SPEND);
+    // $B770.. -- at most ONE icon, in this priority order
+    if (this.f11 & F_KEY_GAIN)       this.f11 &= ~F_KEY_GAIN;
+    else if (this.f11 & F_KEY_SPEND) this.f11 &= ~F_KEY_SPEND;
+    else if (this.f11 & F_POT_GAIN)  this.f11 &= ~F_POT_GAIN;
+    else if (this.f11 & F_POT_SPEND) this.f11 &= ~F_POT_SPEND;
   }
 
   /* $8531 CALL $971B -- THE HURRY-UP, and it is the level's TIME LIMIT.
@@ -7252,16 +7340,24 @@ class Game{
      needs the $18 power-up, and $842A is 0 on every pass of all four runs
      (asserted headlessly). */
   chaseTarget(){
-    const [p1, p2] = this.players;
-    if (p2.p14 & 0x80){                                  // $ADCD BIT 7,$8454
-      return p1.timer === 0 ? 0x24 : 0x00;               // $ADD3..$ADD9
-    }
+    /* FOUR BLOCKS: $ADCD..$ADF7 with "player 2" read as "the other
+       blocks in the game", nearest wins, ties to the lower block ($AD92
+       keeps the first on a tie).  Returns the target: a player, a list
+       to take the nearest of, or null for the $00 arm.  With only block
+       2 ever in the game every arm is the two-block routine exactly,
+       quirks included -- a corpse whose partner is out is still aimed
+       at ($ADD3 tests only the timer). */
+    const p1 = this.players[0];
+    const others = this.players.slice(1).filter(q => !(q.p14 & 0x80)); // $ADCD BIT 7
+    if (others.length === 0) return p1.timer === 0 ? p1 : null;  // $ADD3..$ADD9
     if (p1.timer === 0 && !(p1.f11 & F_DEAD)){           // $ADDA / $ADDE
-      if (p2.timer !== 0) return 0x24;                   // $ADE4 RET nz
-      if (p2.f11 & F_DEAD) return 0x24;                  // $ADE9 RET nz
-      return 0x2F;                                       // $ADEE the NEARER
+      const live = others.filter(q => q.timer === 0 && !(q.f11 & F_DEAD)); // $ADE4/$ADE9
+      if (live.length === 0) return p1;                  // -> $24, player 1
+      return [p1].concat(live);                          // $ADEE the NEARER
     }
-    return p2.timer === 0 ? 0x19 : 0x00;                 // $ADF1..$ADF7
+    const live = others.filter(q => q.timer === 0);      // $ADF1..$ADF7
+    if (live.length === 0) return null;                  // -> $00
+    return live.length === 1 ? live[0] : live;           // -> $19, or the nearer
   }
   actorAim(a){
     const aimAt = q => {
@@ -7274,17 +7370,18 @@ class Game{
       } else         slot = (L & 0x80) ? 2 : 6;
       return {dist, slot};
     };
-    const [p1, p2] = this.players;
-    switch (this.chaseTarget()){
-      case 0x19: return aimAt(p2);                       // $AD6C
-      case 0x2F: {                                       // $AD82
-        const a1 = aimAt(p1), a2 = aimAt(p2);
-        /* $AD92 CP (the self-modified operand) / JR nc,$AD9A keeps player
-           1's on a TIE -- the second distance must be strictly smaller. */
-        return a2.dist < a1.dist ? a2 : a1;
-      }
-      default: return aimAt(p1);                         // $AD77, and the
-    }                                                    // unported $00 arm
+    const t = this.chaseTarget();
+    if (t === null) return aimAt(this.players[0]);       // the unported $00 arm
+    if (!Array.isArray(t)) return aimAt(t);              // $AD6C / $AD77
+    /* $AD82 -- $AD92 CP (the self-modified operand) / JR nc,$AD9A keeps
+       the earlier one on a TIE: a later distance must be strictly
+       smaller.  Two candidates is the original pair. */
+    let best = aimAt(t[0]);
+    for (let i = 1; i < t.length; i++){
+      const a = aimAt(t[i]);
+      if (a.dist < best.dist) best = a;
+    }
+    return best;
   }
 
   /* $ADF8..$AE6C -- step and probe.  $AE1D computes the map address inline as
@@ -7386,7 +7483,7 @@ class Game{
   potionScore(){
     if (this.potionArmed && !this.f847E_bit0){        // $8BCE / $8BD4
       const save = this.p;
-      this.p = this.players[this.potionBy & 1];       // $8BD6
+      this.p = this.players[this.potionBy & 3];       // $8BD6 (four blocks)
       let d = 0, e = 0;                               // $8BDC LD DE,0
       const c = this.killTally;                       // $8BDF LD C,(IY+$23)
       for (let b = 0; b < 10; b++){                   // $8BDA LD B,10
@@ -7626,7 +7723,7 @@ class Game{
     const f3 = E & 3;                               // $AF9B LD A,E / AND 3
     /* $AFA4/$AFE7/$B019 try PLAYER 1 first and fall through to player 2 --
        a dead player ($842B / $844B bit 7) is skipped, not aimed at. */
-    for (let who = 0; who < 2; who++){
+    for (let who = 0; who < this.players.length; who++){   // FOUR BLOCKS
       const q = this.players[who];
       if (q.f11 & F_DEAD) continue;                 // BIT 7,(IY-$54)/(IY-$34)
       let ok;
@@ -7642,7 +7739,7 @@ class Game{
       if (!ok) continue;
       /* $B049 SET 5,L -- player 2's arms arrive here with L = $20, which is
          what puts his eight slots at $5BB0 instead of $5B90. */
-      this.ringWrite(E, C, B, who ? 0x20 : 0);      // $B04B
+      this.ringWrite(E, C, B, who * 0x20);          // $B04B; +$40/+$60 for 3/4
       return;
     }
   }
@@ -7707,15 +7804,18 @@ class Game{
     if (coin === undefined) coin = this.rand8();     // $B060 LD A,R
     if (coin >= 7) return;                           // $B062 CP 7 / RET nc
     let q = null;
-    if (!(coin & 1)){                                // $B065 RRA / JR c,$B076
-      if (this.players[0].f11 & F_DEAD) return;      // $B068 BIT 7 / RET nz
-      if (this.players[0].timer === 0) q = this.players[0];   // $B070 JR z
+    /* FOUR BLOCKS: $B065's coin picks where the walk STARTS -- block 1
+       on an even coin, block 2 on odd -- and $B068/$B076's arms are the
+       walk's body: a DEAD block ends it with no shot, a flashing one
+       ($842A != 0) falls through to the next.  With two blocks this is
+       the original's two arms exactly: block 3's never-joined $C0 ends
+       the walk where $B07E's RET did. */
+    for (let i = (coin & 1) ? 1 : 0; i < this.players.length && !q; i++){
+      const c = this.players[i];
+      if (c.f11 & F_DEAD) return;                    // $B068 / $B076 BIT 7 / RET nz
+      if (c.timer === 0) q = c;                      // $B070 / $B07E
     }
-    if (!q){                                         // $B076 -- player 2
-      if (this.players[1].f11 & F_DEAD) return;      // $B076 BIT 7 / RET nz
-      if (this.players[1].timer !== 0) return;       // $B07E OR A / RET nz
-      q = this.players[1];
-    }
+    if (!q) return;
     let sgn = 0;                                     // $B083 (IY+$2C) = 0
     if (wrap7((q.x - a.x) & 0xFF) >= 0x80) sgn |= 0x08;   // $B08E SET 3
     if (wrap7((q.y - a.y) & 0xFF) >= 0x80) sgn |= 0x80;   // $B09B SET 7
@@ -7779,8 +7879,8 @@ class Game{
      is never overwritten: the first actor to claim a facing this pass keeps
      it.  An empty slot is $FF, which every index beats. */
   ringWrite(E, C, B, L){
-    const A = (((E & 7) << 2) + 0x90 + L) & 0xFF;   // $B04C..$B052
-    const o = A - 0x90;
+    const o = ((E & 7) << 2) + L;                   // $B04C..$B052, the slot
+    const A = (0x90 + o) & 0xFF;                    // ...and its priority byte
     if (A >= this.ring[o]) return;                  // $B056 CP (HL) / RET nc
     this.ring[o] = A;                               // $B058
     this.ring[o + 1] = C;                           // $B05A LD (HL),C
@@ -7795,17 +7895,23 @@ class Game{
      player's does, and the $80 flag byte is what every "is this a monster
      shot" test in the shared body reads. */
   ringDrain(){
-    let o = 8 * (this.passCtr & 7);                 // $8FC9 AND 7 / x8 / +$90
-    for (let b = 0; b < 2; b++){                    // $8FD6 LD B,2
-      if (this.mshots.length === 0x10) return;      // $8FD8 CP $10 / JR z
-      if (this.ring[o] !== 0xFF){                   // $8FDF LD A,(HL) / INC A
-        this.mshots.push({x: (this.ring[o + 1] + 1) & 0xFF,      // $8FEB
-                          y: (this.ring[o + 2] + 1) & 0xFF,      // $8FF0
-                          state: (this.ring[o + 3] & 7) | 0x90,  // $8FF5
-                          flags: 0x80,                           // $8FFD
-                          drawX: 0, drawY: 0, drawn: false});
+    /* FOUR BLOCKS: the same two slots of the original ring, then the
+       same two of the upper ring (blocks 3/4's, at +$40) -- each block's
+       eight facings drain at the two-block cadence, and with blocks 3/4
+       out the upper slots are $FF and nothing is added. */
+    for (let half = 0; half < this.ring.length; half += 64){
+      let o = half + 8 * (this.passCtr & 7);        // $8FC9 AND 7 / x8 / +$90
+      for (let b = 0; b < 2; b++){                  // $8FD6 LD B,2
+        if (this.mshots.length === 0x10) return;    // $8FD8 CP $10 / JR z
+        if (this.ring[o] !== 0xFF){                 // $8FDF LD A,(HL) / INC A
+          this.mshots.push({x: (this.ring[o + 1] + 1) & 0xFF,      // $8FEB
+                            y: (this.ring[o + 2] + 1) & 0xFF,      // $8FF0
+                            state: (this.ring[o + 3] & 7) | 0x90,  // $8FF5
+                            flags: 0x80,                           // $8FFD
+                            drawX: 0, drawY: 0, drawn: false});
+        }
+        o += 4;                                     // both arms advance 4
       }
-      o += 4;                                       // both arms advance 4
     }
   }
 
@@ -8161,24 +8267,25 @@ class Game{
      poked: (5,3) -> 5, (3,5) -> 5, (9,9) -> 9, and (5,3) with $847E bit 6
      leaves $8403 at the $77 it was poked with. */
   levelEnd(){
-    const [p1, p2] = this.players;
     /* $94AE BIT 3,(IY-2) -- the treasure clock's forced ending jumps
-       straight to $94D1 and skips the level bump entirely. */
+       straight to $94D1 and skips the level bump entirely.
+       FOUR BLOCKS: "both" is "every" -- a block never in the game ships
+       $C0, so it satisfies the AND exactly as player 2's did. */
     if (!this.forcedOver){
-      if (!((p1.f11 & p2.f11) & F_DEAD)) return false;   // $94B4 AND / RLA
+      if (!this.players.every(q => q.f11 & F_DEAD)) return false; // $94B4 AND / RLA
       if (!this.treasure){                               // $94BD BIT 6,(IY-1)
-        /* $94C3 -- $8403 becomes the UNSIGNED MAX of the two players' own
+        /* $94C3 -- $8403 becomes the UNSIGNED MAX of the players' own
            (IX+12).  Two players can take different exits ($36 +1, $37 -> 4,
-           $38 -> 8) and the DEEPER one decides the next dungeon.  Measured
+           $38 -> 8) and the DEEPEST one decides the next dungeon.  Measured
            by poking the pair: (5,3) -> 5, (3,5) -> 5, (9,9) -> 9. */
-        this.level = p1.levelOwn >= p2.levelOwn ? p1.levelOwn : p2.levelOwn;
+        this.level = this.players.reduce((m, q) => q.levelOwn > m ? q.levelOwn : m, 0);
       }
     }
     this.levelDone = true;                               // $94D1 SET 7,(IY-2)
-    /* $B3AB LD A,($8434) / AND (IY-$2B) / RLA -- GAME OVER only when BOTH
-       players are dead.  In a one-player game player 2's $8454 ships $80, so
+    /* $B3AB LD A,($8434) / AND (IY-$2B) / RLA -- GAME OVER only when EVERY
+       player is dead.  In a one-player game player 2's $8454 ships $80, so
        player 1's death alone is "both". */
-    this.gameOver = p1.dead && p2.dead;
+    this.gameOver = this.allDead();
     return true;
   }
 
@@ -8196,7 +8303,12 @@ class Game{
      "both dead" is just "he is dead", because player 2's $844B is already
      $C0 in the captured state.                                             */
   levelOver(){
-    if (this.dead){                                      // $B3AB
+    /* $B3AB is the ALL-dead test levelEnd() already took ($8434 AND
+       $8454): a dead player 1 whose partner walked out of the exit goes
+       to the NEXT DUNGEON, not the game-over chain.  This used to read
+       player 1's own flag, which is the same thing in a one-player game
+       and wrong in any other. */
+    if (this.gameOver){                                  // $B3AB
       this.enterGameOver();
     } else {
       /* $B3AB JR $B381.  $94AE has already written $8403 (the max of the two
@@ -8510,7 +8622,7 @@ class Game{
        this fires on the pass after it expires -- or on the pass the player
        reaches the exit, which is the same flag. */
     if (this.treasure && this.levelDone &&
-        !((this.players[0].p14 & this.players[1].p14) & 0x80))
+        !this.players.every(q => q.p14 & 0x80))          // FOUR BLOCKS: all out
       this.bannerCode |= 0x40;                           // $8931 SET 6
     if (this.bannerCode === 0) return;                   // $8935 OR A / RET z
     /* $894B -- and the pay-out is a SCORE, not just a panel.  $899F, once per
@@ -9019,7 +9131,7 @@ class Game{
     if (this.treasureTimer === 0){                       // $8B1C OR A / RET nz
       this.forcedOver = true;                            // $8B1E SET 3,(IY-2)
       this.levelDone = true;                             // $8B22 SET 7,(IY-2)
-      this.gameOver = this.dead;
+      this.gameOver = this.allDead();                    // $B3AB, all blocks
     }
   }
 
@@ -9203,14 +9315,18 @@ class Game{
      384/384 with player 2 absent, (40,60) -> (42,62) with player 1 absent,
      and with BOTH absent $848D/$848E are not written at all.               */
   cameraTarget(){
-    const [p1, p2] = this.players;
-    let L, H;
-    if (!(p1.f11 & F_DEAD)){ L = p1.x; H = p1.y; }        // $A3E9 BIT 7
-    else if (!(p2.f11 & F_DEAD)){ L = p2.x; H = p2.y; }   // $A3EF
-    else return;                                          // $A3F6 RET nz
+    /* FOUR BLOCKS: the module camera (offline) follows the first two
+       LIVE blocks in block order -- the anchor and, if there is one, the
+       midpoint partner -- which with two blocks is $A3E9..$A3FD's own
+       pair of tests exactly.  (Online every player has his own window;
+       see vcamPass.) */
+    const alive = this.players.filter(q => !(q.f11 & F_DEAD));   // $A3E9/$A3EF BIT 7
+    if (alive.length === 0) return;                       // $A3F6 RET nz
+    const p1 = alive[0], p2 = alive[1] || null;
+    let L = p1.x, H = p1.y;
     L = (L + 2) & 0xFF; H = (H + 2) & 0xFF;               // $A3F7
     const Cc = H, Aa = L;                                 // $A3FB
-    if (!(p1.f11 & F_DEAD) && !(p2.f11 & F_DEAD)){        // $A3FD BIT 7
+    if (p2){                                              // $A3FD BIT 7 -- both
       const e = (p2.x + 2) & 0xFF, d = (p2.y + 2) & 0xFF;
       const s = ((H << 8) | L) + ((d << 8) | e);          // $A40B ADD HL,DE
       H = ((s >> 8) & 0xFF) >> 1;                         // $A40C SRL H
@@ -9666,7 +9782,7 @@ class Game{
       o.foeDmg = q.foeDmg.slice();
       return o;
     };
-    const s = {v: 1, cfg: Object.assign({}, this.cfg), game: {}};
+    const s = {v: 2, cfg: Object.assign({}, this.cfg), game: {}};   // v2: four blocks, the 32-slot ring
     for (const k of SNAP_GAME) s.game[k] = this[k];
     s.map = this.map.map(r => r.slice());
     s.actors = this.actors.map(a => ({x: a.x, y: a.y, state: a.state,
@@ -9691,7 +9807,7 @@ class Game{
     return s;
   }
   restore(s){
-    if (!s || s.v !== 1) throw new Error('SNAPSHOT V' + (s && s.v));
+    if (!s || s.v !== 2) throw new Error('SNAPSHOT V' + (s && s.v));
     const li = this.localIdx | 0;       // the receiver's own display choice
     const nm = this.names;              // ...and the receiver's own name table
     this.reset(s.cfg);
@@ -10351,146 +10467,118 @@ function drawNameTag(ctx, text, cx, ty, colour){
    painted attribute 0 -- black on black -- exactly as the original leaves
    them.  (tools/hudfont.py records the table and that fact.)             */
 function drawPanel(ctx, g, q){
+  /* THE ATTRACT/REWIND SCREENS ONLY (g.feScr): the classic captured two
+     halves, because there FIRE really is the way in ($B374) -- and
+     offline, after a game over, it is the only prompt there is.  IN
+     PLAY the band is FOUR QUARTERS (drawQuarter, below) and this is not
+     called.  $B864 -- FOUR rows of fifteen codes from $7DB8: the
+     GAUNTLET wordmark over "PRESS FIRE", with rows 20-22 given
+     attribute 0 (which is what makes the ISR colour-cycle them,
+     $A2CE/$A2D6) and row 23 attribute 6.  For PLAYER 2 the captured
+     panel art already IS this picture and drawHud's logo block is the
+     measured cycle over exactly the cells the ISR writes, so nothing
+     needs painting there.  For PLAYER 1 it is not: the capture was
+     taken mid-game with him playing, so his half has to be repainted
+     from $7DB8 -- without this the attract screen shows a live
+     SCORE/HEALTH panel for a player who does not exist. */
   const P = HUD ? HUD.panel : null;
-  if (!P) return;
+  if (!P || !g.feScr) return;
   const c0 = q.idx * (HUD_FIELDS.p2_col_offset || 17);
-  if (!q.inGame){
-    /* IN GAME the $B864 invite is RETIRED (this fork).  Offline the
-       client is one player by design, and online the way in is the
-       lobby's START (net.autoFire) with netOverlay carrying the rejoin
-       hint -- a wire seat cannot be claimed from another player's
-       screen, so a colour-cycling PRESS FIRE over the dungeon invited
-       nobody.  An out player's half is BLANKED instead, and must be:
-       the captured art holds a picture for BOTH halves (the wordmark
-       for player 2, a live mid-game panel for player 1) and neither is
-       true. */
-    if (!g.feScr){
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(c0 * 8, PLAYFIELD_H, 15 * 8, 4 * 8);
-      return;
-    }
-    /* ON THE ATTRACT/REWIND SCREENS (g.feScr) the classic picture
-       stays, because there FIRE really is the way in ($B374) -- and
-       offline, after a game over, it is the only prompt there is.
-       $B864 -- FOUR rows of fifteen codes from $7DB8: the GAUNTLET
-       wordmark over "PRESS FIRE", with rows 20-22 given attribute 0
-       (which is what makes the ISR colour-cycle them, $A2CE/$A2D6) and
-       row 23 attribute 6.  For PLAYER 2 the captured panel art already
-       IS this picture and drawHud's logo block is the measured cycle
-       over exactly the cells the ISR writes, so nothing needs painting
-       there.  For PLAYER 1 it is not: the capture was taken mid-game
-       with him playing, so his half has to be repainted from $7DB8 --
-       without this the attract screen shows a live SCORE/HEALTH panel
-       for a player who does not exist. */
-    if (q.idx !== 0) return;
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(c0 * 8, PLAYFIELD_H, 15 * 8, 4 * 8);
-    const wink = logoInk(g.frameCtr);
-    for (let r = 0; r < 4; r++)
-      for (let c = 0; c < 15; c++)
-        drawGlyph(ctx, P.wait[r][c], c0 + c, PLAYFIELD_ROWS + r,
-                  r < 3 ? wink : (P.wait_row23_attr === undefined
-                                  ? 6 : P.wait_row23_attr));
-    return;
-  }
-  const name = P.names.find(n => n.tag === q.shotTag) ||
-               P.names[P.names.length - 1];              // $B890's else arm
-  const ink = panelInk(q, g.frameCtr);                   // $9788's flash
-  /* $B5E8 rewrites EVERY cell of this half -- the glyph plotter $B6C0 writes
-     eight whole bytes per cell -- so the picture underneath is gone, not
-     merged.  The renderer paints the captured rows first, so the half has to
-     be cleared before the new art goes down or the wordmark shows through
-     the blanked row 23.  (A space glyph cannot do it: it is all zero bits,
-     and the renderer skips a black run.) */
+  if (q.inGame || q.idx !== 0) return;          // $B474 puts everyone out
   ctx.fillStyle = '#000000';
   ctx.fillRect(c0 * 8, PLAYFIELD_H, 15 * 8, 4 * 8);
-  for (let r = 0; r < 3; r++)                            // $B87A, 3 x 15
+  const wink = logoInk(g.frameCtr);
+  for (let r = 0; r < 4; r++)
     for (let c = 0; c < 15; c++)
-      drawGlyph(ctx, P.play[r][c], c0 + c, PLAYFIELD_ROWS + r, ink);
-  for (let c = 0; c < 15; c++)                           // $B694, row 23
-    drawGlyph(ctx, 0x20, c0 + c, PLAYFIELD_ROWS + 3, null);
-  const off = ((name.codes.length ^ 15) + 1) >> 1;       // $B60A
-  for (let i = 0; i < name.codes.length; i++)
-    drawGlyph(ctx, name.codes[i], c0 + off + i, PLAYFIELD_ROWS, ink);
-  /* $B61F -- THE INVENTORY ICONS, and they are ATTRIBUTES not pixels.  The
-     six symbols are permanently in the panel art at row 20, columns 0,1,2 and
-     12,13,14 (17 further along for player 2); $B61F reveals the ones you own
-     by writing a colour into their attribute cell and hides the rest by
-     writing ZERO, which is black on black:
+      drawGlyph(ctx, P.wait[r][c], c0 + c, PLAYFIELD_ROWS + r,
+                r < 3 ? wink : (P.wait_row23_attr === undefined
+                                ? 6 : P.wait_row23_attr));
+}
 
-       bit 0 armour $46   bit 1 pickup $43   bit 2 magic  $44
-       bit 3 shot   $42   bit 4 speed  $47   bit 5 fight  $45
-
-     $B630 LD C,(IX+$14) then six RR C, LSB first, and $B64D's `ADD A,10`
-     steps from the third cell to the fourth.  This used to pass 0x00 for all
-     six -- the comment even said "always 0" -- so the symbols were drawn and
-     then made invisible, every frame, whatever the player was carrying.
-     Redrawing from (IX+$14) each frame is equivalent to $B61F's write-on-
-     change: nothing else touches those attribute cells ($B5E8 rewrites the
-     half's GLYPHS through $B6C0, not its attributes). */
-  for (let i = 0; i < 6; i++)                            // $B624..$B66B
-    drawGlyph(ctx, P.play[0][P.icon_cols[i]], c0 + P.icon_cols[i],
-              PLAYFIELD_ROWS, (q.p14 >> i) & 1 ? P.icon_attrs[i] : 0x00);
+/* ---- FOUR PANELS OF EIGHT COLUMNS (this fork) ------------------------
+   In play the HUD band is four QUARTERS, one per block: 4 x 8 = 32
+   columns, the arcade's own four-column layout -- and the 8-character
+   name cap fits a quarter exactly.  Per quarter, top to bottom:
+     row 20  the NAME (tagNameFor: the set name, else the character's
+             own), centred, in the character's ink with $9788's low-
+             health flash;
+     row 21  SCORE, six digits, $B6AE's leading-zero suppression;
+     row 22  HEALTH, four digits;
+     row 23  KEYS and POTIONS as ICON + COUNT -- the original's icon
+             RUNS need up to fifteen cells, a count needs three;
+   and down the right-hand edge of rows 21-23 the six $B61F power icons
+   as a 2 x 3 block, lit by ATTRIBUTE exactly as the original lights
+   them (the character's colour when owned, black on black when not).
+   The SCORE and HEALTH labels went: the layout says which is which.
+   An OUT block's quarter is BLANK (the retired-invite rule: a wire
+   seat cannot be claimed from another player's screen); the attract/
+   rewind screens keep the classic captured halves (drawPanel).  Every
+   glyph is the HUD font's own ($77B0) and every count is drawBcdField's
+   or a plain digit, so nothing here is styled to resemble the game --
+   it is drawn with the game's furniture. */
+const QUARTER_COLS = 8;
+function drawQuarter(ctx, g, q){
+  const P = HUD ? HUD.panel : null, F = HUD_FIELDS;
+  if (!P || !F) return;
+  const c0 = q.idx * QUARTER_COLS, r0 = PLAYFIELD_ROWS;
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(c0 * 8, PLAYFIELD_H, QUARTER_COLS * 8, 4 * 8);
+  if (!q.inGame) return;
+  const ink = panelInk(q, g.frameCtr);                   // $9788's flash
+  /* row 20 -- the name, centred as $B60A centres the character's */
+  const name = tagNameFor(g, q).slice(0, QUARTER_COLS);
+  const off = (QUARTER_COLS - name.length) >> 1;
+  for (let i = 0; i < name.length; i++)
+    drawGlyph(ctx, name.charCodeAt(i), c0 + off + i, r0, ink);
+  /* rows 21-22 -- the two counters, $B7C7's printer, at the quarter's
+     left edge */
+  drawBcdField(ctx, q.score, F.score.bytes, c0, r0 + 1, ink);
+  drawBcdField(ctx, q.health, F.health.bytes, c0, r0 + 2, ink);
+  /* row 23 -- icon + count for keys, then potions, each in its own
+     attribute ($B793's icons, $B6BC's digits) */
+  let col = c0;
+  const count = (glyph, attr, n) => {
+    if (n <= 0) return;
+    drawGlyph(ctx, glyph, col++, r0 + 3, attr);
+    for (const ch of String(n)) drawGlyph(ctx, ch.charCodeAt(0), col++, r0 + 3, attr);
+  };
+  count(F.keys.char, F.keys.attr, q.keys);
+  count(F.potions.char, F.potions.attr, q.potions);
+  /* the six power icons, 2 x 3, down the right edge of rows 21-23:
+     $B61F's reveal-by-attribute from (IX+$14), LSB first */
+  for (let i = 0; i < 6; i++)
+    drawGlyph(ctx, P.play[0][P.icon_cols[i]],
+              c0 + QUARTER_COLS - 2 + (i & 1), r0 + 1 + (i >> 1),
+              (q.p14 >> i) & 1 ? P.icon_attrs[i] : 0x00);
 }
 
 function drawHud(ctx, g){
   if (!HUD_FIELDS) return;
-  const F = HUD_FIELDS;
-  /* repaint the logo block with this frame's cycling ink, over the captured
-     art -- the attribute is the only thing that changes, the pixels are the
-     panel's own.  ONLY while that half is still empty: $B66F writes 0 into
-     the ISR's ink operand for a player who is not in the game and his own
-     character's ink for one who is, and $A2CA/$A2D2 skip the cycle when the
-     operand is non-zero.  And only on the attract/rewind screens: in game
-     an empty half is blanked (see drawPanel) -- the invite is retired. */
-  if (!g.players[1].inGame && g.feScr){
-    const ink = logoInk(g.frameCtr);
-    const pal = PAL_BRT;                                // $40 -> always BRIGHT
-    for (const row of LOGO_ROWS){
-      const hudRow = row - PLAYFIELD_ROWS;
-      for (let col = LOGO_C0; col <= LOGO_C1; col++)
-        for (let yy = 0; yy < 8; yy++)
-          blitOpaqueRow(ctx, HUD_BMP[(hudRow*8+yy)*32 + col],
-                        pal[ink & 7], pal[(ink >> 3) & 7],
-                        col*8, PLAYFIELD_H + hudRow*8 + yy, 256);
+  if (g.feScr){
+    /* THE ATTRACT/REWIND SCREENS: repaint the logo block with this
+       frame's cycling ink, over the captured art -- the attribute is the
+       only thing that changes, the pixels are the panel's own.  ONLY
+       while that half is still empty: $B66F writes 0 into the ISR's ink
+       operand for a player who is not in the game and his own
+       character's ink for one who is, and $A2CA/$A2D2 skip the cycle
+       when the operand is non-zero. */
+    if (!g.players[1].inGame){
+      const ink = logoInk(g.frameCtr);
+      const pal = PAL_BRT;                              // $40 -> always BRIGHT
+      for (const row of LOGO_ROWS){
+        const hudRow = row - PLAYFIELD_ROWS;
+        for (let col = LOGO_C0; col <= LOGO_C1; col++)
+          for (let yy = 0; yy < 8; yy++)
+            blitOpaqueRow(ctx, HUD_BMP[(hudRow*8+yy)*32 + col],
+                          pal[ink & 7], pal[(ink >> 3) & 7],
+                          col*8, PLAYFIELD_H + hudRow*8 + yy, 256);
+      }
     }
+    for (const q of g.players.slice(0, 2)) drawPanel(ctx, g, q);
+    return;
   }
-  for (const q of g.players) drawPanel(ctx, g, q);
-  /* (the $92C1 game-over NAME ENTRY that used to draw here is retired --
-     see overTick: death shows RIP <name> over the bones instead, drawn by
-     the tag pass in render().) */
-  /* the live counters, per player.  $B7C7's `LD A,L / ADD A,$20` is how the
-     same hardcoded $8422/$8424 reach player 2's block, and $B722's $50DA is
-     how they reach his half of the screen. */
-  const dc = HUD_FIELDS.p2_col_offset || 17;
-  for (const q of g.players){
-    if (!q.inGame) continue;
-    const c0 = q.idx * dc;
-    /* the ISR repaints rows 21 and 22 of this half with $A2CE/$A2D6 every
-       video frame, so the counters carry the CHARACTER's ink -- not the
-       attribute the capture left in that cell, which for player 2's half is
-       the logo's black-on-black. */
-    const pink = panelInk(q, g.frameCtr);
-    drawBcdField(ctx, q.score, F.score.bytes, F.score.col + c0, F.score.row,
-                 pink);
-    drawBcdField(ctx, q.health, F.health.bytes, F.health.col + c0,
-                 F.health.row, pink);
-    /* The icon runs.  Keys grow rightwards from column 0 and potions grow
-       leftwards from column 14; the carry rule (keys + potions <= 10, or 15)
-       is exactly what stops the two runs colliding, so the cells between them
-       are blanked with the same SPACE the original writes when an icon is
-       given up ($B793 LD C,$20). */
-    const kRow = F.keys.row, kc = F.keys.col + c0, pc = F.potions.col;
-    for (let i = 0; i < 15; i++){
-      const col = kc + i;
-      if (i < q.keys)
-        drawGlyph(ctx, F.keys.char, col, kRow, F.keys.attr);
-      else if (q.potions > 0 && i >= pc - q.potions + 1 && i <= pc)
-        drawGlyph(ctx, F.potions.char, col, kRow, F.potions.attr);
-      else
-        drawGlyph(ctx, 0x20, col, kRow, null);
-    }
-  }
+  /* IN PLAY (and the RIP hold): four quarters */
+  for (const q of g.players) drawQuarter(ctx, g, q);
 }
 
 /* ---- a whole Spectrum display file, $4000..$5AFF ---------------------
@@ -10556,7 +10644,7 @@ function render(ctx,g){
      (localIdx) -- a display choice only: the sim reads the windows
      themselves, never localIdx.  Offline it is the module camera, as
      always. */
-  const dcam = g.online ? g.players[g.localIdx & 1] : g;
+  const dcam = g.online ? g.players[g.localIdx & 3] : g;
   const dcamX = dcam.camX, dcamY = dcam.camY;
   const ox=dcamX*PXU, oy=dcamY*PXU;
   const c0=Math.floor(ox/CELL), r0=Math.floor(oy/CELL);
@@ -10653,7 +10741,7 @@ function render(ctx,g){
        why picking the warrior now shows the warrior.  PLAYER_FRAMES is the
        fallback for an asset file built before `chars` existed. */
     const cset = CHAR_FRAMES && CHAR_FRAMES[q.charIndex & 3];
-    const bank = (cset && Object.keys(cset).length) ? cset : PLAYER_FRAMES[q.idx];
+    const bank = (cset && Object.keys(cset).length) ? cset : PLAYER_FRAMES[q.idx & 1];
     const mat = (q.animCtl & 1) && MAT_FRAMES.length;    // $9694 / $A4C8
     /* $9595 -- once the exit countdown has reached 7 the player's eight
        pointer-table entries name records 24..31 instead of 0..7, so the SLOT
@@ -10861,7 +10949,7 @@ function render(ctx,g){
     const lines = BANNER.texts[key];
     if (lines){
       const P2 = HUD ? HUD.panel : null;
-      const who = g.players[g.bannerBy & 1] || g.players[0];
+      const who = g.players[g.bannerBy & 3] || g.players[0];
       const nm = P2 ? (P2.names.find(n => n.tag === who.shotTag)
                        || P2.names[P2.names.length - 1]) : null;
       const inner = BANNER.cols - 2;
@@ -10889,7 +10977,7 @@ function render(ctx,g){
                  already centred and the substitution is two characters for
                  two, so the centring is unaffected. */
               if (g.bannerShow === 0x40 && cr === 2){
-                const q2 = g.players[g.bannerBy & 1] || g.players[0];
+                const q2 = g.players[g.bannerBy & 3] || g.players[0];
                 /* the value $899F worked out when the panel was BUILT -- not
                    recomputed here, which would read post-levelOver state */
                 const v = q2.bannerBonus | 0;                       // $89D4
@@ -11398,12 +11486,13 @@ function netBoot(){
      the potion wiring are this client's own -- they only shape the byte
      it sends, never the sim. */
   const chars = net.chars || [];
-  const c1 = (chars[0] !== undefined && chars[0] !== 0xFF) ? chars[0] & 3
-           : net.cfgLocal.char & 3;
-  const c2 = (chars[1] !== undefined && chars[1] !== 0xFF) ? chars[1] & 3
-           : feDrawP2(c1, CHAR2_INDEX);
+  const pick = (i, dflt) => (chars[i] !== undefined && chars[i] !== 0xFF) ? chars[i] & 3 : dflt;
+  const c1 = pick(0, net.cfgLocal.char & 3);
+  const c2 = pick(1, feDrawP2(c1, CHAR2_INDEX));
+  /* seats 3 and 4: the table's pick, else Game.charTable's lowest
+     unused -- every client derives the same four from the same table */
   game.reset({ online: true, buildSeed: net.buildSeed,
-               char: c1, char2: c2,
+               char: c1, char2: c2, char3: pick(2, undefined), char4: pick(3, undefined),
                method1: net.cfgLocal.method1 & 3,
                zonePotion: !!net.cfgLocal.zonePotion });
   game.localIdx = net.seat;
@@ -11422,9 +11511,8 @@ function netOnMessage(b){
     net.buildSeed = netRdU32(b, 3);
     const mode = b[7], pass = netRdU32(b, 8);
     net.welcomed = true;
-    if (net.seats > 2){
-      /* the sim carries two player blocks today; a wider session needs
-         the four-block pass first (CLAUDE.md, planned work) */
+    if (net.seats > 4){
+      /* the sim carries four player blocks -- the protocol's maxSeats */
       net.status = 'SERVER SEATS UNSUPPORTED'; net.phase = 'ended';
       if (net.tp) net.tp.close();
       return;

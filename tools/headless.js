@@ -1259,27 +1259,29 @@ if (A.player_frames) {
     const g2 = G.seed({});
     g2.score = 0x000000; g2.health = 0x1997; g2.keys = 0; g2.potions = 0;
     const a0 = paint(g2);
-    checkTrue('the health digits are painted at row 22 cols 9-12',
-              rectsIn(a0, 12, 22).length > 0 && rectsIn(a0, 9, 22).length > 0);
+    /* FOUR QUARTERS (this fork): player 1's is columns 0-7 -- the score
+       on row 21 at cols 0-5, the health on row 22 at cols 0-3, keys and
+       potions on row 23 as icon + count.  The printer is still $B7C7's. */
+    checkTrue('the health digits are painted at row 22 cols 0-3 of the quarter',
+              rectsIn(a0, 3, 22).length > 0 && rectsIn(a0, 0, 22).length > 0);
     checkTrue('a LEADING ZERO of the score prints as a space ($B6BC)',
-              rectsIn(a0, 1, 22).length === 0,
-              `${rectsIn(a0, 1, 22).length} rects at r22 c1 with score 000000`);
+              rectsIn(a0, 0, 21).length === 0,
+              `${rectsIn(a0, 0, 21).length} rects at r21 c0 with score 000000`);
     checkTrue('but the last digit always prints ($B7DD SET 0,C)',
-              rectsIn(a0, 6, 22).length > 0);
+              rectsIn(a0, 5, 21).length > 0);
     g2.score = 0x123456;
     const a1 = paint(g2);
-    checkTrue('a six-digit score fills all six cells, cols 1-6',
-              [1, 2, 3, 4, 5, 6].every(c => rectsIn(a1, c, 22).length > 0));
+    checkTrue('a six-digit score fills all six cells, cols 0-5 of row 21',
+              [0, 1, 2, 3, 4, 5].every(c => rectsIn(a1, c, 21).length > 0));
     checkTrue('changing the score changes the panel pixels',
               JSON.stringify(a0) !== JSON.stringify(a1));
     g2.keys = 3; g2.potions = 2;
     const a2 = paint(g2);
-    checkTrue('three keys paint at row 23 cols 0,1,2 and nothing at col 3',
-              rectsIn(a2, 0, 23).length > 0 && rectsIn(a2, 1, 23).length > 0 &&
-              rectsIn(a2, 2, 23).length > 0 && rectsIn(a2, 3, 23).length === 0);
-    checkTrue('two potions paint at row 23 cols 13 and 14, walking LEFTWARDS',
-              rectsIn(a2, 14, 23).length > 0 && rectsIn(a2, 13, 23).length > 0 &&
-              rectsIn(a2, 12, 23).length === 0);
+    checkTrue('three keys paint as the key icon and a 3 at row 23 cols 0-1',
+              rectsIn(a2, 0, 23).length > 0 && rectsIn(a2, 1, 23).length > 0);
+    checkTrue('two potions follow as the potion icon and a 2 at cols 2-3, then nothing',
+              rectsIn(a2, 2, 23).length > 0 && rectsIn(a2, 3, 23).length > 0 &&
+              rectsIn(a2, 4, 23).length === 0);
     /* THE LOGO COLOUR CYCLE, enumerated over its whole domain rather than
        sampled.  The ISR computes it every video frame at $A2B4 and stores it
        into the operand at $A2F5; MEASURED by sampling that operand INSIDE the
@@ -2553,7 +2555,11 @@ if (A.player_frames) {
       g.players[1].p14 = in2 ? 0x00 : 0x80;
       g.players[0].timer = t1; g.players[1].timer = t2;
       g.players[0].f11 = o1 ? 0x80 : 0; g.players[1].f11 = o2 ? 0x80 : 0;
-      return g.chaseTarget();
+      /* four blocks: chaseTarget returns the target itself -- a player,
+         a list to take the nearest of, or null; folded back to $AD52's
+         displacement here so the table reads as the gate prints it */
+      const t = g.chaseTarget();
+      return t === null ? 0x00 : Array.isArray(t) ? 0x2F : t.idx === 0 ? 0x24 : 0x19;
     };
     check('$ADC7\'s five arms, and the $18 power-up is a REPELLENT',
           [set(0, 0, 0, 0, 0), set(0, 5, 0, 0, 0), set(1, 0, 0, 0, 0),
@@ -2762,10 +2768,12 @@ if (A.player_frames) {
     /* $B694 blanks row 23 for a player who IS in the game, and $B87A's row 2
        plus $B7C7's counters fill row 22 -- health at cols 9..12 of his own
        half, i.e. 26..29 absolute. */
-    checkTrue('after it, row 23 is blank and row 22 carries his counters',
-              cells(two, 21, 27, 23) === 0 && cells(two, 26, 30, 22) > 0);
-    checkTrue('his name is on row 20 of his own half, +17 columns',
-              cells(two, 17, 32, 20) > 0);
+    /* FOUR QUARTERS: his is columns 8-15 -- health on row 22 at its
+       left edge, an empty row 23 (no keys, no potions), the name on 20 */
+    checkTrue('after it, his quarter carries his health on row 22 and nothing on row 23',
+              cells(two, 8, 12, 22) > 0 && cells(two, 8, 14, 23) === 0);
+    checkTrue('his name is on row 20 of his own quarter, +8 columns',
+              cells(two, 8, 16, 20) > 0);
     /* the ATTRACT/REWIND screens keep the classic invite: both halves
        carry the wordmark over PRESS FIRE (row 23, attribute 6 -- the
        always-visible row; 20-22 spend part of the ISR cycle black).
@@ -5616,14 +5624,16 @@ if (process.argv[2] === '--table') {
                    '#00ff00','#00ffff','#ffff00','#ffffff'];
       const countAt = (p14, k, colour) => {
         const g = G.seed({}); g.players[0].p14 = p14;
-        const row = 20 * 8; let n = 0;
+        /* FOUR QUARTERS: the six icons are a 2 x 3 block down the right
+           edge of rows 21-23 (cols 6-7 of quarter 1) */
+        const row = (21 + (k >> 1)) * 8; let n = 0;
         const cap = { set fillStyle(v){this._f=v;}, get fillStyle(){return this._f;},
           fillRect(x, y, w, h) {
             if (this._f !== colour) return;
             for (let yy = y; yy < y + h; yy++) {
               if (yy < row || yy >= row + 8) continue;
               for (let xx = x; xx < x + w; xx++)
-                if ((xx >> 3) === COLS[k]) n++;
+                if ((xx >> 3) === 6 + (k & 1)) n++;
             }
           } };
         G.render(cap, g);
@@ -5982,7 +5992,7 @@ if (process.argv[2] === '--table') {
         }
         g.onePass(S.join && p === 0 ? {p2: {fire: true}} : {});
         const want = S.rows[p];
-        const ring = JSON.stringify([...g.ring]);
+        const ring = JSON.stringify([...g.ring.slice(0, 64)]);   // the original's sixteen slots
         const shots = JSON.stringify(g.mshots.map(s => [s.x, s.y, s.state, s.flags]));
         const mine = { ring, n: g.mshots.length, shots,
                        hp: g.players[0].health, hp2: g.players[1].health,
@@ -8119,7 +8129,7 @@ if (process.argv[2] === '--table') {
               cont.join(',') !== rep.join(','));
     /* a wrong version refuses */
     let threw = false;
-    try { g.restore(Object.assign(JSON.parse(wire), { v: 2 })); }
+    try { g.restore(Object.assign(JSON.parse(wire), { v: 9 })); }
     catch (e){ threw = true; }
     checkTrue('a snapshot with the wrong version is REFUSED', threw);
     /* localIdx is the receiver's own -- the wire neither carries it nor
@@ -8170,9 +8180,9 @@ if (process.argv[2] === '--table') {
   H.message(Uint8Array.from([M.CHARS, 3, 2, 255, 255]));
   checkTrue('...and CHARS boots it: live, in the attract lobby',
             S.phase === 'live' && G.game.mode === 'attract');
-  check('the sim booted from the SESSION: seed, both characters, my seat displayed',
+  check('the sim booted from the SESSION: seed, the table\'s two characters plus the two derived, my seat displayed',
         [G.game.brngSeed, G.game.players.map(q => q.charIndex), G.game.localIdx],
-        [0xC0FFEE, [3, 2], 1]);
+        [0xC0FFEE, [3, 2, 0, 1], 1]);
   checkTrue('READY went back', !!lastOf(M.READY));
 
   /* ---- a tick: INPUT out with the LOCAL byte, PASS steps the sim ------ */
@@ -8206,7 +8216,7 @@ if (process.argv[2] === '--table') {
   checkTrue('SNAPREQ answers with SNAP at the current step',
             sent.length === before + 1 && served[0] === M.SNAP && rd32(served, 1) === S.step);
   const parsed = JSON.parse(G.net.utf8Dec(Uint8Array.from(served), 5));
-  check('...and the payload is the sim\'s own snapshot wire', parsed.v, 1);
+  check('...and the payload is the sim\'s own snapshot wire (v2: four blocks)', parsed.v, 2);
 
   /* ---- DESYNC -> SNAP restores and re-readies ------------------------- */
   H.message(Uint8Array.from([M.DESYNC, ...u32(3)]));
@@ -9063,6 +9073,382 @@ if (process.argv[2] === '--table') {
     checkTrue('...and the ease FLOORS at the 50 ms base',
               Math.abs(S.fifoLead - 0.05) < 1e-9);
   }
+}
+
+
+/* ====================================================================
+   FOUR PLAYERS (this fork; CLAUDE.md planned work 4).  The sim carries
+   FOUR player blocks.  Blocks 3 and 4 have no Z80 reference -- the
+   original never had them -- so the gates are:
+     * DEGENERACY: with at most two players in the game the four-block
+       sim matches the TWO-BLOCK build pass for pass, by the per-pass
+       state digest in tools/fourblock.js against build/_fourblock_ref.json
+       (recorded on the two-block build before the change);
+     * INERTNESS: blocks 3/4 do not change a byte while they are out;
+     * SYMMETRY: each generalized rule fires for a block 3/4 exactly as
+       it fires for block 2;
+     * and the four-quarter HUD, the wire at four seats, the snapshot.
+   ==================================================================== */
+{
+  const FB = require(path.join(ROOT, 'tools', 'fourblock.js'));
+  const REF = JSON.parse(fs.readFileSync(path.join(ROOT, 'build', '_fourblock_ref.json'), 'utf8'));
+  /* the replays run in a PRISTINE sandbox of the built client, as the
+     recorder did: the suite's own G carries module state from every
+     section before this one (found the hard way: dungeon 2 diverged at
+     pass 52 in the suite and nowhere else) */
+  const GF = FB.loadClient(BUILT);
+  G.settings.reset();
+  const g = G.game;
+  g.reset({});
+  check('the sim carries FOUR player blocks', g.players.length, 4);
+  check('blocks 3 and 4 ship as the tape ships block 2: out, dead, $C0/$80, at (0,0)',
+        g.players.slice(2).map(q => [q.x, q.y, q.f11, q.p14, q.dead, q.health, q.inGame]),
+        [[0, 0, 0xC0, 0x80, true, 0, false], [0, 0, 0xC0, 0x80, true, 0, false]]);
+  check('four blocks, four characters: the menu\'s two, then the lowest unused (elf, valkyrie -> warrior, wizard)',
+        g.players.map(q => q.charIndex), [3, 1, 0, 2]);
+  const GameClass = g.constructor;
+  check('Game.charTable honours a given pick and fills the rest without a clash',
+        [GameClass.charTable(0, 1, undefined, undefined), GameClass.charTable(2, 2, 2, undefined),
+         GameClass.charTable(1, 0, 3, 2), GameClass.charTable(0x2A, 0x2A, undefined, undefined)],
+        [[0, 1, 2, 3], [2, 2, 2, 0], [1, 0, 3, 2], [0x2A, 0x2A, 0, 1]]);
+  check('the reference fixture was recorded on the TWO-block build', REF.blocks, 2);
+
+  /* --- DEGENERACY ----------------------------------------------------- */
+  for (const sc of FB.SCENARIOS){
+    const got = FB.runScenario(GF, sc), want = REF.scenarios[sc.name] || [];
+    let first = -1;
+    for (let i = 0; i < Math.max(got.length, want.length); i++)
+      if (got[i] !== want[i]){ first = i; break; }
+    check('DEGENERACY ' + sc.name + ': ' + sc.passes + ' passes match the two-block build hash for hash',
+          first < 0 ? 'all' : 'first mismatch at pass ' + first, 'all');
+  }
+
+  /* --- INERTNESS ------------------------------------------------------ */
+  {
+    const sc = FB.SCENARIOS.find(s => s.name === 'duo-shove');
+    g.reset({});
+    /* animCtl's bit 4 is masked: $AB24 writes the shove flag into ANY
+       block the geometry matches and $A48D clears it only for the living
+       -- unfingerprinted, display-adjacent, and spent by the join */
+    const snap = q => JSON.stringify([q.x, q.y, q.dir, q.health, q.score, q.keys, q.potions,
+                                      q.timer, q.f11, q.p14, q.levelOwn, q.animCtl & ~0x10, q.shot.state,
+                                      q.dead, q.frameSlot, q.pend, q.camLive, q.died]);
+    const before = g.players.slice(2).map(snap);
+    for (let i = 0; i < sc.passes; i++) FB.tick(g, sc.input(i, g) || {});
+    check('INERT WHILE OUT: over 260 two-player passes (shoves included) blocks 3 and 4 do not change a byte',
+          g.players.slice(2).map(snap), before);
+    checkTrue('...and the upper ring -- their sixteen slots -- stays $FF',
+              Array.from(g.ring.slice(64)).every(v => v === 0xFF));
+  }
+
+  /* --- FOUR IN THE GAME ---------------------------------------------- */
+  const joinAll = gg => {
+    for (let i = 0; i < 5; i++) gg.onePass({});
+    gg.onePass({ p2: { fire: true } });
+    for (let i = 0; i < 8; i++) gg.onePass({});
+    gg.onePass({ p3: { fire: true } });
+    for (let i = 0; i < 8; i++) gg.onePass({});
+    gg.onePass({ p4: { fire: true } });
+    for (let i = 0; i < 8; i++) gg.onePass({});
+  };
+  {
+    g.reset({});
+    joinAll(g);
+    check('FIRE on p2, p3 and p4 joins each through $9440 -- four in the game',
+          g.players.map(q => q.inGame), [true, true, true, true]);
+    const cells = g.players.map(q => (q.x >> 2) + ',' + (q.y >> 2));
+    check('...each on his own cell', new Set(cells).size, 4);
+    checkTrue('...all within two cells of player 1: the $9689 ring, anchored on the partner then the rest',
+              g.players.slice(1).every(q => Math.abs((q.x >> 2) - (g.players[0].x >> 2)) <= 2 &&
+                                            Math.abs((q.y >> 2) - (g.players[0].y >> 2)) <= 2),
+              JSON.stringify(cells));
+    {
+      const gj = G.game; gj.reset({});
+      for (let i = 0; i < 5; i++) gj.onePass({});
+      gj.onePass({ p3: { fire: true }, p4: { fire: true } });
+      check('a join resets the block: health 2000, score 0, nothing carried, armour row installed',
+            gj.players.slice(2).map(q => [q.health, q.score, q.keys, q.potions, q.dmgRow.length, q.inGame]),
+            [[0x2000, 0, 0, 0, 6, true], [0x2000, 0, 0, 0, 6, true]]);
+      gj.reset({}); joinAll(gj);
+    }
+    /* each block walks on its OWN byte: hold p3 in each direction in turn */
+    let moved3 = false;
+    for (const d of ['up', 'right', 'down', 'left']){
+      const was = [g.players[2].x, g.players[2].y];
+      for (let i = 0; i < 6; i++) g.onePass({ p3: { [d]: true } });
+      if (g.players[2].x !== was[0] || g.players[2].y !== was[1]) moved3 = true;
+    }
+    checkTrue('block 3 walks on the p3 byte', moved3);
+    /* determinism and the fourth byte's reach: two identical four-player
+       runs fingerprint alike; a run with p4 walking instead diverges */
+    const run4 = p4dir => {
+      const gg = G.game; gg.reset({}); joinAll(gg);
+      const fps = [];
+      for (let i = 0; i < 120; i++){
+        const t = i % 40;
+        gg.onePass({ right: t < 20, left: t >= 20, fire: i % 6 === 0,
+                     p2: { down: t < 20, up: t >= 20, fire: i % 7 === 0 },
+                     p3: { left: t < 20, right: t >= 20, fire: i % 5 === 0 },
+                     p4: p4dir ? { [p4dir]: true, fire: i % 4 === 0 } : {} });
+        fps.push(gg.fingerprint());
+      }
+      return fps.join(',');
+    };
+    checkTrue('four players for 120 passes: deterministic (two runs fingerprint alike)',
+              run4('up') === run4('up'));
+    checkTrue('...and the FOURTH byte reaches the sim (p4 walking vs standing diverges)',
+              run4('up') !== run4(null));
+    checkTrue('...and both runs end with four still in the game', g.players.every(q => q.inGame));
+  }
+
+  /* --- SYMMETRY: each generalized rule, driven with block 3 or 4 -------- */
+  {
+    const F_EXITING = 0x40, F_DEAD = 0x80;
+    /* $AAC4's body box against block 3 */
+    g.reset({}); joinAll(g);
+    const p1 = g.players[0], p3 = g.players[2], p4 = g.players[3];
+    p1.x = 12; p1.y = 8; p3.x = 16; p3.y = 8; p4.x = 40; p4.y = 40; g.players[1].x = 40; g.players[1].y = 60;
+    g.p = p1; p1.animCtl &= ~0x08;
+    check('$AAC4: block 3\'s body refuses block 1\'s step and sets his contact bit',
+          [g.otherPlayerBox({ x: 14, y: 8 }), (p1.animCtl & 0x08) !== 0], [true, true]);
+    p1.animCtl &= ~0x08; p3.f11 |= F_EXITING;
+    check('...and an EXITING block 3 refuses nothing ($AACA BIT 6)',
+          [g.otherPlayerBox({ x: 14, y: 8 }), (p1.animCtl & 0x08) !== 0], [false, false]);
+    p3.f11 &= ~F_EXITING;
+    /* $AAF5's shove from block 4 */
+    p4.x = 12; p4.y = 4; p4.dir = 0x02; p1.dir = 0;             // p4 above, holding DOWN
+    g.passCtr &= ~1;
+    g.shove(p4, p1);
+    check('$AAF5: block 4 four units above, holding DOWN, writes DOWN into block 1\'s byte',
+          p1.dir & 0x0F, 0x02);
+    /* the leash (offline): block 4 far away refuses block 1's step */
+    p4.x = 78; p4.y = 8; p4.f11 &= ~F_DEAD; g.p = p1;      // 64 units: past $3D
+    check('$A924: the leash holds block 1 to block 4 as it held him to block 2',
+          g.leash({ x: 14, y: 8 }, true), true);
+    p4.x = 20;
+    check('...and releases inside the screen', g.leash({ x: 14, y: 8 }, true), false);
+    /* $94AE: the level ends when EVERY block is finished or dead */
+    g.reset({}); joinAll(g);
+    for (const q of g.players.slice(0, 3)){ q.f11 |= F_DEAD; q.dead = true; q.p14 |= 0x80; }
+    check('$94B4: three dead and block 4 alive -- the level goes on', g.levelEnd(), false);
+    g.players[3].levelOwn = 7; g.players[2].levelOwn = 3;
+    g.players[3].f11 |= F_DEAD;                                   // finished the exit
+    check('...block 4 finishing ends it, and $94C3 takes the MAX of four (7)',
+          [g.levelEnd(), g.level, g.gameOver], [true, 7, false]);
+    /* $B3AB: a dead player 1 whose partner walked out goes to the NEXT
+       dungeon, not the game-over chain (the four-block all-dead test) */
+    g.reset({}); joinAll(g);
+    g.players[0].f11 |= F_DEAD; g.players[0].dead = true; g.players[0].p14 |= 0x80;
+    for (const q of g.players.slice(1)){ q.f11 |= F_DEAD; q.levelOwn = 2; }   // three exit
+    checkTrue('$B3AB: player 1 dead, the rest EXITED -> levelEnd says next dungeon',
+              g.levelEnd() && !g.gameOver);
+    g.levelOver();
+    check('...and levelOver builds dungeon 2 in play -- not the RIP chain',
+          [g.mode, g.level], ['play', 2]);
+    g.reset({}); joinAll(g);
+    for (const q of g.players){ q.f11 |= F_DEAD; q.dead = true; q.p14 |= 0x80; }
+    g.levelEnd(); g.levelOver();
+    check('...while ALL FOUR dead is the game over', g.mode, 'over');
+    /* $ADC7 with three in: the nearest of three, ties to the lower block */
+    g.reset({}); joinAll(g);
+    for (const q of g.players){ q.timer = 0; q.f11 &= ~F_DEAD; }
+    g.players[3].p14 |= 0x80;                                     // block 4 out
+    g.players[0].x = 60; g.players[0].y = 60;
+    g.players[1].x = 20; g.players[1].y = 60;
+    g.players[2].x = 40; g.players[2].y = 30;
+    const t = g.chaseTarget();
+    check('$ADC7: three in the game -> the NEARER of three (a list of the live ones, player 1 first)',
+          Array.isArray(t) ? t.map(q => q.idx) : t, [0, 1, 2]);
+    const aim = g.actorAim({ x: 44, y: 32 });
+    check('...and actorAim takes block 3, the nearest, over both others', aim.dist,
+          ((44 - 40) + (32 - 30)));
+    /* $B060's walk: blocks 1 and 2 flashing, block 3 clean -> aimed at block 3 */
+    g.reset({}); joinAll(g);
+    for (const q of g.players) q.f11 &= ~F_DEAD;
+    g.players[0].timer = 5; g.players[1].timer = 5; g.players[2].timer = 0; g.players[3].timer = 0;
+    g.players[2].x = 10; g.players[2].y = 10;                   // up-left of the actor
+    g.players[3].x = 100; g.players[3].y = 100;
+    g.mshots.length = 0;
+    g.actorFire3({ x: 40, y: 40 }, 0, 0);                        // even coin: walk from block 1
+    check('$B060: an even coin walks blocks 1, 2 (flashing) to block 3 -- the shot\'s signs say up-left',
+          g.mshots.length === 1 ? [(g.mshots[0].state & 0x08) !== 0, (g.mshots[0].state & 0x80) !== 0] : g.mshots.length,
+          [true, true]);
+    g.players[2].f11 |= F_DEAD; g.mshots.length = 0;
+    g.actorFire3({ x: 40, y: 40 }, 0, 0);
+    check('...and a DEAD block 3 ends the walk with no shot ($B076 RET nz)', g.mshots.length, 0);
+    /* the ring: block 4's eight slots at +$60 fill and drain at the two-block cadence */
+    g.reset({}); joinAll(g);
+    g.ring.fill(0xFF); g.mshots.length = 0;
+    g.ringWrite(0x03, 20, 24, 0x60);
+    check('$B04B: block 4\'s facing-3 slot lives at ring byte $60 + 12, priority $90 + $6C',
+          [g.ring[0x6C], g.ring[0x6D], g.ring[0x6E], g.ring[0x6F]], [(0x90 + 0x6C) & 0xFF, 20, 24, 3]);
+    let born = -1;
+    for (let i = 0; i < 8 && born < 0; i++){ g.passCtr = i; g.ringDrain(); if (g.mshots.length) born = i; }
+    g.ring.fill(0xFF); g.mshots.length = 0;
+    g.ringWrite(0x03, 20, 24, 0x20);                             // block 2's same facing
+    let born2 = -1;
+    for (let i = 0; i < 8 && born2 < 0; i++){ g.passCtr = i; g.ringDrain(); if (g.mshots.length) born2 = i; }
+    check('$8FC5 drains it on the pass its facing comes round (passCtr & 7 = 5) -- the same pass as block 2\'s own',
+          [born, born2, g.mshots.length && g.mshots[0].x, g.mshots.length && g.mshots[0].state],
+          [5, 5, 21, 0x93]);
+    /* $B717's robin serves block 3 two blocks apart from block 1 */
+    g.reset({}); joinAll(g);
+    g.players[2].f11 |= 0x01;                                    // F_HEALTH_D on block 3
+    let served = -1;
+    for (let i = 0; i < 8 && served < 0; i++){ g.passCtr = (g.passCtr & ~3) | (i & 3); g.hudPass(); if (!(g.players[2].f11 & 1)) served = i; }
+    checkTrue('$B717: block 3\'s dirty flag is served on the block-1 passes of the robin', served >= 0 && (served & 2) === 0, 'served at ' + served);
+    /* $9445's retired entry: a dead player REJOINS on FIRE while the
+       others play, and a dead second block can join the NEXT game */
+    g.reset({}); joinAll(g);
+    g.players[2].health = 0;
+    g.onePass({});                                               // $93CD at $8540
+    check('block 3 dies: out, the death mark ($93E2), the RIP marker',
+          [g.players[2].inGame, g.players[2].animCtl, g.players[2].died], [false, 0x80, true]);
+    g.onePass({});
+    check('the mark is SPENT on the next poll ($93A8 / $948C, with no entry to type)',
+          [g.players[2].animCtl, g.players[2].inGame, g.players[2].died], [0, false, true]);
+    g.onePass({ p3: { fire: true } });
+    check('...and FIRE brings him back through $9440: in, 2000 health, the RIP down',
+          [g.players[2].inGame, g.players[2].health, g.players[2].died, g.mode], [true, 0x2000, false, 'play']);
+    g.players[2].animCtl = 0x10; g.players[2].p14 |= 0x80; g.players[2].dead = true;
+    g.onePass({}); g.onePass({ p3: { fire: true } });
+    check('an out block left with the SHOVE bit ($AB24, never cleared for the dead) is not locked out',
+          g.players[2].inGame, true);
+    g.players[2].animCtl = 0x41; g.players[2].p14 |= 0x80; g.players[2].dead = true;
+    g.onePass({}); g.onePass({ p3: { fire: true } });
+    check('...while any other bit in (IX+14) still refuses, as $9445 did', g.players[2].inGame, false);
+    /* the whole party dead: after the RIP hold every block can join the new game */
+    g.reset({}); joinAll(g);
+    for (const q of g.players) q.health = 0;
+    for (let i = 0; i < 4 && g.mode === 'play'; i++){ g.onePass({}); if (g.levelDone) g.levelOver(); }
+    check('all four dead -> the RIP hold', g.mode, 'over');
+    while (g.mode === 'over') g.overTick();
+    check('...then the attract loop, everyone out', [g.mode, g.players.every(q => !q.inGame)], ['attract', true]);
+    g.attractTick({}); g.attractTick({ p4: { fire: true } });
+    g.attractTick({});
+    check('...and a block that died in the last game joins the next one on FIRE',
+          [g.mode, g.players[3].inGame], ['play', true]);
+    /* $9788's ink per block */
+    checkTrue('panelInk follows the CHARACTER of block 4 (the wizard\'s $46)',
+              G.render && g.players[3].charIndex === 2);
+  }
+
+  /* --- THE FOUR-QUARTER HUD, at the renderer ---------------------------- */
+  {
+    const cells = (list, c0, c1, row) => {
+      const buf = new Uint8Array(256 * 32);
+      for (const c of list){
+        if (c[0] !== 'fillRect') continue;
+        const on = c[5] !== '#000000' ? 1 : 0;
+        for (let y = Math.max(160, c[2] | 0); y < Math.min(192, (c[2] | 0) + (c[4] | 0)); y++)
+          for (let x = Math.max(0, c[1] | 0); x < Math.min(256, (c[1] | 0) + (c[3] | 0)); x++)
+            buf[(y - 160) * 256 + x] = on;
+      }
+      let n = 0;
+      for (let y = (row - 20) * 8; y < (row - 20) * 8 + 8; y++)
+        for (let x = c0 * 8; x < c1 * 8; x++) n += buf[y * 256 + x];
+      return n;
+    };
+    const paint = gg => { recording = true; drawCalls.length = 0;
+                          G.render(ctxStub, gg); recording = false;
+                          return drawCalls.slice(); };
+    const g4 = G.seed({});
+    g4.autoJoin(4);
+    check('Game.autoJoin(4) joins all four', g4.players.map(q => q.inGame), [true, true, true, true]);
+    g4.names = ['ABCDEFGH', '', 'X', ''];
+    g4.players[0].score = 0x123456; g4.players[0].health = 0x1997;
+    g4.players[0].keys = 12; g4.players[0].potions = 3; g4.players[0].p14 = 0x3F;
+    g4.players[1].score = 0; g4.players[1].keys = 0; g4.players[1].potions = 0;
+    g4.frameCtr = 0;
+    const L = paint(g4);
+    checkTrue('quarter 1: an eight-letter name fills row 20 cols 0-7',
+              [0, 1, 2, 3, 4, 5, 6, 7].every(c => cells(L, c, c + 1, 20) > 0));
+    checkTrue('quarter 2: the unset name wears the character\'s own (VALKYRIE, 8) across cols 8-15',
+              [8, 9, 10, 11, 12, 13, 14, 15].every(c => cells(L, c, c + 1, 20) > 0));
+    checkTrue('quarter 3: a one-letter name is CENTRED -- col 19 only',
+              cells(L, 19, 20, 20) > 0 && cells(L, 16, 19, 20) === 0 && cells(L, 20, 24, 20) === 0);
+    checkTrue('quarter 1 row 21: six score digits at cols 0-5',
+              [0, 1, 2, 3, 4, 5].every(c => cells(L, c, c + 1, 21) > 0));
+    checkTrue('quarter 1 row 22: four health digits at cols 0-3, cols 4-5 empty',
+              [0, 1, 2, 3].every(c => cells(L, c, c + 1, 22) > 0) && cells(L, 4, 6, 22) === 0);
+    checkTrue('quarter 1 row 23: key icon + 12, potion icon + 3 = cols 0-4, col 5 empty',
+              [0, 1, 2, 3, 4].every(c => cells(L, c, c + 1, 23) > 0) && cells(L, 5, 6, 23) === 0);
+    checkTrue('quarter 1: all six power icons lit, the 2 x 3 block at cols 6-7 of rows 21-23',
+              [21, 22, 23].every(r => cells(L, 6, 7, r) > 0 && cells(L, 7, 8, r) > 0));
+    checkTrue('quarter 2: score 0 prints one digit at col 13 and nothing left of it',
+              cells(L, 13, 14, 21) > 0 && cells(L, 8, 13, 21) === 0);
+    checkTrue('quarter 2: no keys, no potions, no icons -> row 23 empty and cols 14-15 dark',
+              cells(L, 8, 16, 23) === 0 && cells(L, 14, 16, 21) === 0);
+    checkTrue('quarters 3 and 4 carry their own counters (health 2000 on row 22)',
+              cells(L, 16, 20, 22) > 0 && cells(L, 24, 28, 22) > 0);
+    /* an OUT block's quarter is blank -- and stays blank in the RIP hold */
+    const g2 = G.seed({}); g2.autoJoin(2);
+    const L2 = paint(g2);
+    checkTrue('with two in, quarters 3 and 4 (cols 16-31) are BLANK on every row',
+              [20, 21, 22, 23].every(r => cells(L2, 16, 32, r) === 0));
+    checkTrue('...while quarter 2 shows the second player', cells(L2, 8, 16, 20) > 0);
+    /* $9788's low-health flash: the whole quarter blinks to BRIGHT BLACK */
+    g4.players[0].health = 0x0150; g4.frameCtr = 0x10;
+    const Lf = paint(g4);
+    g4.frameCtr = 0;
+    const Ln = paint(g4);
+    checkTrue('a quarter under 200 health flashes black on frame bit 4 -- name, digits and all',
+              cells(Lf, 0, 6, 20) === 0 && cells(Lf, 0, 6, 21) === 0 && cells(Ln, 0, 6, 20) > 0);
+    /* the attract screen keeps the classic halves: PRESS FIRE on row 23 of the right half */
+    const gA = G.seed({}); gA.enterAttract();
+    const LA = paint(gA);
+    checkTrue('the attract screen still shows the classic wordmark halves (row 23 lit, cols 21-27)',
+              cells(LA, 21, 27, 23) > 0);
+  }
+
+  /* --- the snapshot carries four blocks ---------------------------------- */
+  {
+    g.reset({ online: true }); joinAll(g);
+    for (let i = 0; i < 30; i++) g.onePass({ right: true, p2: { down: true }, p3: { left: true }, p4: { up: true } });
+    const wire = JSON.stringify(g.snapshot());
+    const fp = g.fingerprint();
+    const s = JSON.parse(wire);
+    check('the wire is v2 and carries four player blocks and the 32-slot ring',
+          [s.v, s.players.length, s.ring.length], [2, 4, 128]);
+    g.reset({}); g.restore(s);
+    check('restore() rebuilds all four: fingerprint equal, four in the game, four live windows',
+          [g.fingerprint() === fp, g.players.map(q => q.inGame), g.players.map(q => q.camLive)],
+          [true, [true, true, true, true], [true, true, true, true]]);
+  }
+
+  /* --- the wire at FOUR seats, through the mock transport --------------- */
+  {
+    const NP = G.assets.protocol, M = NP.msgs, S = G.net.state;
+    const sent = [];
+    let H = null;
+    const tpF = (url, h) => { H = h; return { send: b => sent.push(Array.from(b)), close(){} }; };
+    const u32 = v => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+    G.frontend.liveKb.releaseAll();
+    G.net.start('ws://mock4', { char: 1, method1: 3, zonePotion: false }, tpF);
+    H.open();
+    H.message(Uint8Array.from([M.WELCOME, 3, 4, ...u32(0xBEEF), NP.welcomeModes.FRESH, ...u32(0)]));
+    checkTrue('a FOUR-seat WELCOME is accepted (the two-seat latch is lifted): seat 3 of 4, booting',
+              S.phase === 'boot' && S.seat === 3 && S.seats === 4);
+    H.message(Uint8Array.from([M.CHARS, 0, 2, 255, 1]));
+    check('CHARS at four seats: the table\'s picks, seat 3 unset -> the lowest unused (3), my seat 3 displayed',
+          [S.phase, G.game.players.map(q => q.charIndex), G.game.localIdx],
+          ['live', [0, 2, 3, 1], 3]);
+    G.net.frame(0.06);
+    H.message(Uint8Array.from([M.PASS, ...u32(0), 4, 0x10, 0x10, 0x10, 0x10, 0, 0, 0, 0]));
+    G.net.frame(0);
+    check('a PASS of four FIRE bytes joins all four through $9440',
+          [S.step, G.game.mode, G.game.players.map(q => q.inGame)],
+          [1, 'play', [true, true, true, true]]);
+    let ok = true;
+    try { recording = false; G.render(ctxStub, G.game); } catch (e){ ok = false; }
+    checkTrue('...and the client renders seat 3\'s OWN window (localIdx 3) without a hitch',
+              ok && G.game.players[3].camLive);
+    S.phase = 'off'; S.tp = null;
+    G.frontend.liveKb.releaseAll();
+  }
+
+  G.seed({});
+  G.settings.reset();
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

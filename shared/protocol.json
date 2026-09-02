@@ -2,7 +2,7 @@
   "version": 2,
   "port": 33792,
   "maxSeats": 4,
-  "defaultSeats": 2,
+  "defaultSeats": 4,
   "fpEvery": 32,
   "nameLen": 8,
   "limits": {

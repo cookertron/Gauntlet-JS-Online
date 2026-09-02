@@ -25,7 +25,7 @@
      vcvars64 && cmake -S server -B server/build -G Ninja
               && ninja -C server/build
    Run:
-     gauntlet-relay [--port 33792] [--seats 2]
+     gauntlet-relay [--port 33792] [--seats 4]
    Test:
      node tools/relaytest.js server/build/gauntlet-relay.exe          */
 
@@ -57,7 +57,7 @@
 constexpr uint8_t  PROTO_VERSION       = 2;
 constexpr uint16_t DEFAULT_PORT        = 33792;
 constexpr int      MAX_SEATS           = 4;
-constexpr int      DEFAULT_SEATS       = 2;
+constexpr int      DEFAULT_SEATS       = 4;
 constexpr uint32_t FP_EVERY            = 32;
 constexpr int      NAME_LEN            = 8;
 constexpr uint32_t LIM_FRAME_MAX       = 262144;

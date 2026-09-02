@@ -24,13 +24,18 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
 - `shared/PROTOCOL.md` + `shared/protocol.json` — the wire contract, v1.
   The JSON is the source of truth; `python tools/protocheck.py` holds
   the C++ constants block to it (33 constants, both directions).
-- `tools/relaytest.js` — the relay's empirical gate (40 checks): spawns
+- `tools/relaytest.js` — the relay's empirical gate (50 checks): spawns
   the exe, speaks real WebSocket at it (own client, every frame byte
-  controlled), plays the full protocol conversation.
-- `tools/e2etest.js` — the full stack (20 checks): two real client sims
-  (vm sandboxes on the BUILT file) through the real relay; the proof
-  that two browser windows play.  `tools/wsmini.js` is the shared WS
-  client both tests use.
+  controlled), plays the full protocol conversation, then a four-seat
+  run.
+- `tools/e2etest.js` — the full stack (30 checks): real client sims
+  (vm sandboxes on the BUILT file) through the real relay — two, a late
+  joiner, then a fourth and a fifth: FOUR PLAYERS in one game, a sixth
+  refused; the proof that browser windows play.  `tools/wsmini.js` is
+  the shared WS client both tests use.
+- `tools/fourblock.js` + `build/_fourblock_ref.json` — the four-block
+  DEGENERACY fixture (see planned work 4): scenarios + per-pass digest,
+  the reference recorded on the two-block build.
 - `tools/build.py` — `python tools/build.py` regenerates the client.
 - `tools/headless.js` — `node tools/headless.js`, the test suite
   (1211/1211 at fork point). Boots the BUILT file in a vm sandbox.
@@ -110,9 +115,8 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
    (majority, tie to lowest seat) with resync-through-snapshot, late
    join via verbatim snapshot forwarding, input/handshake/sync
    timeouts, seat reuse (= the engine's join-in model), and
-   orphaned-session reset.  The PROTOCOL allows 4 seats; the server
-   defaults `--seats 2` because the sim carries two player blocks —
-   growing the sim to four blocks is its own later pass.
+   orphaned-session reset.  The PROTOCOL allows 4 seats and (since
+   2026-09-02, planned work 4) the server defaults `--seats 4`.
    **Client side BUILT 2026-08-29 — THE GAME IS PLAYABLE ONLINE**
    (headless 1213/1213 incl. a mock-transport section; e2e 18/18 —
    `tools/e2etest.js` runs TWO real sims in vm sandboxes through the
@@ -279,42 +283,67 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      jittered at-rate regression pins it.  Per the plan, §3 is NOT
      pre-empted: no transport redesign is authorised; the reading is
      §3.1, awaiting Anthony's decision.
-4. **NEXT SESSION — FOUR PLAYERS (agreed with Anthony 2026-09-01).**
-   Grow the sim to four player blocks and redesign the in-game HUD to
-   fit four panels ("remove or shrink the player information", his
-   words).  The survey, done ahead:
-   - **Already four-ready, untouched:** the protocol (maxSeats 4; PASS
-     carries seats×dir; CHARS and NAMES are 4-wide tables), the relay
-     (`--seats` just moves to 4 once the sim can), the character bump
-     rule (4 seats × 4 characters = every session fields each at most
-     once), the join-in model itself ($9440 has no player count), the
-     name tags (stacking already handles n), the per-player vcams and
-     every any-window rule, fingerprint/snapshot (loops over players).
-     The client's `net.seats > 2` WELCOME guard is the one latch to
-     lift.
-   - **The sim's two-player assumption sites** (grepped, ~a dozen):
-     `other(p)` = `idx^1` and its callers ($96B4 join ring, $AAC4
-     shove, the leash — pairwise-over-all or nearest instead), the
-     $B076 player-2-only arm at 7705ish, $94C3's level max (max over
-     all), $B6DA's drain (all), `potionBy & 1` / `bannerBy & 1` /
-     `localIdx & 1` masks (→ & 3), reset()'s block2 build (blocks 3/4
-     are synthesized clones with their own character), the abstract
-     input path (`input.p2` → p2..p4 or an array), $8503's both-dead
-     test (all-dead).  Blocks 3/4 have NO Z80 reference — the original
-     never had them — so the gates are SYMMETRY and DEGENERACY, not
-     faithfulness: with ≤2 players in game the four-block sim must
-     digest-match today's two-block sim pass for pass (the vcam proof
-     pattern), and the extra blocks must be provably inert while out.
-   - **The HUD:** four panels of EIGHT columns (4×8 = 32, the arcade's
-     own four-column layout — and the 8-character name cap already
-     fits an 8-column panel exactly).  Per quarter: NAME row, score
-     (7 digits fits), health, a compressed keys/potions/icons row.
-     IN PLAY only — the attract/rewind screens keep the classic
-     captured two halves (wordmark + PRESS FIRE), and an out player's
-     quarter stays blank (the retired-invite rule).  drawPanel/drawHud
-     and the counter round-robin ($B717) rewrite around it; the RIP
-     tags and meeting tags need nothing.
-   - e2e grows a 3rd/4th client scenario; relaytest a --seats 4 run.
+4. **FOUR PLAYERS — BUILT 2026-09-02** (agreed 2026-09-01; headless
+   1330 → 1399, relaytest 40 → 50 with a four-seat run, e2e 20 → 30
+   with a fourth and fifth client and a sixth refused; the relay
+   DEFAULTS to `--seats 4`, protocol `defaultSeats` 4, protocheck 33).
+   The sim carries FOUR player blocks; the in-game HUD is four QUARTERS.
+   - **The gate is DEGENERACY, not faithfulness** (blocks 3/4 have no
+     Z80 reference): `tools/fourblock.js` holds seven scenarios (solo
+     and duo, offline and online, dungeon 2, a shove scene, a double
+     death through the RIP hold into the next attract) and a per-pass
+     state digest over players 0-1 plus the shared state;
+     `build/_fourblock_ref.json` was RECORDED ON THE TWO-BLOCK BUILD
+     (`node tools/fourblock.js old.html out.json`, old.html from `git
+     show 51c19a0:client/gauntlet.html`) and headless replays every
+     scenario on the current build in a PRISTINE sandbox
+     (`FB.loadClient`), hash for hash.  FOUND ON THE WAY: the suite's
+     shared `G` carries module state — dungeon 2 diverged at pass 52
+     inside the suite and nowhere else — so replays never run on it.
+     INERTNESS (blocks 3/4 unchanged over 260 shove-heavy passes, the
+     upper ring $FF) and SYMMETRY (each generalized rule driven with a
+     block 3/4) sit beside it.
+   - **The generalizations**, each keeping the original's structure:
+     `other(p)` stays the classic partner (2 for 1, 4 for 3) and
+     `others(p)` is everyone else; $96B4's placement anchor = partner
+     first, then the rest, first non-(0,0) cell; the leash and $AAC4's
+     box = any other; $A38A's walk: BLOCK 1's contact bit alone reverses
+     the order ([p4..p1]), the reversed walk shoves unconditionally
+     ($A3BE and $A3CF's bug), the forward walk only from a set bit, bits
+     read once at the top; $ADC7's chase = "the other blocks in the
+     game", nearest, ties to the lower block, quirks kept (a corpse whose
+     partner is out is still aimed at); $B060's coin = where the walk
+     STARTS (even: block 1, odd: block 2), a dead block ends it, a
+     flashing one falls through; the $5B90 ring is 32 slots (blocks 3/4
+     at +$40/+$60) and $8FC5 drains the same two slots of BOTH halves;
+     $B717's robin serves blocks i and i+2 on one pass; $94AE/$B3AB
+     "both" = every, $94C3 max over all; the module camera (offline)
+     follows the first two live blocks; `potionBy`/`bannerBy`/`localIdx`
+     masks & 3; readKeys' abstract path takes p2..p4; `Game.charTable`
+     fills blocks 3/4 with the lowest unused characters (four seats by
+     four characters = one each; netBoot derives the same four from the
+     CHARS table); the snapshot wire is v2; `net.seats > 2` is `> 4`.
+   - **Found and FIXED on the way** (each pinned; each a two-block bug
+     too): (1) a DEAD player could never rejoin while others played, and
+     after a game over neither could block 2 — the retired name entry
+     ($92A6) had been what cleared $93E2's mark; joinOne now spends the
+     mark (and $AB24's shove bit, which $A48D clears only for the
+     living) on the first poll after death: cleared, $948C's strip, the
+     RIP kept until FIRE brings him back through $9440.  (2) levelOver
+     read PLAYER 1's dead flag for $B3AB's all-dead test, so a dead
+     player 1 whose partner walked out went to the game-over chain
+     instead of the next dungeon; it reads levelEnd's `gameOver` now.
+     (3) `autoJoin(n)` masked n & 3, so 4 joined nobody.
+   - **The HUD in play is four quarters of eight columns** (drawQuarter,
+     the arcade's own four-column layout): row 20 the NAME (tagNameFor,
+     centred, the character's ink with $9788's low-health flash), row
+     21 the score (six digits, $B6AE's suppression), row 22 the health,
+     row 23 keys and potions as ICON + COUNT, and the six $B61F power
+     icons as a 2×3 block down the right edge of rows 21-23, lit by
+     attribute.  The SCORE/HEALTH labels went — the layout says which is
+     which.  An out block's quarter is blank; the attract/rewind screens
+     keep the classic captured halves (drawPanel is attract-only now).
+     `build/ui/hud.png` shows four in, `hud2.png` two.
 5. **QUEUED — SPEECH BUBBLES (Anthony, 2026-09-01).**  Chat messages
    drawn as a speech bubble from the player's sprite, in the game's
    own graphical style.  His spec, verbatim where it matters: max 32

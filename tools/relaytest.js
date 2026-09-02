@@ -69,7 +69,9 @@ const rdPass = m => ({ pass: m.readUInt32LE(1), n: m[5],
 
 async function main(){
   console.log('relaytest: ' + EXE);
-  const proc = spawn(EXE, ['--port', String(PORT)], { stdio: ['ignore', 'pipe', 'pipe'] });
+  /* the two-seat table, explicitly: the relay's DEFAULT is four seats now
+     (the sim carries four blocks) and the four-seat run is below */
+  const proc = spawn(EXE, ['--port', String(PORT), '--seats', '2'], { stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   proc.stdout.on('data', d => { out += d.toString(); });
   proc.stderr.on('data', d => { out += d.toString(); });
@@ -314,6 +316,81 @@ async function main(){
     c4.close();
   } finally {
     proc.kill();
+  }
+
+  /* ---- FOUR SEATS, the default table (this fork's four-block sim) ---- */
+  const PORT4 = PORT + 1;
+  const proc4 = spawn(EXE, ['--port', String(PORT4)], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let out4 = '';
+  proc4.stdout.on('data', d => { out4 += d.toString(); });
+  proc4.stderr.on('data', d => { out4 += d.toString(); });
+  const t4 = Date.now();
+  while (!/RELAY LISTENING/.test(out4)){
+    if (Date.now() - t4 > 5000) throw new Error('server never listened: ' + out4);
+    await sleep(20);
+  }
+  checkTrue('with no --seats the relay listens at FOUR seats', /seats=4/.test(out4));
+  try {
+    const cs = [];
+    for (let i = 0; i < 4; i++){
+      const c = await new Ws().connect(PORT4);
+      c.msg(M.HELLO, P.version, 3, Buffer.from('P' + (i + 1) + '      '));   // everyone picks the elf
+      cs.push(c);
+    }
+    const ws = [];
+    for (const c of cs) ws.push(rdWelcome(await c.expect(M.WELCOME)));
+    check('four clients seat 0..3 of a four-seat FRESH session',
+          ws.map(w => [w.seat, w.seats, w.mode]), [[0, 4, MODE.FRESH], [1, 4, MODE.FRESH], [2, 4, MODE.FRESH], [3, 4, MODE.FRESH]]);
+    checkTrue('...one buildSeed for all four', ws.every(w => w.seed === ws[0].seed));
+    /* every HELLO rebroadcasts the tables to the seated: seat i hears
+       4 - i of them, and the last one anyone hears is the settled table */
+    let lastChars = null;
+    for (let i = 0; i < 4; i++)
+      for (let k = 0; k < 4 - i; k++) lastChars = await cs[i].expect(M.CHARS);
+    const lastNames = await cs[3].expect(M.NAMES);
+    check('four elves become ONE of each: every clash bumped past every earlier seat',
+          Array.from(lastChars.subarray(1)), [3, 0, 1, 2]);
+    check('NAMES is the four-wide table', lastNames.subarray(1).toString(),
+          'P1      P2      P3      P4      ');
+    const c5 = await new Ws().connect(PORT4);
+    c5.msg(M.HELLO, P.version, 0);
+    check('a FIFTH client is refused: ERROR FULL (seats=4)', (await c5.expect(M.ERROR))[1], E.FULL);
+    c5.close();
+    /* drain the CHARS/NAMES/SEATS chatter the seating left on the other three */
+    for (const c of cs) await c.silent(200);
+    for (const c of cs) c.msg(M.READY, U32(0));
+    let pass4 = 0, ok4 = 0, waits4 = true;
+    for (let i = 0; i < 10; i++){
+      const bytes = [1, 2, 4, 8].map(b => (b * (i + 1)) & 0x3F);
+      cs.forEach((c, s) => c.msg(M.INPUT, U32(pass4), bytes[s]));
+      const got = [];
+      for (const c of cs) got.push(await c.expect(M.PASS));
+      const all = got.every(m => { const p = rdPass(m);
+        if (m.length !== 6 + 2 * p.n) waits4 = false;
+        return p.pass === pass4 && p.n === 4 && JSON.stringify(p.dirs) === JSON.stringify(bytes); });
+      if (all) ok4++;
+      pass4++;
+    }
+    check('ten passes carry FOUR bytes in seat order to all four clients', ok4, 10);
+    checkTrue('...each with four trailing WAIT bytes', waits4);
+    /* one leaves mid-game: his byte is substituted, the other three play on */
+    cs[2].close();
+    await sleep(300);
+    for (const s of [0, 1, 3]) cs[s].msg(M.INPUT, U32(pass4), 0x10 + s);
+    const pl = rdPass(await cs[0].expect(M.PASS));
+    check('seat 2 gone: its byte is substituted 0x00 and the pass still carries four',
+          [pl.pass, pl.dirs], [pass4, [0x10, 0x11, 0, 0x13]]);
+    for (const s of [1, 3]) await cs[s].expect(M.PASS);
+    pass4++;
+    /* ...and a newcomer takes the freed seat as a SNAPSHOT joiner */
+    const c6 = await new Ws().connect(PORT4);
+    c6.msg(M.HELLO, P.version, 1, Buffer.from('LATE    '));
+    const w6 = rdWelcome(await c6.expect(M.WELCOME));
+    check('a late joiner takes the freed seat 2 in SNAPSHOT mode', [w6.seat, w6.seats, w6.mode, w6.pass], [2, 4, MODE.SNAPSHOT, pass4]);
+    for (const c of cs) c.close();
+    c6.close();
+  } finally {
+    proc4.kill();
   }
 
   console.log(`\n${checks - failures}/${checks} relay checks passed`);

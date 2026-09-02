@@ -1,11 +1,12 @@
-/* e2etest.js -- the whole stack, end to end: TWO real client sims (the
+/* e2etest.js -- the whole stack, end to end: real client sims (the
  * built gauntlet.html, each in its own vm sandbox) playing through the
- * real C++ relay over real WebSocket.  This is the proof that two
- * browser windows would play: fresh boot with the character table, the
- * attract lobby in lockstep, FIRE joining through $9440 on both sims at
- * once, movement, a disconnect, and a THIRD sim late-joining off the
- * live snapshot -- fingerprints compared between the actual Game objects
- * at every barrier.
+ * real C++ relay over real WebSocket.  This is the proof that browser
+ * windows would play: fresh boot with the character table, the attract
+ * lobby in lockstep, FIRE joining through $9440 on both sims at once,
+ * movement, a disconnect, a THIRD sim late-joining off the live
+ * snapshot, then a FOURTH and FIFTH filling the four-seat table -- FOUR
+ * PLAYERS in one game, a fifth refused -- fingerprints compared between
+ * the actual Game objects at every barrier.
  *
  *   node tools/e2etest.js [path\to\gauntlet-relay.exe]
  */
@@ -109,16 +110,17 @@ async function until(clients, pred, label, iters){
    frame(0) DRAINS deliveries without advancing the send clock, so the
    exchange quiesces instead of always having a PASS in flight (localhost
    answers inside the sleep, which starved the naive predicate). */
-async function barrier(a, b, label){
+async function barrierN(clients, label){
   for (let i = 0; i < 1500; i++){
-    a.G.net.frame(0); b.G.net.frame(0);
-    if (a.net.step === b.net.step && !a.net.pendDirs && !b.net.pendDirs &&
-        a.net.phase === 'live' && b.net.phase === 'live') return true;
+    for (const c of clients) c.G.net.frame(0);
+    if (clients.every(c => c.net.step === clients[0].net.step && !c.net.pendDirs &&
+                           c.net.phase === 'live')) return true;
     await sleep(2);
   }
   checkTrue(label + ' (barrier)', false, 'timed out');
   return false;
 }
+async function barrier(a, b, label){ return barrierN([a, b], label); }
 
 async function main(){
   console.log('e2etest: ' + EXE);
@@ -149,14 +151,14 @@ async function main(){
                            name: 'NITRO 5' }, vmTransport());
     await until([A, B], () => B.net.phase === 'live',
                 'client B snapshot-joins the live lobby');
-    check('seats: A=0 B=1, two-seat session', [A.net.seat, B.net.seat, A.net.seats], [0, 1, 2]);
+    check('seats: A=0 B=1 of a FOUR-seat session (the relay\'s default)', [A.net.seat, B.net.seat, A.net.seats], [0, 1, 4]);
     check('one buildSeed', A.net.buildSeed === B.net.buildSeed, true);
     check('NAMES crossed the relay: each sim tags BOTH players, sanitized',
           [A.G.game.names.slice(0, 2), B.G.game.names.slice(0, 2)],
           [['ANTHONY', 'NITRO 5'], ['ANTHONY', 'NITRO 5']]);
-    check('both sims field the SAME blocks: A\'s pick + the derived default',
+    check('both sims field the SAME four blocks: A\'s pick + the three derived',
           [A.G.game.players.map(q => q.charIndex), B.G.game.players.map(q => q.charIndex)],
-          [[3, 1], [3, 1]]);
+          [[3, 1, 0, 2], [3, 1, 0, 2]]);
     check('both sims sit in the attract LOBBY',
           [A.G.game.mode, B.G.game.mode], ['attract', 'attract']);
     check('each displays its OWN window', [A.G.game.localIdx, B.G.game.localIdx], [0, 1]);
@@ -224,7 +226,53 @@ async function main(){
     checkTrue('...and they STAY in step over 40 more exchanges',
               A.G.game.fingerprint() === C.G.game.fingerprint());
 
-    check('no desyncs anywhere', [A.net.desyncs, C.net.desyncs], [0, 0]);
+    /* ---- D and E fill seats 2 and 3: FOUR PLAYERS in one game -------- */
+    const D = loadClient('D'), E5 = loadClient('E');
+    D.G.net.start('e2e', { char: 0, method1: 3, zonePotion: false, name: 'delta' }, vmTransport());
+    await until([A, C, D], () => D.net.phase === 'live', 'client D restores into seat 2', 2000);
+    E5.G.net.start('e2e', { char: 2, method1: 3, zonePotion: false, name: 'echo' }, vmTransport());
+    await until([A, C, D, E5], () => E5.net.phase === 'live', 'client E restores into seat 3', 2000);
+    const four = [A, C, D, E5];
+    check('D and E took seats 2 and 3 and display their own windows',
+          [D.net.seat, D.G.game.localIdx, E5.net.seat, E5.G.game.localIdx], [2, 2, 3, 3]);
+    await barrierN(four, 'four seated');
+    checkTrue('four clients in lockstep: every fingerprint equal at step ' + A.net.step,
+              four.every(c => c.G.game.fingerprint() === A.G.game.fingerprint()));
+    check('NAMES at four seats, on every sim',
+          four.map(c => c.G.game.names), four.map(() => ['ANTHONY', 'LATE', 'DELTA', 'ECHO']));
+    D.kb.press('Z'); E5.kb.press('Z');
+    await until(four, () => four.every(c => c.G.game.players[2].inGame && c.G.game.players[3].inGame),
+                'FIRE from D and E joins players 3 and 4 on every sim');
+    D.kb.releaseAll(); E5.kb.releaseAll();
+    await barrierN(four, 'four in');
+    check('FOUR IN THE GAME on every sim',
+          four.map(c => c.G.game.players.map(q => q.inGame)), four.map(() => [true, true, true, true]));
+    checkTrue('...fingerprints equal', four.every(c => c.G.game.fingerprint() === A.G.game.fingerprint()));
+    check('four characters, one of each, on every sim',
+          four.map(c => c.G.game.players.map(q => q.charIndex).slice().sort().join('')),
+          four.map(() => '0123'));
+    const at = c => c.G.game.players.map(q => [q.x, q.y]);
+    const before = at(A);
+    A.kb.press('D'); C.kb.press('S'); D.kb.press('1'); E5.kb.press('Q');   // right, left, up, down
+    await pump(four, 60);
+    for (const c of four) c.kb.releaseAll();
+    await barrierN(four, 'four walked');
+    checkTrue('four keyboards, four bytes: players 3 and 4 moved, and every sim agrees where everyone is',
+              JSON.stringify(at(A)) !== JSON.stringify(before) &&
+              (at(A)[2].join() !== before[2].join() || at(A)[3].join() !== before[3].join()) &&
+              four.every(c => JSON.stringify(at(c)) === JSON.stringify(at(A))),
+              JSON.stringify(before) + ' -> ' + JSON.stringify(at(A)));
+    checkTrue('...fingerprints equal', four.every(c => c.G.game.fingerprint() === A.G.game.fingerprint()));
+    /* ---- a fifth is refused ------------------------------------------- */
+    const F = loadClient('F');
+    F.G.net.start('e2e', { char: 0, method1: 3, zonePotion: false, name: 'five' }, vmTransport());
+    await until(four.concat([F]), () => F.net.phase === 'ended', 'a fifth client is turned away');
+    check('...with SERVER FULL', F.net.status, 'SERVER FULL');
+    await pump(four, 20);
+    await barrierN(four, 'after the refusal');
+    checkTrue('...and the four play on, still in step', four.every(c => c.G.game.fingerprint() === A.G.game.fingerprint()));
+
+    check('no desyncs anywhere', four.map(c => c.net.desyncs), [0, 0, 0, 0]);
     checkTrue('the relay never arbitrated a desync', out.indexOf('DESYNC') < 0);
   } finally {
     proc.kill();

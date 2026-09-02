@@ -6,18 +6,20 @@ standalone C++ Windows server, and online play for up to 4 players — keeping
 the original game's look, feel and rules while modernising how people reach
 it.
 
-Status: **single-player client.** Local two-player has been stripped from
-the frontend and input layer.  The simulation deliberately keeps both
-player blocks and the join/leash/shove machinery -- the engine's join-in
-model (whoever presses FIRE is in) is exactly the drop-in shape online
-multiplayer needs, and `players[1].dir` is the marked network seam.  The
-C++ server is not started.
+Status: **online multiplayer for up to FOUR players** (2026-09-02).
+The client is one local player; the simulation carries four player
+blocks (the original's two, and two more cut to the same pattern and
+proven against the two-block build pass for pass), the relay seats four
+by default, and the in-game HUD is four quarters -- name, score, health,
+keys and potions, power icons -- one per seat.  Whoever presses FIRE is
+in, exactly the engine's own join-in model, and a dead player rejoins
+the same way.
 
 ## Build & test
 
 ```
 python tools/build.py     # client/template.html -> client/gauntlet.html
-node tools/headless.js    # the client test suite (1310/1310)
+node tools/headless.js    # the client test suite (1399/1399)
 ```
 
 Open `client/gauntlet.html` in a browser to play offline.
@@ -27,7 +29,7 @@ Open `client/gauntlet.html` in a browser to play offline.
 The relay serves the game itself: run it, share the address, done.
 
 ```
-server\build\gauntlet-relay.exe          # builds below; --port/--seats/--html
+server\build\gauntlet-relay.exe          # builds below; --port/--seats/--html (four seats by default)
 ```
 
 Everyone opens `http://<host-ip>:33792/`, picks a character and a NAME
@@ -63,8 +65,9 @@ The C++ relay server (`server/relay.cpp`, protocol in
 vcvars64 && cmake -S server -B server\build -G Ninja
          && ninja -C server\build
 python tools/protocheck.py                 # protocol constants in sync
-node tools/relaytest.js                    # the relay's own gate (40 checks)
-server\build\gauntlet-relay.exe            # run it (--port 33792 --seats 2)
+node tools/relaytest.js                    # the relay's own gate (50 checks)
+node tools/e2etest.js                      # four real clients through it (30 checks)
+server\build\gauntlet-relay.exe            # run it (--port 33792 --seats 4)
 ```
 
 ## Provenance

@@ -130,9 +130,20 @@ q.health = 0x1500;      // packed BCD, all nibbles valid digits
 q.score  = 0x123450;
 q.keys = 5; q.potions = 3;
 q.p14 = 0x3F;            // in game (bit 7 clear), all six inventory icons lit
-g.autoJoin(2);           // both players in and adjacent: tags show on a MEETING
-g.names[0] = 'ANTHONY';  // player 2's tag defaults to his character's name
+g.autoJoin(4);           // FOUR players in and adjacent: tags show on a MEETING
+g.names[0] = 'ANTHONY';  // an unset name wears the character's own
+g.names[2] = 'NITRO 5';
+g.players[1].score = 0x004200; g.players[1].keys = 1;
+g.players[2].score = 0x017350; g.players[2].health = 0x0850; g.players[2].potions = 2;
+g.players[3].score = 0x000090; g.players[3].keys = 12; g.players[3].p14 |= 0x05;
 save(outdir, 'hud.png', cap => G.render(cap, g));
+/* ...and the same band with two seats empty: an out block's quarter is blank */
+{
+  const g2 = G.seed({});
+  g2.mode = 'play'; g2.jumpToLevel(1); g2.introShow = null; g2.bannerShow = null;
+  g2.autoJoin(2); g2.names[0] = 'ANTHONY';
+  save(outdir, 'hud2.png', cap => G.render(cap, g2));
+}
 
 /* ---------- death: the RIP hold over the frozen dungeon ----------------- */
 {
