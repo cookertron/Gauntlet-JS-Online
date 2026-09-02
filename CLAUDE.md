@@ -334,16 +334,23 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      player 1 whose partner walked out went to the game-over chain
      instead of the next dungeon; it reads levelEnd's `gameOver` now.
      (3) `autoJoin(n)` masked n & 3, so 4 joined nobody.
-   - **The HUD in play is four quarters of eight columns** (drawQuarter,
-     the arcade's own four-column layout): row 20 the NAME (tagNameFor,
-     centred, the character's ink with $9788's low-health flash), row
-     21 the score (six digits, $B6AE's suppression), row 22 the health,
-     row 23 keys and potions as ICON + COUNT, and the six $B61F power
-     icons as a 2×3 block down the right edge of rows 21-23, lit by
-     attribute.  The SCORE/HEALTH labels went — the layout says which is
-     which.  An out block's quarter is blank; the attract/rewind screens
-     keep the classic captured halves (drawPanel is attract-only now).
-     `build/ui/hud.png` shows four in, `hud2.png` two.
+   - **The HUD in play is four quarters of 64×32 px in the MICRO FONT**
+     (drawQuarter; the arcade's own four-column layout).  A first cut
+     used the HUD's 8x8 font at eight columns a quarter and Anthony
+     called it "far too cramped"; the quarters now wear the 4x5 tag
+     font (twelve characters a line, 6 px a line): the NAME
+     (tagNameFor, the character's ink with $9788's low-health flash),
+     `SCORE 123456` (packed BCD printed as hex = $B6AE's suppression for
+     free), `HEALTH 2000`, `KEYS n` / `POT n` in the original icon
+     colours and only while owned, and the six $B61F power icons as
+     the HUD font's own 8x8 glyphs on the band's last cell row, lit by
+     attribute.  `drawNameTag` grew an optional clip bottom
+     (`drawMicro` = left-aligned, clipped to the screen).  An out block's
+     quarter is blank; the attract/rewind screens keep the classic
+     captured halves (drawPanel is attract-only now).  The pixel checks
+     RASTERIZE the draw list: the captured panel art is painted first
+     and the quarter's fill covers it.  `build/ui/hud.png` shows four
+     in, `hud2.png` two.
 5. **QUEUED — SPEECH BUBBLES (Anthony, 2026-09-01).**  Chat messages
    drawn as a speech bubble from the player's sprite, in the game's
    own graphical style.  His spec, verbatim where it matters: max 32

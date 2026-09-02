@@ -10423,15 +10423,17 @@ function tagNameFor(g, q){
        : ['WARRIOR', 'VALKYRIE', 'WIZARD', 'ELF'][idx];
 }
 /* one tag, centred on cx, top row at ty, clipped to the PLAYFIELD --
-   never over the HUD band, never past the screen edge. */
-function drawNameTag(ctx, text, cx, ty, colour){
+   never over the HUD band, never past the screen edge.  `yMax` widens
+   the clip for the HUD quarters, which live BELOW the playfield. */
+function drawNameTag(ctx, text, cx, ty, colour, yMax){
+  const bottom = yMax === undefined ? PLAYFIELD_H : yMax;
   let x = cx - ((text.length * 5 - 1) >> 1);
   ctx.fillStyle = colour;
   for (const ch of text){
     const gl = TAG_FONT[ch];
     if (gl) for (let r = 0; r < 5; r++){
       const py = ty + r;
-      if (py < 0 || py >= PLAYFIELD_H) continue;
+      if (py < 0 || py >= bottom) continue;
       const bits = parseInt(gl[r], 16);
       for (let b = 0; b < 4; b++){
         const px = x + b;
@@ -10441,6 +10443,12 @@ function drawNameTag(ctx, text, cx, ty, colour){
     }
     x += 5;
   }
+}
+
+/* the same font LEFT-ALIGNED at x, for the HUD quarters (clipped to the
+   screen, not the playfield) */
+function drawMicro(ctx, text, x, ty, colour){
+  drawNameTag(ctx, text, x + ((text.length * 5 - 1) >> 1), ty, colour, 192);
 }
 
 /* ---- $B5E8, THE PANEL, once per player -----------------------------
@@ -10495,60 +10503,50 @@ function drawPanel(ctx, g, q){
                                 ? 6 : P.wait_row23_attr));
 }
 
-/* ---- FOUR PANELS OF EIGHT COLUMNS (this fork) ------------------------
-   In play the HUD band is four QUARTERS, one per block: 4 x 8 = 32
-   columns, the arcade's own four-column layout -- and the 8-character
-   name cap fits a quarter exactly.  Per quarter, top to bottom:
-     row 20  the NAME (tagNameFor: the set name, else the character's
-             own), centred, in the character's ink with $9788's low-
-             health flash;
-     row 21  SCORE, six digits, $B6AE's leading-zero suppression;
-     row 22  HEALTH, four digits;
-     row 23  KEYS and POTIONS as ICON + COUNT -- the original's icon
-             RUNS need up to fifteen cells, a count needs three;
-   and down the right-hand edge of rows 21-23 the six $B61F power icons
-   as a 2 x 3 block, lit by ATTRIBUTE exactly as the original lights
-   them (the character's colour when owned, black on black when not).
-   The SCORE and HEALTH labels went: the layout says which is which.
-   An OUT block's quarter is BLANK (the retired-invite rule: a wire
-   seat cannot be claimed from another player's screen); the attract/
-   rewind screens keep the classic captured halves (drawPanel).  Every
-   glyph is the HUD font's own ($77B0) and every count is drawBcdField's
-   or a plain digit, so nothing here is styled to resemble the game --
-   it is drawn with the game's furniture. */
-const QUARTER_COLS = 8;
+/* ---- FOUR QUARTERS (this fork) ----------------------------------------
+   In play the HUD band is four QUARTERS of 64 x 32 px, one per block --
+   the arcade's own four-column layout.  The HUD's 8x8 font gives a
+   quarter eight characters a line, which was too cramped to read
+   (Anthony, 2026-09-02); the quarters use the 4x5 MICRO FONT the name
+   tags wear instead -- twelve characters a line, five lines -- so the
+   labels fit again.  Per quarter, top to bottom, 6 px a line:
+     y+0   the NAME (tagNameFor: the set name, else the character's own)
+     y+6   SCORE and six digits ($B6AE's leading-zero suppression falls
+           out of printing packed BCD as hex)
+     y+12  HEALTH and four digits
+     y+18  KEYS n and POT n, each in its own original icon colour, each
+           only while owned ($B793's rule: nothing when there is nothing)
+     y+24  the six $B61F power icons, the HUD font's own 8x8 glyphs on
+           the band's last cell row, lit by ATTRIBUTE exactly as the
+           original lights them (the colour when owned, black on black
+           when not).
+   The name and the two counters wear the character's ink with $9788's
+   low-health flash.  An OUT block's quarter is BLANK (the retired-invite
+   rule: a wire seat cannot be claimed from another player's screen);
+   the attract/rewind screens keep the classic captured halves
+   (drawPanel).  Everything drawn here is the game's own furniture: its
+   tag font, its icon glyphs, its attribute palette. */
+const QUARTER_COLS = 8, QUARTER_W = QUARTER_COLS * 8;
 function drawQuarter(ctx, g, q){
   const P = HUD ? HUD.panel : null, F = HUD_FIELDS;
   if (!P || !F) return;
-  const c0 = q.idx * QUARTER_COLS, r0 = PLAYFIELD_ROWS;
+  const c0 = q.idx * QUARTER_COLS, x0 = c0 * 8;
   ctx.fillStyle = '#000000';
-  ctx.fillRect(c0 * 8, PLAYFIELD_H, QUARTER_COLS * 8, 4 * 8);
+  ctx.fillRect(x0, PLAYFIELD_H, QUARTER_W, 4 * 8);
   if (!q.inGame) return;
-  const ink = panelInk(q, g.frameCtr);                   // $9788's flash
-  /* row 20 -- the name, centred as $B60A centres the character's */
-  const name = tagNameFor(g, q).slice(0, QUARTER_COLS);
-  const off = (QUARTER_COLS - name.length) >> 1;
-  for (let i = 0; i < name.length; i++)
-    drawGlyph(ctx, name.charCodeAt(i), c0 + off + i, r0, ink);
-  /* rows 21-22 -- the two counters, $B7C7's printer, at the quarter's
-     left edge */
-  drawBcdField(ctx, q.score, F.score.bytes, c0, r0 + 1, ink);
-  drawBcdField(ctx, q.health, F.health.bytes, c0, r0 + 2, ink);
-  /* row 23 -- icon + count for keys, then potions, each in its own
-     attribute ($B793's icons, $B6BC's digits) */
-  let col = c0;
-  const count = (glyph, attr, n) => {
-    if (n <= 0) return;
-    drawGlyph(ctx, glyph, col++, r0 + 3, attr);
-    for (const ch of String(n)) drawGlyph(ctx, ch.charCodeAt(0), col++, r0 + 3, attr);
-  };
-  count(F.keys.char, F.keys.attr, q.keys);
-  count(F.potions.char, F.potions.attr, q.potions);
-  /* the six power icons, 2 x 3, down the right edge of rows 21-23:
-     $B61F's reveal-by-attribute from (IX+$14), LSB first */
+  const attrColour = a => ((a & 0x40) ? PAL_BRT : PAL_DIM)[a & 7];
+  const ink = attrColour(panelInk(q, g.frameCtr));           // $9788's flash
+  const line = (text, n, colour) => drawMicro(ctx, text, x0, PLAYFIELD_H + n * 6, colour);
+  line(tagNameFor(g, q).slice(0, QUARTER_COLS), 0, ink);
+  line('SCORE ' + q.score.toString(16).toUpperCase(), 1, ink);    // packed BCD
+  line('HEALTH ' + q.health.toString(16).toUpperCase(), 2, ink);
+  if (q.keys > 0) line('KEYS ' + q.keys, 3, attrColour(F.keys.attr));
+  if (q.potions > 0)
+    drawMicro(ctx, 'POT ' + q.potions, x0 + 35, PLAYFIELD_H + 18, attrColour(F.potions.attr));
+  /* the six power icons: $B61F's reveal-by-attribute from (IX+$14), LSB
+     first, on the band's last cell row */
   for (let i = 0; i < 6; i++)
-    drawGlyph(ctx, P.play[0][P.icon_cols[i]],
-              c0 + QUARTER_COLS - 2 + (i & 1), r0 + 1 + (i >> 1),
+    drawGlyph(ctx, P.play[0][P.icon_cols[i]], c0 + i, PLAYFIELD_ROWS + 3,
               (q.p14 >> i) & 1 ? P.icon_attrs[i] : 0x00);
 }
 

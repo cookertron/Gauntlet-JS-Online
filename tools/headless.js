@@ -1259,29 +1259,44 @@ if (A.player_frames) {
     const g2 = G.seed({});
     g2.score = 0x000000; g2.health = 0x1997; g2.keys = 0; g2.potions = 0;
     const a0 = paint(g2);
-    /* FOUR QUARTERS (this fork): player 1's is columns 0-7 -- the score
-       on row 21 at cols 0-5, the health on row 22 at cols 0-3, keys and
-       potions on row 23 as icon + count.  The printer is still $B7C7's. */
-    checkTrue('the health digits are painted at row 22 cols 0-3 of the quarter',
-              rectsIn(a0, 3, 22).length > 0 && rectsIn(a0, 0, 22).length > 0);
-    checkTrue('a LEADING ZERO of the score prints as a space ($B6BC)',
-              rectsIn(a0, 0, 21).length === 0,
-              `${rectsIn(a0, 0, 21).length} rects at r21 c0 with score 000000`);
-    checkTrue('but the last digit always prints ($B7DD SET 0,C)',
-              rectsIn(a0, 5, 21).length > 0);
+    /* FOUR QUARTERS in the MICRO font (this fork): player 1's is x 0-63,
+       the name on y 160-164, SCORE on 166-170, HEALTH on 172-176, KEYS and
+       POT on 178-182, the six power icons on the 8 px row 184-191.  A
+       glyph is 4 px wide on a 5 px pitch: "SCORE " puts the digits at
+       x 30, "HEALTH " at x 35. */
+    /* RASTERIZED: the captured panel art is painted first and the
+       quarter's black fill covers it, so a draw-call filter would see
+       art the screen does not */
+    const pxIn = (list, x0, x1, y0, y1) => {
+      const buf = new Uint8Array(256 * 32);
+      for (const c of list) {
+        if (c[0] !== 'fillRect') continue;
+        const on = c[5] !== '#000000' ? 1 : 0;
+        for (let y = Math.max(160, c[2] | 0); y < Math.min(192, (c[2] | 0) + (c[4] | 0)); y++)
+          for (let x = Math.max(0, c[1] | 0); x < Math.min(256, (c[1] | 0) + (c[3] | 0)); x++)
+            buf[(y - 160) * 256 + x] = on;
+      }
+      let n = 0;
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) n += buf[(y - 160) * 256 + x];
+      return n;
+    };
+    checkTrue('the HEALTH line paints its label (x 0..28) and four digits (x 35..53)',
+              pxIn(a0, 0, 29, 172, 177) > 0 && pxIn(a0, 50, 54, 172, 177) > 0);
+    checkTrue('a score of 000000 prints as the one digit 0 after SCORE ($B6BC / $B7DD)',
+              pxIn(a0, 30, 34, 166, 171) > 0 && pxIn(a0, 35, 64, 166, 171) === 0,
+              `${pxIn(a0, 35, 64, 166, 171)} px right of the 0`);
     g2.score = 0x123456;
     const a1 = paint(g2);
-    checkTrue('a six-digit score fills all six cells, cols 0-5 of row 21',
-              [0, 1, 2, 3, 4, 5].every(c => rectsIn(a1, c, 21).length > 0));
+    checkTrue('a six-digit score runs to x 58 of the SCORE line',
+              pxIn(a1, 55, 59, 166, 171) > 0);
     checkTrue('changing the score changes the panel pixels',
               JSON.stringify(a0) !== JSON.stringify(a1));
+    checkTrue('with nothing carried the KEYS/POT line is empty',
+              pxIn(a1, 0, 64, 178, 183) === 0);
     g2.keys = 3; g2.potions = 2;
     const a2 = paint(g2);
-    checkTrue('three keys paint as the key icon and a 3 at row 23 cols 0-1',
-              rectsIn(a2, 0, 23).length > 0 && rectsIn(a2, 1, 23).length > 0);
-    checkTrue('two potions follow as the potion icon and a 2 at cols 2-3, then nothing',
-              rectsIn(a2, 2, 23).length > 0 && rectsIn(a2, 3, 23).length > 0 &&
-              rectsIn(a2, 4, 23).length === 0);
+    checkTrue('three keys print KEYS 3 (x 0..28) and two potions POT 2 (x 35..58)',
+              pxIn(a2, 0, 29, 178, 183) > 0 && pxIn(a2, 35, 59, 178, 183) > 0);
     /* THE LOGO COLOUR CYCLE, enumerated over its whole domain rather than
        sampled.  The ISR computes it every video frame at $A2B4 and stores it
        into the operand at $A2F5; MEASURED by sampling that operand INSIDE the
@@ -1323,8 +1338,8 @@ if (A.player_frames) {
     check('holding down for 61 passes: the ORIGINAL\'s score 000100 and 1 key',
           [g3.score, g3.keys], [0x000100, 1]);
     const a3 = paint(g3);
-    checkTrue('and the panel actually shows that key at row 23 col 0',
-              rectsIn(a3, 0, 23).length > 0);
+    checkTrue('and the panel actually shows that key: KEYS 1 on the fourth line of the quarter',
+              pxIn(a3, 0, 34, 178, 183) > 0);
   }
 
   /* --- health and score against the ORIGINAL, end to end -------------
@@ -2768,12 +2783,25 @@ if (A.player_frames) {
     /* $B694 blanks row 23 for a player who IS in the game, and $B87A's row 2
        plus $B7C7's counters fill row 22 -- health at cols 9..12 of his own
        half, i.e. 26..29 absolute. */
-    /* FOUR QUARTERS: his is columns 8-15 -- health on row 22 at its
-       left edge, an empty row 23 (no keys, no potions), the name on 20 */
-    checkTrue('after it, his quarter carries his health on row 22 and nothing on row 23',
-              cells(two, 8, 12, 22) > 0 && cells(two, 8, 14, 23) === 0);
-    checkTrue('his name is on row 20 of his own quarter, +8 columns',
-              cells(two, 8, 16, 20) > 0);
+    /* FOUR QUARTERS: his is x 64-127 -- HEALTH on y 172-176, an empty
+       KEYS line (y 178-182) and icon row, the name on y 160-164 */
+    const pxBox = (list, x0, x1, y0, y1) => {
+      const buf = new Uint8Array(256 * 32);
+      for (const c of list) {
+        if (c[0] !== 'fillRect') continue;
+        const on = c[5] !== '#000000' ? 1 : 0;
+        for (let y = Math.max(160, c[2] | 0); y < Math.min(192, (c[2] | 0) + (c[4] | 0)); y++)
+          for (let x = Math.max(0, c[1] | 0); x < Math.min(256, (c[1] | 0) + (c[3] | 0)); x++)
+            buf[(y - 160) * 256 + x] = on;
+      }
+      let n = 0;
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) n += buf[(y - 160) * 256 + x];
+      return n;
+    };
+    checkTrue('after it, his quarter carries HEALTH on y 172-176 and nothing on the KEYS line or icon row',
+              pxBox(two, 64, 128, 172, 177) > 0 && pxBox(two, 64, 128, 178, 192) === 0);
+    checkTrue('his name is on the top line of his own quarter, x 64..',
+              pxBox(two, 64, 128, 160, 165) > 0);
     /* the ATTRACT/REWIND screens keep the classic invite: both halves
        carry the wordmark over PRESS FIRE (row 23, attribute 6 -- the
        always-visible row; 20-22 spend part of the ISR cycle black).
@@ -5624,16 +5652,16 @@ if (process.argv[2] === '--table') {
                    '#00ff00','#00ffff','#ffff00','#ffffff'];
       const countAt = (p14, k, colour) => {
         const g = G.seed({}); g.players[0].p14 = p14;
-        /* FOUR QUARTERS: the six icons are a 2 x 3 block down the right
-           edge of rows 21-23 (cols 6-7 of quarter 1) */
-        const row = (21 + (k >> 1)) * 8; let n = 0;
+        /* FOUR QUARTERS: the six icons sit on the band's last cell row
+           (row 23), cells 0-5 of quarter 1 */
+        const row = 23 * 8; let n = 0;
         const cap = { set fillStyle(v){this._f=v;}, get fillStyle(){return this._f;},
           fillRect(x, y, w, h) {
             if (this._f !== colour) return;
             for (let yy = y; yy < y + h; yy++) {
               if (yy < row || yy >= row + 8) continue;
               for (let xx = x; xx < x + w; xx++)
-                if ((xx >> 3) === 6 + (k & 1)) n++;
+                if ((xx >> 3) === k) n++;
             }
           } };
         G.render(cap, g);
@@ -9335,7 +9363,8 @@ if (process.argv[2] === '--table') {
 
   /* --- THE FOUR-QUARTER HUD, at the renderer ---------------------------- */
   {
-    const cells = (list, c0, c1, row) => {
+    /* rasterized, so a later black fill covers an earlier glyph */
+    const raster = list => {
       const buf = new Uint8Array(256 * 32);
       for (const c of list){
         if (c[0] !== 'fillRect') continue;
@@ -9344,14 +9373,16 @@ if (process.argv[2] === '--table') {
           for (let x = Math.max(0, c[1] | 0); x < Math.min(256, (c[1] | 0) + (c[3] | 0)); x++)
             buf[(y - 160) * 256 + x] = on;
       }
+      return buf;
+    };
+    const box = (buf, x0, x1, y0, y1) => {
       let n = 0;
-      for (let y = (row - 20) * 8; y < (row - 20) * 8 + 8; y++)
-        for (let x = c0 * 8; x < c1 * 8; x++) n += buf[y * 256 + x];
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) n += buf[(y - 160) * 256 + x];
       return n;
     };
     const paint = gg => { recording = true; drawCalls.length = 0;
                           G.render(ctxStub, gg); recording = false;
-                          return drawCalls.slice(); };
+                          return raster(drawCalls); };
     const g4 = G.seed({});
     g4.autoJoin(4);
     check('Game.autoJoin(4) joins all four', g4.players.map(q => q.inGame), [true, true, true, true]);
@@ -9361,44 +9392,52 @@ if (process.argv[2] === '--table') {
     g4.players[1].score = 0; g4.players[1].keys = 0; g4.players[1].potions = 0;
     g4.frameCtr = 0;
     const L = paint(g4);
-    checkTrue('quarter 1: an eight-letter name fills row 20 cols 0-7',
-              [0, 1, 2, 3, 4, 5, 6, 7].every(c => cells(L, c, c + 1, 20) > 0));
-    checkTrue('quarter 2: the unset name wears the character\'s own (VALKYRIE, 8) across cols 8-15',
-              [8, 9, 10, 11, 12, 13, 14, 15].every(c => cells(L, c, c + 1, 20) > 0));
-    checkTrue('quarter 3: a one-letter name is CENTRED -- col 19 only',
-              cells(L, 19, 20, 20) > 0 && cells(L, 16, 19, 20) === 0 && cells(L, 20, 24, 20) === 0);
-    checkTrue('quarter 1 row 21: six score digits at cols 0-5',
-              [0, 1, 2, 3, 4, 5].every(c => cells(L, c, c + 1, 21) > 0));
-    checkTrue('quarter 1 row 22: four health digits at cols 0-3, cols 4-5 empty',
-              [0, 1, 2, 3].every(c => cells(L, c, c + 1, 22) > 0) && cells(L, 4, 6, 22) === 0);
-    checkTrue('quarter 1 row 23: key icon + 12, potion icon + 3 = cols 0-4, col 5 empty',
-              [0, 1, 2, 3, 4].every(c => cells(L, c, c + 1, 23) > 0) && cells(L, 5, 6, 23) === 0);
-    checkTrue('quarter 1: all six power icons lit, the 2 x 3 block at cols 6-7 of rows 21-23',
-              [21, 22, 23].every(r => cells(L, 6, 7, r) > 0 && cells(L, 7, 8, r) > 0));
-    checkTrue('quarter 2: score 0 prints one digit at col 13 and nothing left of it',
-              cells(L, 13, 14, 21) > 0 && cells(L, 8, 13, 21) === 0);
-    checkTrue('quarter 2: no keys, no potions, no icons -> row 23 empty and cols 14-15 dark',
-              cells(L, 8, 16, 23) === 0 && cells(L, 14, 16, 21) === 0);
-    checkTrue('quarters 3 and 4 carry their own counters (health 2000 on row 22)',
-              cells(L, 16, 20, 22) > 0 && cells(L, 24, 28, 22) > 0);
+    /* the micro font: 4 px glyphs on a 5 px pitch, 6 px a line, from
+       y 160; a quarter is 64 px from x = 64 * idx */
+    checkTrue('quarter 1: an eight-letter name spans x 0..38 of the name line (y 160-164)',
+              box(L, 0, 4, 160, 165) > 0 && box(L, 35, 39, 160, 165) > 0 && box(L, 39, 64, 160, 165) === 0);
+    checkTrue('quarter 2: the unset name wears the character\'s own (VALKYRIE) at x 64..102',
+              box(L, 64, 68, 160, 165) > 0 && box(L, 99, 103, 160, 165) > 0);
+    checkTrue('quarter 3: a one-letter name is left-aligned: x 128..131 and nothing else on its line',
+              box(L, 128, 132, 160, 165) > 0 && box(L, 132, 192, 160, 165) === 0);
+    checkTrue('quarter 1 SCORE line (y 166-170): the label at x 0..23, six digits to x 58',
+              box(L, 0, 24, 166, 171) > 0 && box(L, 55, 59, 166, 171) > 0 && box(L, 59, 64, 166, 171) === 0);
+    checkTrue('quarter 1 HEALTH line (y 172-176): the label to x 28, four digits to x 53',
+              box(L, 0, 29, 172, 177) > 0 && box(L, 50, 54, 172, 177) > 0 && box(L, 54, 64, 172, 177) === 0);
+    checkTrue('quarter 1 KEYS 12 at x 0..33 and POT 3 at x 35..58 (y 178-182)',
+              box(L, 0, 34, 178, 183) > 0 && box(L, 35, 59, 178, 183) > 0);
+    checkTrue('quarter 1: all six power icons lit on the 8 px row 184-191, cells 0-5, cells 6-7 dark',
+              [0, 1, 2, 3, 4, 5].every(c => box(L, c * 8, c * 8 + 8, 184, 192) > 0) && box(L, 48, 64, 184, 192) === 0);
+    checkTrue('quarter 2: score 0 prints SCORE 0 -- the digit at x 94..97, nothing right of it',
+              box(L, 94, 98, 166, 171) > 0 && box(L, 99, 128, 166, 171) === 0);
+    checkTrue('quarter 2: no keys, no potions, no icons -> its KEYS line and icon row are dark',
+              box(L, 64, 128, 178, 183) === 0 && box(L, 64, 128, 184, 192) === 0);
+    checkTrue('quarters 3 and 4 carry HEALTH 2000 (digits at x+35..53)',
+              box(L, 128 + 35, 128 + 54, 172, 177) > 0 && box(L, 192 + 35, 192 + 54, 172, 177) > 0);
+    checkTrue('nothing paints between the lines (y 165, 171, 177, 183 are blank across the band)',
+              [165, 171, 177, 183].every(y => box(L, 0, 256, y, y + 1) === 0));
     /* an OUT block's quarter is blank -- and stays blank in the RIP hold */
     const g2 = G.seed({}); g2.autoJoin(2);
     const L2 = paint(g2);
-    checkTrue('with two in, quarters 3 and 4 (cols 16-31) are BLANK on every row',
-              [20, 21, 22, 23].every(r => cells(L2, 16, 32, r) === 0));
-    checkTrue('...while quarter 2 shows the second player', cells(L2, 8, 16, 20) > 0);
-    /* $9788's low-health flash: the whole quarter blinks to BRIGHT BLACK */
+    checkTrue('with two in, quarters 3 and 4 (x 128-255) are BLANK top to bottom',
+              box(L2, 128, 256, 160, 192) === 0);
+    checkTrue('...while quarter 2 shows the second player', box(L2, 64, 128, 160, 165) > 0);
+    /* $9788's low-health flash: name and counters blink to BRIGHT BLACK;
+       the KEYS/POT line and the icons keep their own colours */
+    /* (g2 above IS the shared instance g4 names: re-arm it) */
+    g4.autoJoin(4); g4.players[0].keys = 12; g4.players[0].potions = 3;
     g4.players[0].health = 0x0150; g4.frameCtr = 0x10;
     const Lf = paint(g4);
     g4.frameCtr = 0;
     const Ln = paint(g4);
-    checkTrue('a quarter under 200 health flashes black on frame bit 4 -- name, digits and all',
-              cells(Lf, 0, 6, 20) === 0 && cells(Lf, 0, 6, 21) === 0 && cells(Ln, 0, 6, 20) > 0);
+    checkTrue('a quarter under 200 health flashes its name and counters black on frame bit 4',
+              box(Lf, 0, 64, 160, 177) === 0 && box(Ln, 0, 64, 160, 165) > 0 &&
+              box(Lf, 0, 64, 178, 183) > 0);
     /* the attract screen keeps the classic halves: PRESS FIRE on row 23 of the right half */
     const gA = G.seed({}); gA.enterAttract();
     const LA = paint(gA);
-    checkTrue('the attract screen still shows the classic wordmark halves (row 23 lit, cols 21-27)',
-              cells(LA, 21, 27, 23) > 0);
+    checkTrue('the attract screen still shows the classic wordmark halves (row 23 lit, x 168..215)',
+              box(LA, 168, 216, 184, 192) > 0);
   }
 
   /* --- the snapshot carries four blocks ---------------------------------- */

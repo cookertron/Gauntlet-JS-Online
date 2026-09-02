@@ -10,8 +10,9 @@ Status: **online multiplayer for up to FOUR players** (2026-09-02).
 The client is one local player; the simulation carries four player
 blocks (the original's two, and two more cut to the same pattern and
 proven against the two-block build pass for pass), the relay seats four
-by default, and the in-game HUD is four quarters -- name, score, health,
-keys and potions, power icons -- one per seat.  Whoever presses FIRE is
+by default, and the in-game HUD is four quarters in the name tags' own
+small font -- name, score, health, keys and potions, power icons -- one
+per seat.  Whoever presses FIRE is
 in, exactly the engine's own join-in model, and a dead player rejoins
 the same way.
 
