@@ -1295,8 +1295,25 @@ if (A.player_frames) {
               pxIn(a1, 0, 64, 178, 183) === 0);
     g2.keys = 3; g2.potions = 2;
     const a2 = paint(g2);
-    checkTrue('three keys print KEYS 3 (x 0..28) and two potions POT 2 (x 35..58)',
-              pxIn(a2, 0, 29, 178, 183) > 0 && pxIn(a2, 35, 59, 178, 183) > 0);
+    checkTrue('three keys print the key icon (x 0..7) and a 3 (x 10..13); two potions the potion icon (x 35..42) and a 2 (x 45..48)',
+              pxIn(a2, 0, 8, 178, 183) > 0 && pxIn(a2, 10, 14, 178, 183) > 0 && pxIn(a2, 14, 35, 178, 183) === 0 &&
+              pxIn(a2, 35, 43, 178, 183) > 0 && pxIn(a2, 45, 49, 178, 183) > 0 && pxIn(a2, 49, 64, 178, 183) === 0);
+    /* the icons themselves: 8 x 5, drawn in the original icon colours,
+       the key ring-left with the shaft along the middle row, the potion
+       symmetric about its middle row */
+    {
+      const a2k = a2.filter(c => c[0] === 'fillRect' && c[2] >= 178 && c[2] < 183 && c[1] < 8 && c[5] !== '#000000');
+      const a2p = a2.filter(c => c[0] === 'fillRect' && c[2] >= 178 && c[2] < 183 && c[1] >= 35 && c[1] < 43 && c[5] !== '#000000');
+      check('the key icon wears the key attribute colour (6, yellow) and the potion the potion colour (5, cyan)',
+            [new Set(a2k.map(c => c[5])).size, a2k[0] && a2k[0][5], new Set(a2p.map(c => c[5])).size, a2p[0] && a2p[0][5]],
+            [1, '#d7d700', 1, '#00d7d7']);
+      const rowOf = (list, x0, y) => list.filter(c => c[2] === y).map(c => c[1] - x0).sort((a, b) => a - b).join(',');
+      check('the key: the ring top row is columns 1-2, the shaft row runs 0 and 3..7',
+            [rowOf(a2k, 0, 178), rowOf(a2k, 0, 180)], ['1,2', '0,3,4,5,6,7']);
+      checkTrue('the potion is SYMMETRIC about its middle row',
+                rowOf(a2p, 35, 178) === rowOf(a2p, 35, 182) && rowOf(a2p, 35, 179) === rowOf(a2p, 35, 181) &&
+                rowOf(a2p, 35, 180) === '0,1,2,3,4,5,6,7');
+    }
     /* THE LOGO COLOUR CYCLE, enumerated over its whole domain rather than
        sampled.  The ISR computes it every video frame at $A2B4 and stores it
        into the operand at $A2F5; MEASURED by sampling that operand INSIDE the
@@ -1338,8 +1355,8 @@ if (A.player_frames) {
     check('holding down for 61 passes: the ORIGINAL\'s score 000100 and 1 key',
           [g3.score, g3.keys], [0x000100, 1]);
     const a3 = paint(g3);
-    checkTrue('and the panel actually shows that key: KEYS 1 on the fourth line of the quarter',
-              pxIn(a3, 0, 34, 178, 183) > 0);
+    checkTrue('and the panel actually shows that key: the key icon and a 1 on the fourth line of the quarter',
+              pxIn(a3, 0, 8, 178, 183) > 0 && pxIn(a3, 10, 14, 178, 183) > 0);
   }
 
   /* --- health and score against the ORIGINAL, end to end -------------
@@ -9404,8 +9421,10 @@ if (process.argv[2] === '--table') {
               box(L, 0, 24, 166, 171) > 0 && box(L, 55, 59, 166, 171) > 0 && box(L, 59, 64, 166, 171) === 0);
     checkTrue('quarter 1 HEALTH line (y 172-176): the label to x 28, four digits to x 53',
               box(L, 0, 29, 172, 177) > 0 && box(L, 50, 54, 172, 177) > 0 && box(L, 54, 64, 172, 177) === 0);
-    checkTrue('quarter 1 KEYS 12 at x 0..33 and POT 3 at x 35..58 (y 178-182)',
-              box(L, 0, 34, 178, 183) > 0 && box(L, 35, 59, 178, 183) > 0);
+    checkTrue('quarter 1: the key icon + 12 at x 0..18 and the potion icon + 3 at x 35..48 (y 178-182), gaps between',
+              box(L, 0, 8, 178, 183) > 0 && box(L, 10, 19, 178, 183) > 0 && box(L, 8, 10, 178, 183) === 0 &&
+              box(L, 19, 35, 178, 183) === 0 && box(L, 35, 43, 178, 183) > 0 && box(L, 45, 49, 178, 183) > 0 &&
+              box(L, 49, 64, 178, 183) === 0);
     checkTrue('quarter 1: all six power icons lit on the 8 px row 184-191, cells 0-5, cells 6-7 dark',
               [0, 1, 2, 3, 4, 5].every(c => box(L, c * 8, c * 8 + 8, 184, 192) > 0) && box(L, 48, 64, 184, 192) === 0);
     checkTrue('quarter 2: score 0 prints SCORE 0 -- the digit at x 94..97, nothing right of it',

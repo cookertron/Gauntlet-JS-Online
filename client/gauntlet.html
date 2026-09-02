@@ -10451,6 +10451,28 @@ function drawNameTag(ctx, text, cx, ty, colour, yMax){
 function drawMicro(ctx, text, x, ty, colour){
   drawNameTag(ctx, text, x + ((text.length * 5 - 1) >> 1), ty, colour, 192);
 }
+/* ---- the MICRO ICONS (ADDED, this fork): TWO tiles wide (8 x 5, two
+   hex digits a row, bit 7 the left column), drawn ON THEIR SIDE so the
+   five rows give them a middle row to be symmetric about.  The KEY lies
+   ring-left, shaft along the middle row, two teeth hanging at the end;
+   the POTION lies stopper-left, neck along the middle row, the bulb to
+   the right.  They stand in for the words KEYS and POT on the quarter's
+   fourth line, in the original icons' own colours (Anthony, 2026-09-02:
+   "the words KEYS and POTIONS are a bit heavy on the HUD's aesthetics").
+   Drawn from a wider table than TAG_FONT, by the same routine shape. */
+const TAG_ICONS = {
+  KEY:    ['60', '90', '9F', '65', '05'],
+  POTION: ['0E', '9F', 'FF', '9F', '0E'],
+};
+const MICRO_ICON_W = 8, MICRO_ICON_GAP = 2;
+function drawMicroIcon(ctx, rows, x, ty, colour){
+  ctx.fillStyle = colour;
+  for (let r = 0; r < 5; r++){
+    const bits = parseInt(rows[r], 16);
+    for (let b = 0; b < MICRO_ICON_W; b++)
+      if (bits & (0x80 >> b)) ctx.fillRect(x + b, ty + r, 1, 1);
+  }
+}
 
 /* ---- $B5E8, THE PANEL, once per player -----------------------------
    Each player owns FIFTEEN COLUMNS of rows 20-23 and player 2's are player
@@ -10515,8 +10537,10 @@ function drawPanel(ctx, g, q){
      y+6   SCORE and six digits ($B6AE's leading-zero suppression falls
            out of printing packed BCD as hex)
      y+12  HEALTH and four digits
-     y+18  KEYS n and POT n, each in its own original icon colour, each
-           only while owned ($B793's rule: nothing when there is nothing)
+     y+18  a KEY icon and the count, a POTION icon and the count (the
+           8 x 5 micro icons, TAG_ICONS), each in its own original icon
+           colour, each only while owned ($B793's rule: nothing when
+           there is nothing)
      y+24  the six $B61F power icons, the HUD font's own 8x8 glyphs on
            the band's last cell row, lit by ATTRIBUTE exactly as the
            original lights them (the colour when owned, black on black
@@ -10541,9 +10565,14 @@ function drawQuarter(ctx, g, q){
   line(tagNameFor(g, q).slice(0, QUARTER_COLS), 0, ink);
   line('SCORE ' + q.score.toString(16).toUpperCase(), 1, ink);    // packed BCD
   line('HEALTH ' + q.health.toString(16).toUpperCase(), 2, ink);
-  if (q.keys > 0) line('KEYS ' + q.keys, 3, attrColour(F.keys.attr));
-  if (q.potions > 0)
-    drawMicro(ctx, 'POT ' + q.potions, x0 + 35, PLAYFIELD_H + 18, attrColour(F.potions.attr));
+  const carried = (rows, n, x, attr) => {
+    if (n <= 0) return;
+    const colour = attrColour(attr);
+    drawMicroIcon(ctx, rows, x, PLAYFIELD_H + 18, colour);
+    drawMicro(ctx, String(n), x + MICRO_ICON_W + MICRO_ICON_GAP, PLAYFIELD_H + 18, colour);
+  };
+  carried(TAG_ICONS.KEY, q.keys, x0, F.keys.attr);
+  carried(TAG_ICONS.POTION, q.potions, x0 + 35, F.potions.attr);
   /* the six power icons: $B61F's reveal-by-attribute from (IX+$14), LSB
      first, on the band's last cell row */
   for (let i = 0; i < 6; i++)

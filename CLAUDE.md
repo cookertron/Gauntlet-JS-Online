@@ -341,7 +341,10 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      font (twelve characters a line, 6 px a line): the NAME
      (tagNameFor, the character's ink with $9788's low-health flash),
      `SCORE 123456` (packed BCD printed as hex = $B6AE's suppression for
-     free), `HEALTH 2000`, `KEYS n` / `POT n` in the original icon
+     free), `HEALTH 2000`, then a KEY icon + count and a POTION icon +
+     count (TAG_ICONS: 8×5 micro icons, two tiles wide, drawn ON THEIR
+     SIDE so the five rows give a middle row of symmetry — Anthony's
+     spec; the words KEYS/POT were "heavy") in the original icon
      colours and only while owned, and the six $B61F power icons as
      the HUD font's own 8x8 glyphs on the band's last cell row, lit by
      attribute.  `drawNameTag` grew an optional clip bottom
