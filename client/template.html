@@ -9424,7 +9424,23 @@ class Game{
      clock here (the NET layer paces itself on what simT consumed --
      the tick plus any blocking pause it triggered), so it is pinned. */
   stepNet(dirs){
+    /* THE PAUSE IS ITS OWN TICK.  serveIntroPause charges the level
+       entry's whole tune to the clock, and the NET layer sits the wire
+       out for exactly that long (netApply paces on consumed simT) -- but
+       stepping the pass in the same call took the level-number screen
+       DOWN at the pass's top, so the held picture was the new level
+       with frozen players and the screen itself showed for one frame
+       (reported from play, 2026-09-02).  Offline, advance() serves the
+       pause and then simply cannot step for that long, which is why it
+       never showed there.  So when the pause charged, this pass IS the
+       pause: return with the screen still up, and the next pass brings
+       the level in -- the original's own order ($8B98 blits and pauses,
+       THEN $B391's first pass).  Every client takes the same branch on
+       the same pass, so lockstep and the fingerprint hold; the pass's
+       bytes are the tune's, and nobody's input counts during a tune. */
+    const t0 = this.simT;
     this.serveIntroPause();
+    if (this.simT !== t0){ this.acc = 0; return; }
     this.stepTick({ netDirs: dirs });
     this.acc = 0;
   }

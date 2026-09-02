@@ -8376,6 +8376,32 @@ if (process.argv[2] === '--table') {
           [['ANTHONY', 'NITRO 5', '', ''], ['ANTHONY', 'NITRO 5', '', '']]);
   }
 
+  /* ---- THE LEVEL-NUMBER SCREEN HOLDS FOR THE TUNE, online.  A level
+     entry raises the intro screen and arms the pause; the next pass
+     serves the pause -- and used to step in the same call, taking the
+     screen down at the pass's top, so the tune played over the new
+     level with the players frozen (reported from play).  The pause pass
+     must NOT step: the screen stays up, the pass after brings the level. */
+  {
+    S.acc = -1;                                    // keep the wire quiet
+    const g = G.game;
+    g.levelDone = true;                            // the sim's own level-end flag
+    H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
+    checkTrue('the level-end pass raises the intro screen and arms its pause',
+              !!g.introShow && g.pauseReq === true && g.mode === 'play');
+    const passWas = g.pass, simWas = g.simT;
+    H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
+    checkTrue('the PAUSE pass charges the tune to the clock and steps NOTHING: ' +
+              'the level-number screen is still up',
+              g.simT - simWas > 3 && g.pass === passWas && !!g.introShow,
+              'charge ' + (g.simT - simWas).toFixed(2) + ' pass ' + g.pass + '/' + passWas);
+    checkTrue('...and the wire sits the tune out', S.acc < -3);
+    H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
+    checkTrue('the pass after brings the level in: screen down, pass counted',
+              g.introShow === null && g.pass === passWas + 1);
+    S.acc = 0;
+  }
+
   /* ---- START MEANS START, online: the handover arms net.autoFire and
      the latch rides the OUTGOING byte -- the join is the wire's own
      FIRE, indistinguishable from a held key -- until this seat's
