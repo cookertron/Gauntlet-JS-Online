@@ -40,9 +40,12 @@ page from disk (or setting SERVER LOCAL) plays offline;
 `?server=host:port` joins a relay from a page hosted elsewhere.
 
 If a session stutters, paste `__GAUNTLET__.net.info()` from the
-browser console (F12) on BOTH machines — it names each machine's
-exchange rate against the sim's own and the worst stall seen, which
-is everything needed to see whose link is hurting.
+browser console (F12) on BOTH machines.  It names each machine's
+exchange rate against the sim's own, the worst stall seen, the clean
+link round trip (`rtt=min/median/worst`, from a once-a-second ping
+the relay answers ahead of everything else) and how long each seat's
+input waited at the relay for the others (`wait=`, per seat) — which
+together separate "the wire is slow" from "one seat is slow".
 
 For play from OUTSIDE the network, `--forward` asks the router to open
 the port itself (NAT-PMP first, then UPnP), prints the public address
@@ -60,7 +63,7 @@ The C++ relay server (`server/relay.cpp`, protocol in
 vcvars64 && cmake -S server -B server\build -G Ninja
          && ninja -C server\build
 python tools/protocheck.py                 # protocol constants in sync
-node tools/relaytest.js                    # the relay's own gate (37 checks)
+node tools/relaytest.js                    # the relay's own gate (40 checks)
 server\build\gauntlet-relay.exe            # run it (--port 33792 --seats 2)
 ```
 

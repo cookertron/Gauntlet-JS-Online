@@ -8149,7 +8149,7 @@ if (process.argv[2] === '--table') {
 {
   const F = G.frontend;
   const NP = G.assets.protocol, M = NP.msgs, S = G.net.state;
-  checkTrue('the protocol constants ship inside the client', !!NP && NP.version === 1);
+  checkTrue('the protocol constants ship inside the client', !!NP && NP.version === 2);
   const sent = [];
   let H = null;
   const tpF = (url, h) => { H = h; return { send: b => sent.push(Array.from(b)), close(){} }; };
@@ -8312,6 +8312,7 @@ if (process.argv[2] === '--table') {
      fails this pin. */
   {
     kb.releaseAll();
+    S.acc = -1;                              // park the clock: no send is owed
     while (S.sentInput){                     // settle: flush any in-flight
       H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
       const d = S.pendDirs; S.pendDirs = null; if (d) G.net.apply(d);
@@ -8327,6 +8328,28 @@ if (process.argv[2] === '--table') {
           sent.filter(m => m[0] === M.INPUT).length - inputs0, 2);
     checkTrue('net.info() stays paste-able for the bench',
               /inflight=[01] rate=.* sim=.* worst=\d+ms/.test(G.net.info()));
+  }
+
+  /* ---- NETPLAN 2.1 / 2.2: the measurement wire.  The frame loop PINGs
+     once a second and folds each PONG into net.rtt; a PASS may carry a
+     trailing wait byte per seat (4 ms units), kept as the per-seat worst
+     over the diagnostic's window.  Neither touches the sim. */
+  {
+    const pg = lastOf(M.PING);
+    checkTrue('the frame loop PINGs, tagged', !!pg && pg.length === 5);
+    const tag = rd32(pg, 1);
+    H.message(Uint8Array.from([M.PONG, ...u32(tag)]));
+    checkTrue('PONG folds one round-trip sample into net.rtt (min = med for one)',
+              S.rtt.samples.length === 1 && S.rtt.min >= 0 && S.rtt.min === S.rtt.med);
+    H.message(Uint8Array.from([M.PONG, ...u32(tag)]));
+    check('...and an unknown or repeated tag is ignored', S.rtt.samples.length, 1);
+    S.acc = -1;                                    // no reply owed: keep the wire quiet
+    H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0, 20, 3]));
+    const waits = S.stat.waitShown.length ? S.stat.waitShown : S.stat.wait;
+    check('PASS wait bytes land as the per-seat worst, in milliseconds', waits, [80, 12]);
+    checkTrue('net.info() carries rtt= and wait= for the report',
+              /rtt=\d+\/\d+\/\d+ wait=80\/12ms/.test(G.net.info()));
+    S.acc = 0;
   }
 
   /* ---- NAMES: the session's name table is display metadata -- straight
@@ -8410,6 +8433,127 @@ if (process.argv[2] === '--table') {
   S.phase = 'off'; S.tp = null;
   kb.releaseAll();
   G.seed({});                            // back to the offline gate baseline
+  G.settings.reset();
+}
+
+/* ====================================================================
+   NETPLAN 2.3 -- THE LAG GATE.  The shim that would have caught both
+   pipelining bugs: a deterministic delay transport on a VIRTUAL clock
+   (tools/netlag.js) with a virtual relay, driven at 60 Hz through a
+   real FRESH boot, the handover's own join, the level-entry pause and
+   a stretch of play.  Two sessions: rttMs = 120 (the far-seat regime
+   Phase 2 must decide on) and rttMs = 40 (the rAF fix's acceptance).
+   Every assertion states what the CURRENT design (stop-and-wait)
+   claims, and each is written so the historical bugs fail it:
+     - SAMPLING LEAD: every INPUT's tag equals the step it will act on
+       -- a 4-deep pipe reads 4 here, the ratchet read 8;
+     - THE WIRE SITS OUT THE PAUSE: no INPUT leaves against the level
+       pause's debt -- the drain-less pipe kept sending through it;
+     - RATE: one tick per round trip, so the inter-PASS gap is
+       max(pass, RTT) -- 120 ms FLAT at both the 20 ms lobby tick and
+       the play tick, which is where the rAF fix (2.5) shows: a reply
+       that waited for the next animation frame read 133 ms there (120
+       plus one 16.7 ms frame, every pass -- mutation-verified).  At
+       40 ms RTT the sim's own pace rules and the frame surplus is
+       carried forward by the accumulator, so that regime asserts the
+       pace invariant and is NOT the fix's discriminator -- NETPLAN
+       2.5 placed its acceptance at rttMs = 40; the measurable drop
+       lives in the round-trip-bound regime.
+   ==================================================================== */
+{
+  const { makeLagShim } = require('./netlag');
+  const NP = G.assets.protocol, M = NP.msgs, S = G.net.state;
+  const F = G.frontend, kb = F.liveKb;
+  const rd32 = (a, o) => (a[o] | (a[o+1] << 8) | (a[o+2] << 16) | (a[o+3] << 24)) >>> 0;
+  const median = a => { const s = a.slice().sort((x, y) => x - y); return s[s.length >> 1]; };
+  /* the scripted session: 12 lobby passes, then the latch joins (START
+     means start), 28 passes of play, then a LEVEL ENTRY forced the way
+     the sim itself does it (levelDone -> levelOver -> startLevel, whose
+     intro screen arms the pause the next pass serves), then play on.
+     Measured: the attract-to-play join raises NO intro screen -- the
+     level-entry pause exists only at level transitions, so a session
+     without one never exercises it, which is how it stayed unseen. */
+  const session = (rttMs, passes) => {
+    const leads = [];
+    const shim = makeLagShim(NP, { rttMs, seed: 11,
+      onSend: b => { if (b[0] === M.INPUT) leads.push(rd32(b, 1) - S.step); } });
+    sandbox.performance = { now: () => shim.clock.now() };
+    sandbox.setTimeout = (fn, ms) => shim.clock.setTimeout(fn, ms);
+    sandbox.document.hidden = false;
+    kb.releaseAll();
+    G.net.start('lag', { char: 3, method1: 3, zonePotion: false }, shim.tpFactory);
+    let simT0 = G.game.simT, pauseAt = -1, pauseSim = 0, joinAt = -1, joinSim = 0;
+    let frames = 0, armed = false, forced = false, sawLobby = false;
+    while (S.step < passes && frames < 8000){
+      if (!armed && S.step >= 12){ S.autoFire = true; armed = true; }
+      if (!forced && S.step >= 40 && joinAt >= 0){
+        G.game.levelDone = true; forced = true;      // the sim's own level-end flag
+      }
+      shim.clock.advance(1000 / 60);
+      G.net.frame(1 / 60);
+      frames++;
+      /* the game singleton carries the previous section's mode until the
+         boot resets it: the join is the attract -> play transition of
+         THIS session, so it counts only once the lobby has been seen */
+      if (S.everLive && G.game.mode === 'attract') sawLobby = true;
+      if (joinAt < 0 && sawLobby && G.game.mode === 'play'){
+        joinAt = shim.clock.now(); joinSim = G.game.simT;
+      }
+      if (pauseAt < 0 && G.game.simT - simT0 > 3){
+        pauseAt = shim.clock.now(); pauseSim = G.game.simT - simT0;
+      }
+      simT0 = G.game.simT;
+    }
+    const passAt = shim.stats.recvs.filter(r => r.type === M.PASS).map(r => r.at);
+    const gaps = passAt.slice(1).map((t, i) => t - passAt[i]);
+    const iJoin = passAt.findIndex(t => t >= joinAt);
+    const iPause = gaps.findIndex(g => g > 3000);
+    const lobby = gaps.slice(0, Math.max(0, iJoin - 1));
+    const play = iPause >= 0 ? gaps.slice(iPause + 1) : gaps.slice(iJoin + 1);
+    /* the exchange's pace against the sim's own: wall time in play
+       (the pause's gap excluded) over the sim time consumed (the
+       pause's charge excluded) */
+    const wallPlay = shim.clock.now() - joinAt - (iPause >= 0 ? gaps[iPause] : 0);
+    const simPlay = G.game.simT - joinSim - pauseSim;
+    const inputAt = shim.stats.sends.filter(s => s.type === M.INPUT).map(s => s.at);
+    const afterPause = inputAt.find(t => t > pauseAt);
+    const out = { steps: S.step, leads, lobby, play, mode: G.game.mode,
+                  bigPauses: gaps.filter(g => g > 3000).length, pauseSim,
+                  sitOut: pauseAt >= 0 && afterPause !== undefined ? afterPause - pauseAt : -1,
+                  pace: (wallPlay / 1000) / simPlay,          // clock is ms, simT is s
+                  rtt: S.rtt.min, pings: shim.relay.log.pings };
+    S.phase = 'off'; S.tp = null;
+    delete sandbox.performance; delete sandbox.setTimeout;
+    return out;
+  };
+
+  const r = session(120, 200);
+  check('rtt 120: a real FRESH boot, lobby, latch join and level entry -- and play on',
+        [r.mode, r.steps >= 200], ['play', true]);
+  check('rtt 120: SAMPLING LEAD is one tick -- every INPUT is for the very next step',
+        Math.max(...r.leads), 0);
+  checkTrue('rtt 120: the level entry charged the sim clock seconds, exactly once on the wire',
+            r.bigPauses === 1 && r.pauseSim > 3, 'pauses ' + r.bigPauses + ' charge ' + r.pauseSim.toFixed(2));
+  checkTrue('rtt 120: the wire SITS OUT the pause -- no INPUT against its debt',
+            r.sitOut >= 3500, 'next INPUT ' + Math.round(r.sitOut) + ' ms after the pause');
+  checkTrue('rtt 120: play runs at the ROUND TRIP flat -- the reply leaves on arrival, ' +
+            'not on the next animation frame (the rAF fix, 2.5: quantised reads 133)',
+            r.play.length > 20 && median(r.play) >= 118 && median(r.play) <= 124,
+            'median ' + median(r.play) + ' over ' + r.play.length);
+  checkTrue('rtt 120: the LOBBY, whose tick is 20 ms, is round-trip-bound flat too',
+            r.lobby.length > 3 && median(r.lobby) >= 118 && median(r.lobby) <= 124,
+            'median ' + median(r.lobby) + ' over ' + r.lobby.length);
+  checkTrue('rtt 120: PING measures the link -- net.rtt.min reads the shim\'s 120',
+            r.pings >= 1 && Math.abs(r.rtt - 120) <= 1, 'rtt ' + r.rtt);
+
+  const q = session(40, 200);
+  check('rtt 40: sampling lead one tick, the level entry once, sat out',
+        [Math.max(...q.leads), q.bigPauses, q.sitOut >= 3500], [0, 1, true]);
+  checkTrue('rtt 40: play keeps the sim\'s OWN pace -- wall time over consumed sim time ' +
+            'within 3% (the pace invariant; the accumulator carries a frame surplus forward)',
+            q.pace > 0.97 && q.pace < 1.03, 'pace ' + q.pace.toFixed(3));
+  kb.releaseAll();
+  G.seed({});
   G.settings.reset();
 }
 

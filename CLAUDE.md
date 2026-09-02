@@ -23,8 +23,8 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
   `cmake -S server -B server\build -G Ninja && ninja -C server\build`.
 - `shared/PROTOCOL.md` + `shared/protocol.json` — the wire contract, v1.
   The JSON is the source of truth; `python tools/protocheck.py` holds
-  the C++ constants block to it (31 constants, both directions).
-- `tools/relaytest.js` — the relay's empirical gate (37 checks): spawns
+  the C++ constants block to it (33 constants, both directions).
+- `tools/relaytest.js` — the relay's empirical gate (40 checks): spawns
   the exe, speaks real WebSocket at it (own client, every frame byte
   controlled), plays the full protocol conversation.
 - `tools/e2etest.js` — the full stack (20 checks): two real client sims
@@ -224,6 +224,43 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      substitutes and non-blocking late-join/resync (caveats logged in
      the review).  **Later polish:** a join-time character pick (the
      dir byte has two spare bits).
+   - **NETPLAN Phase 1 — MEASUREMENT, delivered 2026-09-02** (the plan
+     is `NETPLAN.md`; its three rules override habit).  (E) The rAF fix:
+     a visible tab applies PASS on arrival (`netDeliver`) and answers on
+     a sim-clock timer (`netSendWhenDue`) — `net.acc` stays FRAME-FED,
+     the timer only CREDITS unbanked real time and never writes acc, so
+     nothing is double-counted; "due within a millisecond is due" kills
+     a float-precision self-rescheduling storm under a virtual clock.
+     (A) PING/PONG (msgs 14/15): once a second from the frame loop only,
+     answered by the relay ahead of every other duty, `net.rtt`
+     min/med/worst over 30 samples, `rtt=` in info().  (B) PASS carries
+     a trailing WAIT byte per seat (4 ms units, protocol v2) — how long
+     that seat's byte waited at the relay; `wait=` in info().  (C)
+     `tools/netlag.js`: a deterministic virtual-clock delay shim (seeded
+     PRNG; loss modelled as TCP shows it — a retransmit's head-of-line
+     delay; no reorder knob because TCP has none) with a virtual relay,
+     and THE LAG GATE in headless: FRESH boot → 12 lobby passes → latch
+     join → play → a FORCED level entry → play on, at rttMs 120 and 40,
+     asserting sampling lead 0 (a 4-deep pipe reads 4 — mutation-
+     verified), the wire sitting out the pause (an uncharged pause
+     reads 110 ms — verified), the round trip FLAT at 120 in play and
+     lobby (the pre-fix frame-quantised reply reads 133 — verified),
+     and sim-pace within 3% at 40.  A correction to NETPLAN 2.5: at
+     RTT < pass the accumulator carries the frame surplus forward, so
+     frame quantisation costs one frame of PHASE there, not throughput
+     — the rAF fix's measurable win (13 ms a pass, ~10%) lives in the
+     round-trip-bound regime.  (D) Node numbers on the built client, mid-level
+     with 63 actors: snapshot() 0.020 ms, restore() ~0.1 ms (reset-
+     dominated), stepNet 0.079 ms, wire 7,310 B — a 4-tick rollback
+     window ≈ 0.3 ms per confirmation, 10-50× under the plan's
+     threshold.  FOUND ON THE WAY: the attract→play join raises NO
+     intro screen — the level-entry pause exists only at level
+     TRANSITIONS (so pipelining's bug 1 struck at the first level
+     change, not at game start); the online smooth cap is FIVE frames,
+     so play's period under load is ~100 ms, not the nominal 80 — the
+     gate compares wall time to CONSUMED simT.  The far-seat RTT itself
+     needs a real session: paste net.info() from both ends.  Per the
+     plan, §3 is NOT pre-empted: no transport redesign is authorised.
 4. **NEXT SESSION — FOUR PLAYERS (agreed with Anthony 2026-09-01).**
    Grow the sim to four player blocks and redesign the in-game HUD to
    fit four panels ("remove or shrink the player information", his

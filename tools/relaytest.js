@@ -174,6 +174,14 @@ async function main(){
     check('a wrong HELLO version gets ERROR VERSION', ev[1], E.VERSION);
     cv.close();
 
+    /* ---- NETPLAN 2.1: PING is answered ahead of everything, seat or no
+       seat -- a PONG must never wait behind the advance gate ----------- */
+    const cp = await new Ws().connect(PORT);
+    cp.msg(M.PING, U32(0xABCD1234));
+    check('an UNSEATED connection\'s PING comes back as PONG, tag verbatim',
+          (await cp.expect(M.PONG)).readUInt32LE(1), 0xABCD1234);
+    cp.close();
+
     /* ---- 100 lockstep passes, byte order checked -------------------- */
     c0.msg(M.READY, U32(0));
     c1.msg(M.READY, U32(0));
@@ -191,14 +199,25 @@ async function main(){
     }
     check('100 passes relay both bytes to both clients, in seat order and in step',
           ok, 100);
+    c0.msg(M.PING, U32(42));
+    check('a seated PING mid-session is answered at once, loop untouched',
+          (await c0.expect(M.PONG)).readUInt32LE(1), 42);
 
     /* ---- pure lockstep: a missing input HOLDS the loop --------------- */
     c0.msg(M.INPUT, U32(pass), 0x11);
     await c0.silent(300);
     checkTrue('with one input missing the loop holds (no PASS inside 300ms)', true);
     c1.msg(M.INPUT, U32(pass), 0x22);
-    const held = rdPass(await c0.expect(M.PASS));
+    const heldMsg = await c0.expect(M.PASS);
+    const held = rdPass(heldMsg);
     check('...and releases the moment it arrives', [held.pass, held.dirs], [pass, [0x11, 0x22]]);
+    /* NETPLAN 2.2: the trailing per-seat WAIT bytes (4 ms units) -- the
+       early seat waited the ~300 ms hold, the late one next to nothing */
+    const rdWait = m => Array.from(m.subarray(6 + m[5], 6 + 2 * m[5]));
+    checkTrue('PASS carries per-seat WAIT bytes: the early seat ~300 ms, the late one ~0',
+              heldMsg.length === 6 + 2 * held.n &&
+              rdWait(heldMsg)[0] >= 50 && rdWait(heldMsg)[1] <= 12,
+              'waits ' + rdWait(heldMsg));
     await c1.expect(M.PASS); pass++;
 
     /* a stale duplicate (a tag from before a resync) is ignored, not a breach */

@@ -11311,10 +11311,15 @@ const net = {
   chars: null,         // the session character table (CHARS)
   step: 0,             // the next tick to exchange
   sentInput: false, pendDirs: null,
+  accAt: 0,            // when net.acc last banked real time (the rAF fix's credit)
+  sendTimer: null,     // the sim-clock send timer (netSendWhenDue)
+  pingTag: 0, pingAt: 0, pings: [],            // NETPLAN 2.1: the RTT probe
+  rtt: {min: Infinity, med: 0, worst: 0, samples: []},
   autoFire: false,     // START MEANS START, online -- see feHandover/netLocalDir
   names: null,         // the session name table (NAMES) -- display-only
   acc: 0, lastProgress: 0, desyncs: 0, seatMask: 0,
-  stat: {lastAt: 0, worst: 0, worstShown: 0, n: 0, t0: 0, rate: 0},
+  stat: {lastAt: 0, worst: 0, worstShown: 0, n: 0, t0: 0, rate: 0,
+         wait: [], waitShown: []},          // NETPLAN 2.2: per-seat relay wait
   pumpTimer: null,         // the hidden-tab pacer -- see netPump()
   pumpT0: 0, pumpN: 0,     // its trailing-window budget (the free-run guard)
   forceAvailable: false,   // tests: offer the SERVER row with no location
@@ -11355,9 +11360,12 @@ function netStart(url, cfgLocal, tpFactory){
   net.cfgLocal = cfgLocal || { char: GATE_CONFIG.char & 3, method1: 3, zonePotion: false };
   net.everLive = false; net.welcomed = false; net.chars = null;
   net.step = 0; net.sentInput = false; net.pendDirs = null;
-  net.acc = 0; net.desyncs = 0; net.autoFire = false; net.names = null;
-  net.pumpT0 = 0; net.pumpN = 0;
-  net.stat = {lastAt: 0, worst: 0, worstShown: 0, n: 0, t0: 0, rate: 0};
+  net.acc = 0; net.accAt = netNow(); net.desyncs = 0; net.autoFire = false;
+  net.names = null; net.pumpT0 = 0; net.pumpN = 0;
+  net.stat = {lastAt: 0, worst: 0, worstShown: 0, n: 0, t0: 0, rate: 0,
+              wait: [], waitShown: []};
+  net.pingTag = 0; net.pingAt = 0; net.pings = [];
+  net.rtt = {min: Infinity, med: 0, worst: 0, samples: []};
   const h = {
     open(){ netSend(NETP.msgs.HELLO, [NETP.version & 0xFF, net.cfgLocal.char & 3]
                     .concat(netNameBytes(net.cfgLocal.name))); },
@@ -11385,7 +11393,7 @@ function netBoot(){
   if (net.names) game.names = net.names.slice();   // the reset wiped them
   game.enterAttract();
   net.step = 0; net.sentInput = false; net.pendDirs = null;
-  net.everLive = true; net.lastProgress = netNow();
+  net.everLive = true; net.lastProgress = netNow(); net.accAt = net.lastProgress;
   netSend(NETP.msgs.READY, netU32(0));
   net.phase = 'live'; net.status = '';
 }
@@ -11424,8 +11432,34 @@ function netOnMessage(b){
     if (n !== net.step) return;        // a stale echo; the wire is ordered
     const dirs = [];
     for (let i = 0; i < count; i++) dirs.push(b[6 + i] | 0);
-    net.pendDirs = dirs;               // stepped by netFrame, on the clock
-    netPump();                         // -- or by THIS, when the tab is hidden
+    /* NETPLAN 2.2 -- the relay's trailing per-seat wait bytes (4 ms
+       units): the worst per seat over the diagnostic's 5 s window */
+    if (b.length >= 6 + 2 * count)
+      for (let i = 0; i < count; i++){
+        const w = (b[6 + count + i] | 0) * 4;
+        if (w > (net.stat.wait[i] || 0)) net.stat.wait[i] = w;
+      }
+    net.pendDirs = dirs;
+    if (netHidden()) netPump();        // the echo is the clock (see netPump)
+    else netDeliver();                 // apply NOW; the reply rides a timer
+    return;
+  }
+  if (t === M.PONG){
+    /* NETPLAN 2.1 -- a clean link sample: the relay answers PING ahead
+       of every other duty, so this is the wire, not the game.  min is
+       the floor the link can do; med and worst are the weather. */
+    const tag = netRdU32(b, 1);
+    const i = net.pings.findIndex(pg => pg.tag === tag);
+    if (i < 0) return;
+    const ms = netNow() - net.pings[i].at;
+    net.pings.splice(i, 1);
+    const r = net.rtt;
+    r.samples.push(ms);
+    if (r.samples.length > 30) r.samples.shift();
+    if (ms < r.min) r.min = ms;
+    if (ms > r.worst) r.worst = ms;
+    const sorted = r.samples.slice().sort((x, y) => x - y);
+    r.med = sorted[sorted.length >> 1];
     return;
   }
   if (t === M.SNAP){
@@ -11437,7 +11471,7 @@ function netOnMessage(b){
     game.localIdx = net.seat;          // restore preserves the receiver's own
     game.restore(snap);
     net.step = pass; net.sentInput = false; net.pendDirs = null;
-    net.everLive = true; net.lastProgress = netNow();
+    net.everLive = true; net.lastProgress = netNow(); net.accAt = net.lastProgress;
     netSend(NETP.msgs.READY, netU32(pass));
     net.phase = 'live'; net.status = '';
     return;
@@ -11522,8 +11556,8 @@ function netApply(dirs){
   if (!st.t0) st.t0 = nowMs;
   else if (nowMs - st.t0 >= 5000){
     st.rate = st.n * 1000 / (nowMs - st.t0);
-    st.worstShown = st.worst;
-    st.n = 0; st.worst = 0; st.t0 = nowMs;
+    st.worstShown = st.worst; st.waitShown = st.wait;
+    st.n = 0; st.worst = 0; st.wait = []; st.t0 = nowMs;
   }
   net.lastProgress = nowMs;
   if (((done + 1) % NETP.fpEvery) === 0)
@@ -11533,12 +11567,17 @@ function netApply(dirs){
    rate over the last 5 s window against the sim's own, the worst
    inter-pass stall seen in it, and whether an INPUT is in flight. */
 function netInfo(){
-  const s = net.stat;
+  const s = net.stat, r = net.rtt;
+  const waits = s.waitShown.length ? s.waitShown : s.wait;
   return 'phase=' + net.phase + ' step=' + net.step +
          ' inflight=' + (net.sentInput ? 1 : 0) +
          ' rate=' + (s.rate ? s.rate.toFixed(1) : '?') +
          ' sim=' + (1 / game.tickSeconds()).toFixed(1) +
          ' worst=' + Math.round(s.worstShown || s.worst) + 'ms' +
+         ' rtt=' + (r.samples.length
+                    ? Math.round(r.min) + '/' + Math.round(r.med) + '/' + Math.round(r.worst)
+                    : '?') +
+         ' wait=' + (waits.length ? waits.map(w => Math.round(w)).join('/') : '?') + 'ms' +
          ' desyncs=' + net.desyncs;
 }
 /* THE BACKGROUND-TAB CLOCK.  A hidden tab gets no requestAnimationFrame
@@ -11606,9 +11645,48 @@ function netPump(){
   netSend(NETP.msgs.INPUT, netU32(net.step).concat([netLocalDir()]));
   net.sentInput = true;
 }
+/* THE rAF FIX (NETPLAN 2.5).  A PASS used to sit in pendDirs until the
+   next animation frame, and the reply left in that same frame: ~8 ms on
+   average, ~17 ms worst at 60 Hz -- double on a 30 Hz laptop -- added
+   to EVERY round trip.  Now a visible tab applies the pass the moment
+   it lands (netDeliver, the path netPump has proven for hidden tabs)
+   and the reply goes out when the sim's own clock is owed a tick, on a
+   timer, so rAF does rendering only.  The accumulator stays FRAME-FED
+   (net.acc: real time in, consumed sim time out -- the pacing and the
+   level-pause hold are unchanged); the timer merely CREDITS the real
+   time the frame clock has not banked yet when it decides whether the
+   send is due, and never writes acc, so nothing is counted twice.
+   netFrame keeps its own send check as the fallback: where setTimeout
+   does not exist (the test sandboxes) the frame still drives the wire
+   exactly as before. */
+function netSendWhenDue(){
+  if (net.phase !== 'live' || net.sentInput || netHidden()) return;
+  const credit = Math.max(0, netNow() - net.accAt) / 1000;
+  const wait = (game.tickSeconds() - net.acc - credit) * 1000;
+  /* due within a millisecond IS due: a timer for a hair less than
+     nothing is pointless in a browser (which clamps it anyway) and a
+     floating-point trap under a virtual clock, where t + 1e-13 is t */
+  if (wait <= 1){
+    netSend(NETP.msgs.INPUT, netU32(net.step).concat([netLocalDir()]));
+    net.sentInput = true;
+    return;
+  }
+  if (typeof setTimeout !== 'undefined' && net.sendTimer === null)
+    net.sendTimer = setTimeout(() => { net.sendTimer = null; netSendWhenDue(); },
+                               Math.min(wait, 5000));
+}
+function netDeliver(){
+  if (net.phase !== 'live') return;
+  while (net.pendDirs){
+    const d = net.pendDirs; net.pendDirs = null;
+    netApply(d);
+  }
+  netSendWhenDue();
+}
 function netFrame(dt){
   if (net.phase !== 'live') return;
   net.acc += dt;
+  net.accAt = netNow();
   if (net.acc > 0.25) net.acc = 0.25;
   while (net.pendDirs){
     const d = net.pendDirs; net.pendDirs = null;
@@ -11617,6 +11695,17 @@ function netFrame(dt){
   if (!net.sentInput && net.acc >= game.tickSeconds()){
     netSend(NETP.msgs.INPUT, netU32(net.step).concat([netLocalDir()]));
     net.sentInput = true;
+  }
+  /* NETPLAN 2.1 -- one PING a second, from the FRAME loop only: a hidden
+     tab is not a representative sample, so netPump never pings.  The
+     outstanding-tag list is capped so a dead link cannot grow it. */
+  const nowMs = net.accAt;
+  if (nowMs - net.pingAt >= 1000){
+    net.pingAt = nowMs;
+    const tag = (++net.pingTag) >>> 0;
+    net.pings.push({tag, at: nowMs});
+    if (net.pings.length > 8) net.pings.shift();
+    netSend(NETP.msgs.PING, netU32(tag));
   }
 }
 /* the local FIRE key's NAME, for the join hint -- the one thing the

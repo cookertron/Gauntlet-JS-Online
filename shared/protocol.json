@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "port": 33792,
   "maxSeats": 4,
   "defaultSeats": 2,
@@ -26,7 +26,9 @@
     "SEATS": 10,
     "ERROR": 11,
     "CHARS": 12,
-    "NAMES": 13
+    "NAMES": 13,
+    "PING": 14,
+    "PONG": 15
   },
   "errors": {
     "FULL": 1,

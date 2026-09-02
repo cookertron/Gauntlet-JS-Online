@@ -54,7 +54,7 @@
    tools/protocheck.py parses this block by the `= value;` on each line;
    change shared/protocol.json first, then here, and the checker holds
    the two together. */
-constexpr uint8_t  PROTO_VERSION       = 1;
+constexpr uint8_t  PROTO_VERSION       = 2;
 constexpr uint16_t DEFAULT_PORT        = 33792;
 constexpr int      MAX_SEATS           = 4;
 constexpr int      DEFAULT_SEATS       = 2;
@@ -79,6 +79,8 @@ constexpr uint8_t  MSG_SEATS           = 10;
 constexpr uint8_t  MSG_ERROR           = 11;
 constexpr uint8_t  MSG_CHARS           = 12;
 constexpr uint8_t  MSG_NAMES           = 13;
+constexpr uint8_t  MSG_PING            = 14;
+constexpr uint8_t  MSG_PONG            = 15;
 constexpr uint8_t  ERR_FULL            = 1;
 constexpr uint8_t  ERR_VERSION         = 2;
 constexpr uint8_t  ERR_PROTOCOL        = 3;
@@ -510,6 +512,7 @@ struct Conn {
   bool ready = false;             // sim booted/restored; counted by the loop
   bool hasInput = false;
   uint32_t inPass = 0; uint8_t inDir = 0;
+  uint64_t inAtMs = 0;            // when this pass's byte landed (NETPLAN 2.2)
   bool hasFp = false;
   uint32_t fpPass = 0, fpVal = 0;
   uint64_t bornMs = 0;            // for the handshake timeout
@@ -731,6 +734,19 @@ struct Relay {
       putU32(m, pass);
       m.push_back(uint8_t(seatsN));
       for (int i=0;i<seatsN;i++) m.push_back(dirs[i]);
+      /* NETPLAN 2.2 -- one trailing byte per seat: how long this pass's
+         byte WAITED here for the rest, in 4 ms units (0 for an empty
+         seat, 255 = a second or more).  It is what separates "the wire
+         is slow" from "one seat is slow" from "the phases are
+         misaligned".  Trailing bytes are safe for a client that reads
+         `count` directions and ignores the rest. */
+      const uint64_t emitMs = now();
+      for (int i=0;i<seatsN;i++){
+        int idx = seat[i];
+        uint64_t w = 0;
+        if (idx >= 0 && conns[idx]->hasInput) w = (emitMs - conns[idx]->inAtMs) / 4;
+        m.push_back(uint8_t(w > 255 ? 255 : w));
+      }
       for (auto& c : conns)
         if (c->open && c->state == Conn::UP && c->seat >= 0 && c->ready)
           queueMsg(*c, m);
@@ -862,8 +878,20 @@ struct Relay {
         if (n < 5 || c.seat < 0){ drop(c, "bad INPUT"); return; }
         uint32_t ip = getU32(p);
         if (ip != pass) break;        // stale (a pass it already got) -- ignore
-        c.hasInput = true; c.inPass = ip; c.inDir = p[4];
+        c.hasInput = true; c.inPass = ip; c.inDir = p[4]; c.inAtMs = now();
         tryAdvance();
+        break;
+      }
+      case MSG_PING: {
+        /* NETPLAN 2.1 -- a clean RTT probe.  Answered HERE, before any
+           other work and without a seat: a PONG must never wait behind
+           the advance gate or the sync flow, or it measures the game
+           instead of the link.  passStartMs is untouched. */
+        if (n < 4){ drop(c, "bad PING"); return; }
+        std::vector<uint8_t> m; m.push_back(MSG_PONG);
+        m.insert(m.end(), p, p + 4);              // the tag, verbatim
+        queueMsg(c, m);
+        flushTx(c);
         break;
       }
       case MSG_FP: {

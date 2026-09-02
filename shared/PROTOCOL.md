@@ -43,7 +43,7 @@ One message = `u8 type` then the fields.  C→S / S→C marks direction.
 | 1    | HELLO   | C→S | `u8 protoVersion, u8 char` (0..3, the character pick), then optionally `nameLen × u8` name (space-padded) |
 | 2    | WELCOME | S→C | `u8 seat, u8 seats, u32 buildSeed, u8 mode, u32 pass` |
 | 3    | INPUT   | C→S | `u32 pass, u8 dir`                                 |
-| 4    | PASS    | S→C | `u32 pass, u8 seats, seats × u8 dir`               |
+| 4    | PASS    | S→C | `u32 pass, u8 seats, seats × u8 dir, seats × u8 wait` (wait = how long that seat's byte waited at the relay for the rest, in 4 ms units, 0 for an empty seat, 255 = a second or more) |
 | 5    | FP      | C→S | `u32 pass, u32 fingerprint`                        |
 | 6    | DESYNC  | S→C | `u32 pass`                                         |
 | 7    | SNAPREQ | S→C | *(empty)*                                          |
@@ -53,6 +53,8 @@ One message = `u8 type` then the fields.  C→S / S→C marks direction.
 | 11   | ERROR   | S→C | `u8 code` — then the server closes                 |
 | 12   | CHARS   | S→C | `maxSeats × u8` character per seat, `0xFF` unset   |
 | 13   | NAMES   | S→C | `maxSeats × nameLen × u8` name per seat, space-padded |
+| 14   | PING    | C→S | `u32 tag` — answered at once, seat or no seat, ahead of every other duty |
+| 15   | PONG    | S→C | `u32 tag` echoed verbatim                          |
 
 `dir` is the engine's own per-pass direction byte
 (up/down/left/right/fire/potion — the unit the sim always read).
@@ -126,3 +128,9 @@ One message = `u8 type` then the fields.  C→S / S→C marks direction.
 `HELLO.protoVersion` must equal `version` or the server answers
 `ERROR VERSION`.  The snapshot JSON carries its own `v` (the sim's
 format); the relay does not look inside it.
+
+Version 2 (2026-09-02, the measurement phase of NETPLAN.md): PASS grew
+its trailing per-seat wait bytes and PING/PONG were added.  Neither
+changes the lockstep; both exist so that a slow session can be
+measured — the far seat's clean round trip, and how long each seat's
+byte waited at the relay — before any transport redesign is chosen.
