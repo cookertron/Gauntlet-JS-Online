@@ -8288,14 +8288,26 @@ if (process.argv[2] === '--table') {
     }
     check('at the sim rate a hidden tab answers every pass AT ONCE, no timer',
           [timers.length, rd32(lastOf(M.INPUT), 1)], [0, S.step]);
+    /* THE SHEFFIELD REGRESSION: a paced session with ordinary jitter --
+       every tenth echo a hair early, so some one-second windows hold a
+       14th -- must never trip the guard.  The first cut's budget of
+       exactly the sim rate did, and its own one-second hold made the
+       backlog burst that tripped it again: rate 7.8 of 12.5 with the
+       far seat waiting a second at a time for a 6 ms link. */
+    for (let i = 0; i < 40; i++){
+      fakeT += (i % 10 === 9) ? 5 : tickMs;
+      H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
+    }
+    check('forty jittered at-rate echoes never trip the free-run guard',
+          [timers.length, S.pumpHeld, rd32(lastOf(M.INPUT), 1)], [0, 0, S.step]);
     let n = 0;
     while (timers.length === 0 && n < 100){
       H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
       n++;
     }
     checkTrue('wire-speed echoes trip the free-run guard inside ONE window',
-              timers.length === 1 && n <= Math.ceil(1000 / tickMs) + 1 &&
-              S.sentInput === false,
+              timers.length === 1 && n <= 3 * Math.ceil(1000 / tickMs) + 1 &&
+              S.sentInput === false && S.pumpHeld === 1,
               'n ' + n + ' timers ' + timers.length);
     fakeT += 1000;
     timers[0].fn();

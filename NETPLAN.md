@@ -1,10 +1,11 @@
 # Gauntlet online — netcode plan
 
-**Status:** Phase 1 DELIVERED (2026-09-02 — Tasks A–E and the lag
-gate; the record and the measured numbers are in `CLAUDE.md` and the
-delivering commit).  The far-seat RTT itself still needs a real
-session's `net.info()` from both ends before §3 can be read.  No
-transport redesign is authorised yet.
+**Status:** Phase 1 DELIVERED and MEASURED (2026-09-02 — Tasks A–E,
+the lag gate, and a real Sheffield session: far-seat `rtt=23/28/95`,
+the §3.1 regime; the same paste's `wait=76/1020ms` exposed a HOST-side
+stall in the hidden-tab pump's guard, fixed — see `CLAUDE.md`).  The
+§3 reading is §3.1.  No transport redesign is authorised yet; §3.1
+awaits a decision.
 **Audience:** Claude Code, starting a session in this repo.
 **Read before touching anything:** `CLAUDE.md`, `shared/PROTOCOL.md`.
 

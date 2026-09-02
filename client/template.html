@@ -11322,6 +11322,7 @@ const net = {
          wait: [], waitShown: []},          // NETPLAN 2.2: per-seat relay wait
   pumpTimer: null,         // the hidden-tab pacer -- see netPump()
   pumpT0: 0, pumpN: 0,     // its trailing-window budget (the free-run guard)
+  pumpHeld: 0,             // times that guard deferred an answer (held= in info)
   forceAvailable: false,   // tests: offer the SERVER row with no location
 };
 function netNow(){
@@ -11361,7 +11362,7 @@ function netStart(url, cfgLocal, tpFactory){
   net.everLive = false; net.welcomed = false; net.chars = null;
   net.step = 0; net.sentInput = false; net.pendDirs = null;
   net.acc = 0; net.accAt = netNow(); net.desyncs = 0; net.autoFire = false;
-  net.names = null; net.pumpT0 = 0; net.pumpN = 0;
+  net.names = null; net.pumpT0 = 0; net.pumpN = 0; net.pumpHeld = 0;
   net.stat = {lastAt: 0, worst: 0, worstShown: 0, n: 0, t0: 0, rate: 0,
               wait: [], waitShown: []};
   net.pingTag = 0; net.pingAt = 0; net.pings = [];
@@ -11578,6 +11579,7 @@ function netInfo(){
                     ? Math.round(r.min) + '/' + Math.round(r.med) + '/' + Math.round(r.worst)
                     : '?') +
          ' wait=' + (waits.length ? waits.map(w => Math.round(w)).join('/') : '?') + 'ms' +
+         ' hidden=' + (netHidden() ? 1 : 0) + ' held=' + net.pumpHeld +
          ' desyncs=' + net.desyncs;
 }
 /* THE BACKGROUND-TAB CLOCK.  A hidden tab gets no requestAnimationFrame
@@ -11634,11 +11636,24 @@ function netPump(){
   if (nowMs - net.pumpT0 >= 1000 || nowMs < net.pumpT0){
     net.pumpT0 = nowMs; net.pumpN = 0;
   }
-  if (net.pumpN >= Math.max(1, Math.round(1 / game.tickSeconds())) &&
+  /* THE BUDGET IS THREE TIMES THE SIM RATE, not the sim rate.  The first
+     cut allowed round(1/tick) = 13 answers a window against a 12.5/s
+     pace -- no headroom at all -- and the Sheffield session found it:
+     the HOST'S browser, occluded, answered on this path; any jitter
+     that put a 14th echo inside a window tripped the clamped timer, the
+     one-second hold piled up a backlog whose burst tripped it again,
+     and the relay sat holding Sheffield's byte for the host's (their
+     net.info: rate=7.8 of 12.5, worst=1190ms, wait=76/1020ms -- the
+     far seat waiting a second at a time for a 6 ms link).  Free-run is
+     hundreds to thousands a second; three times the sim rate still
+     catches it inside one window and never fires on a paced session. */
+  if (net.pumpN >= 3 * Math.max(1, Math.round(1 / game.tickSeconds())) &&
       typeof setTimeout !== 'undefined'){
-    if (net.pumpTimer === null)
+    if (net.pumpTimer === null){
+      net.pumpHeld++;
       net.pumpTimer = setTimeout(() => { net.pumpTimer = null; netPump(); },
                                  Math.max(0, net.pumpT0 + 1000 - nowMs));
+    }
     return;
   }
   net.pumpN++;

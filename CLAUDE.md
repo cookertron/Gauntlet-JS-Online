@@ -258,9 +258,27 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      TRANSITIONS (so pipelining's bug 1 struck at the first level
      change, not at game start); the online smooth cap is FIVE frames,
      so play's period under load is ~100 ms, not the nominal 80 — the
-     gate compares wall time to CONSUMED simT.  The far-seat RTT itself
-     needs a real session: paste net.info() from both ends.  Per the
-     plan, §3 is NOT pre-empted: no transport redesign is authorised.
+     gate compares wall time to CONSUMED simT.  THE REAL SESSION
+     (2026-09-02, PC host via the ISP hairpin + Sheffield): far seat
+     `rtt=23/28/95` — a 28 ms median round trip, the plan's §3.1
+     regime (r < 60: play needs nothing more; only the 20 ms lobby
+     modes are worth a targeted fix) — but `rate=7.8 sim=12.5
+     worst=1190ms wait=76/1020ms`: the session stalled a second at a
+     time and the WAIT bytes named the culprit — seat 1 (Sheffield) sat
+     at the relay over a second waiting for seat 0, the HOST, whose own
+     link reads `rtt=4/6/35`.  A host-side stall, not the wire: the
+     hidden-tab pump's free-run guard allowed round(1/tick) = 13
+     answers per window against a 12.5/s pace — no headroom — so an
+     occluded host browser tripped it on ordinary jitter, and the
+     guard's own one-second hold built the backlog burst that re-
+     tripped it (a self-sustaining ~1 s stall every couple of seconds
+     = the 62% rate).  FIXED: the budget is three times the sim rate
+     (free-run is hundreds to thousands a second, still caught inside
+     one window); `hidden=` and `held=` (guard deferrals) ride
+     net.info() so the next paste says so itself; a forty-echo
+     jittered at-rate regression pins it.  Per the plan, §3 is NOT
+     pre-empted: no transport redesign is authorised; the reading is
+     §3.1, awaiting Anthony's decision.
 4. **NEXT SESSION — FOUR PLAYERS (agreed with Anthony 2026-09-01).**
    Grow the sim to four player blocks and redesign the in-game HUD to
    fit four panels ("remove or shrink the player information", his
