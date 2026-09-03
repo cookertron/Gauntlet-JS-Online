@@ -316,9 +316,23 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      rate budget over-ran a session nobody visible was pacing — see the
      background-tab clock's THIRD CUT above, which paces on the LEAD;
      the forty-echo regression survives, re-modelled with zero-mean
-     jitter.)  Per the plan, §3 is NOT
-     pre-empted: no transport redesign is authorised; the reading is
-     §3.1, awaiting Anthony's decision.
+     jitter.)  THE JAPAN SESSION (2026-09-03, Anthony + Eve, Eve
+     over wifi in Japan; for the record): far seat `rate=3.4 sim=12.5
+     worst=692ms rtt=270/273/9122 wait=/280ms held=0 tick=1` — a 273 ms
+     median round trip, so pure stop-and-wait lockstep ran ONE pass per
+     round trip: 3.4 passes a second, 27% speed, for BOTH players (the
+     host's own line, `rate=10.0 held=60`, was captured at a different
+     step and says only that his tab was hidden for a while); the 9.1 s
+     worst RTT is a wifi blackout that came within a second of the
+     relay's input timeout.  This is the plan's §3.3 regime (r > 150
+     ms): §3.2's deadline-advance would cost the far seat three or four
+     steps of overshoot (the pipelining verdict again), and only
+     rollback plays at full rate over that link — Task D priced it
+     affordable, the audio choice in §3.3 is still open, and it is a
+     seam rewrite to scope on its own.  Recorded, not acted on.  Per
+     the plan, §3 is NOT pre-empted: no transport redesign is
+     authorised; the readings are §3.1 (Sheffield) and §3.3 (Japan),
+     awaiting Anthony's decision.
 4. **FOUR PLAYERS — BUILT 2026-09-02** (agreed 2026-09-01; headless
    1330 → 1399, relaytest 40 → 50 with a four-seat run, e2e 20 → 30
    with a fourth and fifth client and a sixth refused; the relay
