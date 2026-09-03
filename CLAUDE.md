@@ -488,14 +488,17 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
    credits should definitely stay as is").  The suite holds every line
    to its font's charset and width and checks the page says what it
    must; `build/ui/keys.png` and `credits.png` are the shots.  ONLINE
-   UNDER THE WORDMARK (2026-09-04, Anthony's mock-up): every drawn logo
-   — credits, keys, the options panel — carries ONLINE beneath it in
-   the micro font, bright green, centred on the wordmark's MEASURED ink
-   (`FE_LOGO_INK`, off FE_LOGO_SCR: x 72..171, bottom row 22), via
-   `drawLogoOnline`; the credits page's text moves one row down
-   (`printPage`'s `gapAfter`, its last row being blank) to make the
-   row.  The title screen has no wordmark; the attract HUD's captured
-   one keeps PRESS FIRE under it.
+   IN THE WORDMARK (2026-09-04, Anthony's mock-up): every drawn logo —
+   credits, keys, the options panel — carries ONLINE in the micro font,
+   bright green, INSIDE the logo's three rows: the bitmap (dumped from
+   FE_LOGO_SCR) has its letter bodies ending at row 15 and only three
+   stems below, leaving x 114..157 clear across rows 17..21, so ONLINE
+   sits at x 121..149, rows 17..21 (`FE_LOGO_ONLINE`, `drawLogoOnline`);
+   the suite checks the wordmark is blank under it, inked above it and
+   beside it.  A first cut put it under the logo and shifted the
+   credits text a row — wrong: it is part of the logo, and the credits
+   page is untouched again.  The title screen has no wordmark; the
+   attract HUD's captured one keeps PRESS FIRE under it.
 6. **FULL SCREEN — BUILT 2026-09-03.**  The PICTURE only (Anthony:
    "render exactly how the port intends, no extension of the playing
    field" — the 256×160 window is a rule: actors freeze outside it,

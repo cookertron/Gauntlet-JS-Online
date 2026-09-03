@@ -9981,13 +9981,32 @@ if (process.argv[2] === '--table') {
 
 
 /* ====================================================================
-   ONLINE UNDER THE WORDMARK (this fork, 2026-09-04): every drawn Gauntlet
-   logo carries ONLINE beneath it in the micro font.
+   ONLINE IN THE WORDMARK (this fork, 2026-09-04): every drawn Gauntlet
+   logo carries ONLINE in the micro font, inside the logo's own rows --
+   under the letter bodies, above the stems' ends, where the bitmap is
+   clear.
    ==================================================================== */
 {
   const F = G.frontend;
   check('the wordmark\'s ink extent is measured off the page: x 72..171, bottom row 22',
         [F.FE_LOGO_INK.x0, F.FE_LOGO_INK.x1, F.FE_LOGO_INK.y1], [72, 171, 22]);
+  /* the placement against the asset itself: the logo's bitmap is BLANK on
+     every pixel ONLINE covers, and on the row above and below it */
+  {
+    const s = new F.SpecScreen();
+    s.printPage(Buffer.from(F.FE.pages.credits, 'base64'), F.FE_LOGO_ROWS);
+    const ink = (x, y) => { const cr = y >> 3, col = x >> 3;
+      return !!(s.m[((cr >> 3) << 11) | ((y & 7) << 8) | ((cr & 7) << 5) | col] & (0x80 >> (x & 7))); };
+    const O = F.FE_LOGO_ONLINE;
+    let clash = 0, bodiesAbove = 0, stemsBeside = 0;
+    for (let y = O.y - 1; y <= O.y + 5; y++) for (let x = O.x; x < O.x + 29; x++) if (ink(x, y)) clash++;
+    for (let x = O.x; x < O.x + 29; x++) if (ink(x, 15)) bodiesAbove++;
+    for (let y = O.y; y < O.y + 5; y++) if (ink(O.x - 10, y) || ink(O.x + 29 + 10, y)) stemsBeside++;
+    check('ONLINE sits inside the logo rows on pixels the wordmark leaves blank, with a blank row above and below',
+          [O.y >= 16 && O.y + 5 <= 22, clash], [true, 0]);
+    checkTrue('...UNDER the letter bodies (ink on row 15 above it) and BETWEEN the stems (ink to both sides)',
+              bodiesAbove > 0 && stemsBeside > 0, 'above ' + bodiesAbove + ' beside ' + stemsBeside);
+  }
   const rec = () => { const calls = []; return { calls,
     cap: { set fillStyle(v){ this._f = v; }, get fillStyle(){ return this._f; },
            fillRect(x, y, w, h){ calls.push([x, y, w, h, this._f]); } } }; };
@@ -9995,9 +10014,9 @@ if (process.argv[2] === '--table') {
     const r = rec(); F.drawLogoOnline(r.cap, 0, 0);
     const px = r.calls.filter(c => c[4] === '#00ff00');
     const xs = px.map(c => c[0]), ys = px.map(c => c[1]);
-    checkTrue('ONLINE: bright green micro pixels, 29 px wide under the RIGHT end of the wordmark (x 143..171), rows 25..29',
-              px.length > 40 && Math.min(...xs) === 143 && Math.max(...xs) === 171 &&
-              Math.min(...ys) === 25 && Math.max(...ys) === 29,
+    checkTrue('ONLINE: bright green micro pixels, 29 px wide at x 121..149, rows 17..21',
+              px.length > 40 && Math.min(...xs) === 121 && Math.max(...xs) === 149 &&
+              Math.min(...ys) === 17 && Math.max(...ys) === 21,
               'x ' + Math.min(...xs) + '..' + Math.max(...xs) + ' y ' + Math.min(...ys) + '..' + Math.max(...ys));
   }
   const toPhase = name => {
@@ -10011,36 +10030,31 @@ if (process.argv[2] === '--table') {
     for (let i = 0; i < 60; i++) fe.frame(kb, ev, n++);
     return fe;
   };
-  /* the credits page: the logo, ONLINE in the row it vacated, the text one row down */
+  /* the credits page: exactly as it was, ONLINE drawn over its logo */
   {
     const fe = toPhase('credits');
     const scr = rec(); F.renderScreen(scr.cap, fe.scr, fe.frameCtr);
     const lit = y0 => scr.calls.some(c => c[1] >= y0 && c[1] < y0 + 8 && c[4] !== '#000000');
-    check('credits: the logo rows are lit, screen row 3 is now BLANK, row 4 carries the first text line, row 23 the last',
-          [lit(0), lit(24), lit(32), lit(184)], [true, false, true, true]);
+    check('credits: the page is untouched -- logo rows lit, the text from row 3, the last row blank',
+          [lit(0), lit(24), lit(176), lit(184)], [true, true, true, false]);
     const ov = rec(); fe.pageRender(ov.cap);
-    checkTrue('...and ONLINE is drawn over that blank row', ov.calls.some(c => c[4] === '#00ff00' && c[1] >= 25 && c[1] <= 29));
+    checkTrue('...and ONLINE is drawn inside its logo rows', ov.calls.some(c => c[4] === '#00ff00' && c[1] >= 17 && c[1] <= 21));
   }
   /* the keys page */
   {
     const fe = toPhase('keys');
     const ov = rec(); fe.pageRender(ov.cap);
-    checkTrue('keys page: ONLINE under the logo, above the OPTIONS heading',
-              ov.calls.some(c => c[4] === '#00ff00' && c[1] >= 25 && c[1] <= 29) &&
-              !ov.calls.some(c => c[4] === '#00ff00' && c[1] >= 32));
+    checkTrue('keys page: ONLINE inside the logo rows, nothing green below them',
+              ov.calls.some(c => c[4] === '#00ff00' && c[1] >= 17 && c[1] <= 21) &&
+              !ov.calls.some(c => c[4] === '#00ff00' && c[1] >= 24));
   }
-  /* the options panel: the logo sits at row 1, ONLINE in the blank row 4 */
+  /* the options panel: the logo sits at row 1 (y 8), so ONLINE is at rows 25..29 */
   {
     const fe = toPhase('options');
     const ov = rec(); fe.optRender(ov.cap);
-    /* the logo itself is green ink, so count only the band under it:
-       ONLINE fills rows 33..37 and the rest of the blank row (32, 38, 39)
-       and the gap above the first option row stay dark */
-    const green = ov.calls.filter(c => c[4] === '#00ff00' && c[1] >= 32 && c[1] < 48);
-    checkTrue('options: ONLINE in bright green at rows 33..37, under the logo and above the first row',
-              green.filter(c => c[1] >= 33 && c[1] <= 37).length > 40 &&
-              !green.some(c => c[1] === 32 || (c[1] >= 38 && c[1] < 48)),
-              'green ' + green.length + ' y ' + (green.length ? Math.min(...green.map(c => c[1])) + '..' + Math.max(...green.map(c => c[1])) : '-'));
+    const band = ov.calls.filter(c => c[4] === '#00ff00' && c[0] >= 121 && c[0] <= 149 && c[1] >= 25 && c[1] <= 29);
+    checkTrue('options: ONLINE in bright green at x 121..149, rows 25..29 -- inside the logo, above the first row',
+              band.length > 40, 'green in band ' + band.length);
   }
 }
 
