@@ -337,8 +337,11 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      affordable, the audio choice in §3.3 is still open, and it is a
      seam rewrite to scope on its own.  Recorded, not acted on.  Per
      the plan, §3 is NOT pre-empted: no transport redesign is
-     authorised; the readings are §3.1 (Sheffield) and §3.3 (Japan),
-     awaiting Anthony's decision.
+     authorised; the readings are §3.1 (Sheffield) and §3.3 (Japan).
+     DECIDED 2026-09-03 (Anthony): §3.3 rollback — the only full-rate
+     answer to a Japan-class link — is PARKED: ON HOLD, SUBJECT TO
+     REQUIREMENT, recorded in NETPLAN.md's status.  §3.1's lobby fix is
+     likewise unstarted.
 4. **FOUR PLAYERS — BUILT 2026-09-02** (agreed 2026-09-01; headless
    1330 → 1399, relaytest 40 → 50 with a four-seat run, e2e 20 → 30
    with a fourth and fifth client and a sixth refused; the relay

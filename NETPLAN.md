@@ -4,8 +4,14 @@
 the lag gate, and a real Sheffield session: far-seat `rtt=23/28/95`,
 the §3.1 regime; the same paste's `wait=76/1020ms` exposed a HOST-side
 stall in the hidden-tab pump's guard, fixed — see `CLAUDE.md`).  The
-§3 reading is §3.1.  No transport redesign is authorised yet; §3.1
-awaits a decision.
+§3 readings: **§3.1** from Sheffield (rtt 28 ms) and **§3.3** from
+Japan (2026-09-03: far-seat `rtt=270/273/9122`, `rate=3.4` of 12.5 —
+stop-and-wait lockstep at one pass per round trip, 27% speed for the
+whole table).  **DECISION (Anthony, 2026-09-03): §3.3 rollback is
+PARKED — ON HOLD, SUBJECT TO REQUIREMENT.**  It is the only design
+that plays a Japan-class link at full rate, Task D priced it
+affordable, and its audio question (§3.3) is still open; nothing in §3
+starts without a new decision.  No transport redesign is authorised.
 **Audience:** Claude Code, starting a session in this repo.
 **Read before touching anything:** `CLAUDE.md`, `shared/PROTOCOL.md`.
 
