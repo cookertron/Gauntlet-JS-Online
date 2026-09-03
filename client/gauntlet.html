@@ -3032,7 +3032,8 @@ const FE_LOGO_SCR = FE_PAGES ? (() => {
    screen -- ONLINE follows in the micro font, bright green, centred on
    the wordmark's own ink.  The ink extent is MEASURED off FE_LOGO_SCR at
    load, not typed in: x 72..171 of the 256, bottom row 22 of the three
-   logo rows, so ONLINE sits at rows 25..29 relative to the logo's top --
+   logo rows, so ONLINE sits at rows 25..29 relative to the logo's top,
+   flush with the wordmark's right edge --
    the row under it, which the credits page vacates with printPage's
    gapAfter and the keys page and the options panel leave blank anyway.
    The attract screen's captured HUD wordmark keeps PRESS FIRE under it
@@ -3055,7 +3056,10 @@ const FE_LOGO_INK = FE_LOGO_SCR ? (() => {
 })() : null;
 function drawLogoOnline(ctx, dx, dy){
   if (!FE_LOGO_INK) return;
-  const cx = dx + ((FE_LOGO_INK.x0 + FE_LOGO_INK.x1 + 1) >> 1);
+  /* under the wordmark's RIGHT end, its last column on the logo's last
+     ink column (Anthony's mock-up): the six letters are 29 px, so the
+     tag's centre sits 14 px in from that edge */
+  const cx = dx + FE_LOGO_INK.x1 - 14;
   drawNameTag(ctx, 'ONLINE', cx, dy + FE_LOGO_INK.y1 + 3, PAL_BRT[4], 192);
 }
 function drawLogo(ctx, dx, dy){

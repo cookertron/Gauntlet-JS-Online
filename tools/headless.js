@@ -9995,8 +9995,8 @@ if (process.argv[2] === '--table') {
     const r = rec(); F.drawLogoOnline(r.cap, 0, 0);
     const px = r.calls.filter(c => c[4] === '#00ff00');
     const xs = px.map(c => c[0]), ys = px.map(c => c[1]);
-    checkTrue('ONLINE: bright green micro pixels, 29 px wide centred under the wordmark, rows 25..29',
-              px.length > 40 && Math.min(...xs) === 108 && Math.max(...xs) === 136 &&
+    checkTrue('ONLINE: bright green micro pixels, 29 px wide under the RIGHT end of the wordmark (x 143..171), rows 25..29',
+              px.length > 40 && Math.min(...xs) === 143 && Math.max(...xs) === 171 &&
               Math.min(...ys) === 25 && Math.max(...ys) === 29,
               'x ' + Math.min(...xs) + '..' + Math.max(...xs) + ' y ' + Math.min(...ys) + '..' + Math.max(...ys));
   }
