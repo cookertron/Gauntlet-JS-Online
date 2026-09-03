@@ -170,8 +170,26 @@ save(outdir, 'hud.png', cap => G.render(cap, g));
   save(outdir, 'rip.png', cap => G.render(cap, d));
 }
 
-/* ---------- the options screen, boot-time, replacing the old escape menu */
+/* ---------- the front end's pages: credits, then the keys page ---------- */
 const F = G.frontend;
+function toPhase(name){
+  const fe = new F.FrontEnd(), kb = new F.Keyboard(), ev = [];
+  let n = 0;
+  while (n < 6000 && fe.phase !== name){
+    if (n % 16 < 6) kb.press('SPACE'); else kb.releaseAll();
+    fe.frame(kb, ev, n); n++;
+  }
+  kb.releaseAll();
+  for (let i = 0; i < 40; i++) fe.frame(kb, ev, n++);   // the page rolls fully in
+  return fe;
+}
+for (const name of ['credits', 'keys']){
+  const fe = toPhase(name);
+  save(outdir, name + '.png', cap => { F.renderScreen(cap, fe.scr, fe.frameCtr);
+                                       if (fe.pageRender) fe.pageRender(cap); });
+}
+
+/* ---------- the options screen, boot-time, replacing the old escape menu */
 function toOptions(){
   const fe = new F.FrontEnd(), kb = new F.Keyboard(), ev = [];
   let n = 0;

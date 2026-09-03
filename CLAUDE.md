@@ -475,6 +475,19 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      it is the rebind capture's reserved key (skipped) — pinned (ESC
      has no KEYMAP entry either, pinned for the record).  `build/ui/chat.png`
      shows three bubbles, one stacked under a name tag.
+7. **THE KEYS PAGE — REWRITTEN 2026-09-03** (Anthony: "tidy it up and
+   add the relevant details — arrows, ENTER, full screen, chat, default
+   keys, controller buttons").  $C2D3's second splash kept the
+   original's text (cursor keys + SPACE for a menu this fork lacks, a
+   PAUSE key it never had, the retired high-score entry).  Its logo
+   rows still print from the page data; the body is `KEYS_PAGE` data
+   drawn over the screen by `FrontEnd.pageRender` — headings in the HUD
+   font (uiText, bright yellow), the bulk in the MICRO font (drawMicro,
+   up to 51 characters a line), the footer white — rolling in on the
+   page's own row clock.  The credits page is untouched (Anthony: "the
+   credits should definitely stay as is").  The suite holds every line
+   to its font's charset and width and checks the page says what it
+   must; `build/ui/keys.png` and `credits.png` are the shots.
 6. **FULL SCREEN — BUILT 2026-09-03.**  The PICTURE only (Anthony:
    "render exactly how the port intends, no extension of the playing
    field" — the 256×160 window is a rule: actors freeze outside it,

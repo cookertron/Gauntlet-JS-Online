@@ -9929,5 +9929,55 @@ if (process.argv[2] === '--table') {
   G.settings.reset();
 }
 
+
+/* ====================================================================
+   THE KEYS PAGE (this fork, 2026-09-03): the second splash, rewritten
+   as data over the screen -- headings in the HUD font, the bulk in the
+   micro font -- in place of the original's stale text.
+   ==================================================================== */
+{
+  const F = G.frontend;
+  const P = F.KEYS_PAGE;
+  const OK_MICRO = /^[A-Z0-9 .,?!'\-]+$/, OK_HUD = /^[A-Z0-9 ]+$/;
+  checkTrue('every micro line is drawable (the tag font\'s charset) and fits 256 px',
+            P.filter(l => l[0] === 't').every(l => OK_MICRO.test(l[2]) && l[2].length * 5 - 1 <= 256),
+            P.filter(l => l[0] === 't' && !(OK_MICRO.test(l[2]) && l[2].length * 5 - 1 <= 256)).map(l => l[2]).join(' | '));
+  checkTrue('every heading and the footer are HUD-font text (A-Z 0-9 space only) on an 8 px row',
+            P.filter(l => l[0] !== 't').every(l => OK_HUD.test(l[2]) && l[2].length <= 32 && l[1] % 8 === 0));
+  checkTrue('no line overlaps the next, and nothing sits on the logo rows or below the footer',
+            P.every((l, i) => l[1] >= 24 && l[1] + (l[0] === 't' ? 5 : 8) <= 192 &&
+                              (i === 0 || P[i - 1][1] + (P[i - 1][0] === 't' ? 5 : 8) <= l[1])));
+  checkTrue('the page says what it must: arrows, ENTER, the default keys, the gamepad, full screen, chat, SPACE to go on',
+            ['UP AND DOWN', 'ENTER', '1 UP', 'Z FIRE', 'CAPS POTION', 'D-PAD', 'FULL SCREEN', 'CHAT', 'PRESS SPACE']
+              .every(s => P.some(l => l[2].indexOf(s) >= 0)));
+  /* through the front end itself: credits, SPACE, the keys page */
+  const fe = new F.FrontEnd(), kb = new F.Keyboard(), ev = [];
+  let n = 0;
+  while (n < 6000 && fe.phase !== 'keys'){
+    if (n % 16 < 6) kb.press('SPACE'); else kb.releaseAll();
+    fe.frame(kb, ev, n); n++;
+  }
+  kb.releaseAll();
+  check('the front end reaches the keys page after the credits', fe.phase, 'keys');
+  const paint = () => { recording = true; drawCalls.length = 0; fe.pageRender(ctxStub);
+                        recording = false; return drawCalls.slice(); };
+  const early = paint().length;
+  for (let i = 0; i < 40; i++) fe.frame(kb, ev, n++);
+  const full = paint();
+  checkTrue('the body rolls in on the page\'s own row clock: nothing at the top of the page, all of it once rolled in',
+            early === 0 && full.length > 300, 'early ' + early + ' full ' + full.length);
+  checkTrue('the footer PRESS SPACE TO CONTINUE sits on row 22 in the HUD font, a blank row under it',
+            full.some(c => c[2] >= 176 && c[2] < 184 && c[5] !== '#000000'));
+  checkTrue('the headings are bright yellow and the body bright white',
+            full.some(c => c[2] >= 32 && c[2] < 40 && c[5] === '#ffff00') &&
+            full.some(c => c[2] >= 44 && c[2] < 49 && c[5] === '#ffffff'));
+  recording = true; drawCalls.length = 0; F.renderScreen(ctxStub, fe.scr, fe.frameCtr); recording = false;
+  checkTrue('the old page text is gone: below the logo rows the screen itself is dark',
+            !drawCalls.some(c => c[2] >= 24 && c[5] !== '#000000'));
+  checkTrue('...and the logo rows are still the page\'s own', drawCalls.some(c => c[2] < 24 && c[5] !== '#000000'));
+  kb.press('SPACE'); fe.frame(kb, ev, n++); kb.releaseAll(); fe.frame(kb, ev, n++);
+  check('SPACE still moves on to the title', fe.phase, 'title');
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`);
 process.exit(failures ? 1 : 0);

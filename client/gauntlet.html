@@ -2971,6 +2971,39 @@ const FE_TITLE = FE ? b64(FE.title_screen) : new Uint8Array(SCR_BYTES);
 const FE_PAGES = FE ? {credits: b64(FE.pages.credits), keys: b64(FE.pages.keys),
                        controls: b64(FE.pages.controls)} : null;
 const PAGE_ROW_FRAMES = 9.381 / 24;     // MEASURED, $C2CC -> $C859
+/* THE KEYS PAGE (this fork, 2026-09-03) -- $C2D3's second splash.  It
+   used to print the original's own text: cursor keys and SPACE for a
+   menu this fork no longer has, a PAUSE key it never had, and the
+   three-letter high-score entry that is retired.  Anthony: "tidy it up
+   and add the relevant details -- arrows, ENTER, full screen, chat,
+   default keys, controller buttons".  The page's own first three rows
+   (the logo and the roundels, block A's tiles through printPage) stay;
+   the body is DATA, drawn over the screen by FrontEnd.pageRender:
+     'h'  a heading in the HUD font (uiText, bright yellow) on an 8 px row
+     't'  a line in the MICRO font (drawMicro, 4x5, bright white) --
+          up to 51 characters across 256 px, the tag font's charset
+     'f'  the footer, HUD font, white
+   and it rolls in row by row on the page's own clock (PAGE_ROW_FRAMES),
+   as the original's text did.  The suite holds every line to its font's
+   charset and width, so a line that would print noise cannot ship. */
+const KEYS_PAGE = [                     // body lines 7 px apart: 5 px of glyph, 2 of air
+  ['h', 32, 'OPTIONS'],
+  ['t', 44, 'UP AND DOWN CHOOSE A ROW, LEFT AND RIGHT CHANGE IT'],
+  ['t', 51, 'ENTER STARTS, OR OPENS A ROW - REBIND KEYS, NAME'],
+  ['t', 58, 'A GAMEPAD DOES THE SAME. ITS FIRE BUTTON IS ENTER'],
+  ['h', 72, 'KEYBOARD'],
+  ['t', 84, '1 UP  Q DOWN  S LEFT  D RIGHT  Z FIRE  CAPS POTION'],
+  ['t', 91, 'THE DEFAULTS. CHANGE THEM UNDER REBIND KEYS'],
+  ['h', 104, 'GAMEPAD'],
+  ['t', 116, 'STICK OR D-PAD MOVES. A, X OR Y FIRES'],
+  ['t', 123, 'B, OR A SHOULDER BUTTON, THROWS A POTION'],
+  ['h', 136, 'IN PLAY'],
+  ['t', 148, 'FIRE JOINS, UP TO FOUR, AND BRINGS THE DEAD BACK'],
+  ['t', 155, 'ENTER OPENS A LINE OF CHAT, ENTER AGAIN SENDS IT'],
+  ['t', 162, 'ALT AND ENTER FOR FULL SCREEN, OR DOUBLE-CLICK'],
+  ['f', 176, 'PRESS SPACE TO CONTINUE'],   // row 22, a blank row under it as the original left
+];
+const KEYS_HEAD_ATTR = 0x46, KEYS_FOOT_ATTR = 0x47;   // bright yellow, bright white
 
 /* THE GAUNTLET LOGO -- not separate art: it is the credits page's own
    first three rows.  Block A's font redefines the lowercase letters (and a
@@ -3417,7 +3450,10 @@ class FrontEnd {
         const page = FE_PAGES[this.phase === 'credits' ? 'credits'
                             : this.phase === 'keys' ? 'keys' : 'controls'];
         const rows = Math.floor(this.t / PAGE_ROW_FRAMES);
-        s.printPage(page, rows);
+        /* the KEYS page prints only its logo rows from the data; the
+           rest is KEYS_PAGE, drawn over the screen by pageRender on the
+           same row clock */
+        s.printPage(page, this.phase === 'keys' ? Math.min(rows, FE_LOGO_ROWS) : rows);
         if (rows < 24) break;
         /* $C859 LD A,($C905) / AND A / RET nz: ($C905) is 1 from $C4E8, so
            the CONTROLS page does NOT wait for SPACE -- $C4F2 CALL $C86C waits
@@ -3896,6 +3932,22 @@ class FrontEnd {
     for (const it of items)
       it.narrow = previews.some(pv => it.y >= pv.y && it.y < pv.y + PH);
     return {W, H, col, row, rowStart, pCol, PW, PH, items, previews};
+  }
+  /* the keys page's body -- see KEYS_PAGE.  Revealed by the page's own
+     row clock: a line shows once the 8 px row its bottom falls in has
+     rolled in, exactly as printPage revealed the original's rows. */
+  pageRender(ctx){
+    if (this.phase !== 'keys') return;
+    const rows = Math.floor(this.t / PAGE_ROW_FRAMES);
+    for (const [kind, y, text] of KEYS_PAGE){
+      const h = kind === 't' ? 5 : 8;
+      if (y + h > rows * 8) continue;
+      if (kind === 't')
+        drawMicro(ctx, text, (256 - (text.length * 5 - 1)) >> 1, y, PAL_BRT[7]);
+      else
+        uiText(ctx, text, (32 - text.length) >> 1, y >> 3,
+               kind === 'h' ? KEYS_HEAD_ATTR : KEYS_FOOT_ATTR);
+    }
   }
   optRender(ctx){
     const L = this.optLayout();
@@ -12191,6 +12243,7 @@ function frame(t){
          renderScreen just painted, exactly the way the panel below overlays
          the dungeon -- same trick, same two draw calls, different clock. */
       if (frontend.phase === 'options') frontend.optRender(ctx);
+      if (frontend.phase === 'keys') frontend.pageRender(ctx);   // KEYS_PAGE
       requestAnimationFrame(frame);
       return;
     }
@@ -12431,7 +12484,7 @@ globalThis.__GAUNTLET__={
             KB_HALFROWS, CTRL_KEYS, CTRL_MAGIC, KEMPSTON_MAP, KEMPSTON_POTION,
             KEYMAP,
             controlRead, feDrawP2, CHAR_MENU_DEFAULT, GATE_CONFIG,
-            PAGE_ROW_FRAMES, UI_DIRS,
+            PAGE_ROW_FRAMES, UI_DIRS, KEYS_PAGE,
             run(script, limit){
               const fe = new FrontEnd(), kb = new Keyboard(), ev = [];
               let n = 0, done = false, i = 0, held = null, left = 0;
