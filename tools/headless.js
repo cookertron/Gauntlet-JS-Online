@@ -7419,6 +7419,13 @@ if (process.argv[2] === '--table') {
     check('ENTER during capture SKIPS the direction, keeping the old key',
           zone[1], wasDown);
     check('...and still advances', s.fe.optBinding, 2);
+    /* ...and both chat keys stay out of the zone for good: ENTER by the
+       reservation above, ESC by never being a game key at all -- KEYMAP
+       has no entry for it, so it cannot reach kb.held to be captured */
+    check('the DOM map sends Enter to the reserved ENTER and has NO entry for Escape',
+          [F.KEYMAP.Enter, 'Escape' in F.KEYMAP], ['ENTER', false]);
+    checkTrue('...so neither chat key can ever be bound over the chat',
+              !zone.includes('ENTER') && !zone.includes('ESCAPE'));
     /* SPACE is deliberately NOT reserved any more -- see FE_ENTER -- so it
        must BIND like any ordinary key instead of skipping, freeing it for
        the one binding Spectrum-era players expect most (QAOP + SPACE). */

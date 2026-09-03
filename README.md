@@ -46,7 +46,7 @@ page from disk (or setting SERVER LOCAL) plays offline;
 again sends it: up to 32 characters (letters, digits, space and a
 little punctuation), shown as a speech bubble over your character on
 every screen that can see you, for five seconds.  You stand still while
-you type.
+you type.  ENTER and ESC cannot be bound to anything else.
 
 If a session stutters, paste `__GAUNTLET__.net.info()` from the
 browser console (F12) on BOTH machines.  It names each machine's

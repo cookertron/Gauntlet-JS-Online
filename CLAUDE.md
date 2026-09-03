@@ -388,12 +388,15 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      Backspace, cap 32, all else swallowed — ESC closes (nothing
      sent), ENTER sends the trimmed line.  `netLocalDir()` returns 0
      while a line is open (the player STANDS: just a byte on the
-     wire; mutation-verified), the overlay says ENTER SENDS  ESC
-     CANCELS, and your own bubble shows the line so far with a
-     blinking `_` cursor — the text box IS the bubble.  ENTER falls
-     through to KEYMAP (the options screen's own) whenever the chat
-     does not take it.  `build/ui/chat.png` shows three bubbles, one
-     stacked under a name tag.
+     wire; mutation-verified), and your own bubble shows the line so
+     far with a blinking `_` cursor — the text box IS the bubble.  NO
+     on-screen hint (a first cut said ENTER SENDS  ESC CANCELS; a
+     bubble could sit under it and a text line needs no manual —
+     Anthony).  ENTER falls through to KEYMAP (the options screen's
+     own) whenever the chat does not take it, and NEITHER CHAT KEY CAN
+     BE BOUND: ENTER is the rebind capture's reserved key (skipped),
+     ESC has no KEYMAP entry at all — both pinned.  `build/ui/chat.png`
+     shows three bubbles, one stacked under a name tag.
 3. Netcode design — **SETTLED with Anthony 2026-08-29:**
    - **LOCKSTEP RELAY.**  Every client runs the JS sim it already has; the
      C++ server relays one direction byte per player per pass, owns the
@@ -463,8 +466,10 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
 - The HUD font has verified glyphs ONLY for digits, uppercase letters and
   space. Punctuation renders garbage. Reword UI text; never print `:` `/`
   `>` etc. with it.
-- Key rebinding: 6 slots, swap-on-own-key, nothing ever refused (the
-  cross-player conflict UI left with local P2).  The zone persists in
+- Key rebinding: 6 slots, swap-on-own-key, nothing ever refused except
+  ENTER (the screen's confirm and the chat's open/send: the capture
+  SKIPS it; ESC, the chat's cancel, is not a game key at all).  The
+  cross-player conflict UI left with local P2.  The zone persists in
   localStorage; legacy two-zone saves migrate by taking player 1's own.
 - House discipline (keep it): mutation-test every fix — reintroduce the
   bug, watch the specific test fail, restore; and verify empirically over

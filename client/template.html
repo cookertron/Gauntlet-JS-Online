@@ -3648,7 +3648,12 @@ class FrontEnd {
     let got = null;
     for (const k of held){ got = k; break; }
     const keys = CTRL_KEYS[3];
-    if (got === 'ENTER'){                       // reserved: skip, keep the old key
+    /* reserved: skip, keep the old key.  ENTER is this screen's own
+       confirm AND, in play, the chat's open/send key (netChatKey) --
+       so it can never be a direction or FIRE.  ESC, the chat's cancel,
+       needs no entry here: it is not in KEYMAP, so it never reaches
+       kb.held to be captured in the first place (pinned in the suite). */
+    if (got === 'ENTER'){
       this.optBinding++;
     } else if (keys){
       const j = keys.indexOf(got);              // ours already?  SWAP, never refuse
@@ -11790,7 +11795,11 @@ function netLocalDir(){
    sends 0: the player stands, which is just a byte on the wire).
    ONLINE ONLY, in play, for a player who is in the game or lying dead
    (his bubble has a corpse to rise from).  Returns true when the key was
-   the line's, so the DOM handler keeps it from the KEYMAP. */
+   the line's, so the DOM handler keeps it from the KEYMAP.  No on-screen
+   hint: a bubble could sit under it, and a text line needs no manual
+   (Anthony).  ENTER and ESC can never be game keys -- ENTER is the
+   rebind capture's reserved key (optCaptureFrame skips it) and ESC has
+   no KEYMAP entry at all, so neither can ever be bound over the chat. */
 const CHAT_OK = /^[A-Z0-9 .,?!'\-]$/;
 function netChatKey(key){
   if (net.phase !== 'live' || !net.everLive) return false;
@@ -12019,8 +12028,7 @@ function netOverlay(ctx){
   let line = net.status;
   if (net.phase === 'live'){
     const q = game.players[net.seat];
-    line = (net.compose !== null) ? 'ENTER SENDS   ESC CANCELS'
-      : (net.sentInput && netNow() - net.lastProgress > 700)
+    line = (net.sentInput && netNow() - net.lastProgress > 700)
       ? 'WAITING FOR PLAYERS'
       : (net.everLive && q && !q.inGame && !net.autoFire)
         ? 'PRESS ' + netFireKey() + ' TO JOIN'
@@ -12243,6 +12251,7 @@ globalThis.__GAUNTLET__={
             drawCharPreview, PREVIEW_SCALE, CHAR_FRAMES, drawLogo, FE_LOGO_ROWS,
             get padStatus(){ return padStatus; },
             KB_HALFROWS, CTRL_KEYS, CTRL_MAGIC, KEMPSTON_MAP, KEMPSTON_POTION,
+            KEYMAP,
             controlRead, feDrawP2, CHAR_MENU_DEFAULT, GATE_CONFIG,
             PAGE_ROW_FRAMES, UI_DIRS,
             run(script, limit){
