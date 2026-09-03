@@ -2953,10 +2953,17 @@ class SpecScreen {
      with no HALT in it, so on the real machine the page FILLS IN over 9.38
      video frames (measured, 24 rows).  Reproducing that is the difference
      between the original's reveal and a page that snaps on. */
-  printPage(page, rows){
+  printPage(page, rows, gapAfter){
     let hl = 0x4000, ix = 0;
     const n = Math.max(0, Math.min(rows | 0, 24));
     for (let r = 0; r < n; r++){
+      /* `gapAfter`: a blank SCREEN row after that many page rows -- the
+         credits page makes room for ONLINE under its logo this way (see
+         drawLogoOnline), its own last row being blank; the page row that
+         would land on screen row 24 is simply not printed */
+      const sr = (gapAfter !== undefined && r >= gapAfter) ? r + 1 : r;
+      if (sr >= 24) break;
+      hl = 0x4000 + ((sr >> 3) << 11) + ((sr & 7) << 5);
       for (let c = 0; c < 32; c++) hl = this.putChar(hl, page[ix++]);
       const at = page[ix++];
       const base = SpecScreen.attrAddr(hl) - 0x20;
@@ -3018,6 +3025,38 @@ const FE_LOGO_SCR = FE_PAGES ? (() => {
   s.printPage(FE_PAGES.credits, FE_LOGO_ROWS);
   return s;
 })() : null;
+/* ONLINE UNDER THE WORDMARK (this fork, 2026-09-04; Anthony's mock-up:
+   the logo with ONLINE beneath in a small green face).  Wherever the
+   Gauntlet logo is drawn -- the credits page, the keys page, the options
+   screen -- ONLINE follows in the micro font, bright green, centred on
+   the wordmark's own ink.  The ink extent is MEASURED off FE_LOGO_SCR at
+   load, not typed in: x 72..171 of the 256, bottom row 22 of the three
+   logo rows, so ONLINE sits at rows 25..29 relative to the logo's top --
+   the row under it, which the credits page vacates with printPage's
+   gapAfter and the keys page and the options panel leave blank anyway.
+   The attract screen's captured HUD wordmark keeps PRESS FIRE under it
+   and is not touched; the title screen has no wordmark at all. */
+const FE_LOGO_INK = FE_LOGO_SCR ? (() => {
+  let x0 = 256, x1 = -1, y1 = -1;
+  for (let cr = 0; cr < FE_LOGO_ROWS; cr++)
+    for (let y = 0; y < 8; y++)
+      for (let col = 0; col < 32; col++){
+        const b = FE_LOGO_SCR.m[((cr >> 3) << 11) | (y << 8) | ((cr & 7) << 5) | col];
+        if (!b) continue;
+        for (let bit = 0; bit < 8; bit++) if (b & (0x80 >> bit)){
+          const x = col * 8 + bit;
+          if (x < x0) x0 = x;
+          if (x > x1) x1 = x;
+          y1 = cr * 8 + y;
+        }
+      }
+  return x1 < 0 ? null : { x0, x1, y1 };
+})() : null;
+function drawLogoOnline(ctx, dx, dy){
+  if (!FE_LOGO_INK) return;
+  const cx = dx + ((FE_LOGO_INK.x0 + FE_LOGO_INK.x1 + 1) >> 1);
+  drawNameTag(ctx, 'ONLINE', cx, dy + FE_LOGO_INK.y1 + 3, PAL_BRT[4], 192);
+}
 function drawLogo(ctx, dx, dy){
   if (!FE_LOGO_SCR) return;
   for (let cr = 0; cr < FE_LOGO_ROWS; cr++)
@@ -3452,7 +3491,8 @@ class FrontEnd {
         /* the KEYS page prints only its logo rows from the data; the
            rest is KEYS_PAGE, drawn over the screen by pageRender on the
            same row clock */
-        s.printPage(page, this.phase === 'keys' ? Math.min(rows, FE_LOGO_ROWS) : rows);
+        s.printPage(page, this.phase === 'keys' ? Math.min(rows, FE_LOGO_ROWS) : rows,
+                    this.phase === 'credits' ? FE_LOGO_ROWS : undefined);   // ONLINE's row
         if (rows < 24) break;
         /* $C859 LD A,($C905) / AND A / RET nz: ($C905) is 1 from $C4E8, so
            the CONTROLS page does NOT wait for SPACE -- $C4F2 CALL $C86C waits
@@ -3936,8 +3976,10 @@ class FrontEnd {
      row clock: a line shows once the 8 px row its bottom falls in has
      rolled in, exactly as printPage revealed the original's rows. */
   pageRender(ctx){
-    if (this.phase !== 'keys') return;
+    if (this.phase !== 'keys' && this.phase !== 'credits') return;
     const rows = Math.floor(this.t / PAGE_ROW_FRAMES);
+    if (rows >= FE_LOGO_ROWS) drawLogoOnline(ctx, 0, 0);   // once the logo has rolled in
+    if (this.phase !== 'keys') return;
     for (const [kind, y, text] of KEYS_PAGE){
       const h = kind === 't' ? 5 : 8;
       if (y + h > rows * 8) continue;
@@ -3959,6 +4001,7 @@ class FrontEnd {
        better look than the panel being red throughout. */
     ring();
     drawLogo(ctx, col * 8, (row + 1) * 8);
+    drawLogoOnline(ctx, col * 8, (row + 1) * 8);   // in the blank row under it
     /* the logo is 32 columns wide, same as the panel, and opaque -- it cuts
        through the border's and the ring's left/right strokes wherever they
        run past its own three rows.  Redrawing just the perimeter (not the
@@ -12242,7 +12285,8 @@ function frame(t){
          renderScreen just painted, exactly the way the panel below overlays
          the dungeon -- same trick, same two draw calls, different clock. */
       if (frontend.phase === 'options') frontend.optRender(ctx);
-      if (frontend.phase === 'keys') frontend.pageRender(ctx);   // KEYS_PAGE
+      if (frontend.phase === 'keys' || frontend.phase === 'credits')
+        frontend.pageRender(ctx);                  // ONLINE under the logo; KEYS_PAGE
       requestAnimationFrame(frame);
       return;
     }
@@ -12479,6 +12523,7 @@ globalThis.__GAUNTLET__={
   frontend:{FrontEnd, Keyboard, SpecScreen, TitleTune, FE, live:frontend,
             renderScreen, feHandover, pollGamepads, liveKb:keyboard,
             drawCharPreview, PREVIEW_SCALE, CHAR_FRAMES, drawLogo, FE_LOGO_ROWS,
+            drawLogoOnline, FE_LOGO_INK,
             get padStatus(){ return padStatus; },
             KB_HALFROWS, CTRL_KEYS, CTRL_MAGIC, KEMPSTON_MAP, KEMPSTON_POTION,
             KEYMAP,
