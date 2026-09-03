@@ -185,7 +185,39 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      (the free-run case, measured 13,800 steps/s; it becomes 1 s bursts
      at the sim's average rate).  Tab-out also releases all keys
      (`visibilitychange`/`blur`) — a hidden tab never receives its
-     keyups.
+     keyups.  THIRD CUT 2026-09-03 (Anthony: "leave the tab and come
+     back: the game is locked up, WAITING FOR PLAYERS flashes though
+     I'm the only player, the audio lags by seconds — 60 s").  MEASURED
+     under the virtual clock (tools/netlag's shim with Chrome's one-
+     second timer clamp modelled): hidden 30 s the second cut ran 66 s
+     of sim (2.2×, in three-times-rate bursts — nobody visible was
+     pacing the wire, so the RATE budget was the pace), the speaker got
+     two extra seconds of sound per hidden second and the FIFO's
+     flat-run drain can never shed live sound; on return the first
+     INPUT went 5.08 s late (netApply had debited the accumulator to
+     its −5 s floor with nothing crediting it) — the frozen game — and
+     WAITING tripped at that instant off a lastProgress five seconds
+     stale; the sim stayed 31 s ahead of the wall clock for good.  Now
+     the hidden clock paces on the LEAD: an origin (wall ms, sim s)
+     taken the moment the tab hides, and an echo is answered only while
+     the sim is not ahead of real time by more than a bound — a session
+     paced by a visible player never leads, so a hidden participant
+     still adds zero delay (the Sheffield rule, re-modelled with zero-
+     mean jitter and a pacer's 0.25 s catch-up burst, both pinned);
+     only the every-tab-hidden free-run holds.  Two bounds: a tenth of
+     a second when THE SPEAKER TICKS (the worklet/sproc processor posts
+     a tick every 2048 samples off the audio thread, which a hidden tab
+     keeps running: SoundOut.tick → netTick → netPump), half a second
+     under the clamped timer alone (headroom over a pacer's burst — a
+     one-second hold on it would rebuild the Sheffield oscillation).
+     Unhiding (netUnhide) re-origins the accumulator to the lead,
+     refreshes lastProgress, and posts the FIFO a catchUp that drops
+     the OLDEST samples to the refill gate — one skip, then the
+     present.  `lead=` and `tick=` ride net.info().  Pinned end to end
+     under the shim: hidden 30 s → 30 s of sim (±1.2), lead ≤ 0.75 s
+     on the timer / ≤ 0.25 s ticking, first INPUT back ≤ 0.7 s /
+     ≤ 0.25 s, WAITING never.  (tools/fourblock's loader exposes its
+     sandbox as `G.__sandbox` for probes that need a clock.)
    - **Input pipelining — BUILT and RETIRED 2026-09-01**, and the
      record matters: sends ran up to 4 passes ahead of the applied
      step (then an adaptive ceiling toward 8) to absorb internet
@@ -280,7 +312,11 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      (free-run is hundreds to thousands a second, still caught inside
      one window); `hidden=` and `held=` (guard deferrals) ride
      net.info() so the next paste says so itself; a forty-echo
-     jittered at-rate regression pins it.  Per the plan, §3 is NOT
+     jittered at-rate regression pins it.  (SUPERSEDED 2026-09-03: the
+     rate budget over-ran a session nobody visible was pacing — see the
+     background-tab clock's THIRD CUT above, which paces on the LEAD;
+     the forty-echo regression survives, re-modelled with zero-mean
+     jitter.)  Per the plan, §3 is NOT
      pre-empted: no transport redesign is authorised; the reading is
      §3.1, awaiting Anthony's decision.
 4. **FOUR PLAYERS — BUILT 2026-09-02** (agreed 2026-09-01; headless

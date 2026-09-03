@@ -161,7 +161,12 @@ function loadClient(file){
     { _text: jsonMatch[1].split('<' + String.fromCharCode(92) + '/').join('</') }));
   const codeMatch = html.match(/<script>([\s\S]*?)<\/script>\s*$/);
   vm.runInContext(codeMatch[1], sandbox, { filename: path.basename(file) });
-  return sandbox.globalThis.__GAUNTLET__;
+  const G = sandbox.globalThis.__GAUNTLET__;
+  /* the sandbox itself, for probes that need to install a clock, a
+     setTimeout or document.hidden -- non-enumerable, the client's own
+     object is untouched otherwise */
+  Object.defineProperty(G, '__sandbox', { value: sandbox, enumerable: false });
+  return G;
 }
 
 module.exports = { SCENARIOS, digest, runScenario, tick, loadClient };

@@ -54,7 +54,10 @@ exchange rate against the sim's own, the worst stall seen, the clean
 link round trip (`rtt=min/median/worst`, from a once-a-second ping
 the relay answers ahead of everything else) and how long each seat's
 input waited at the relay for the others (`wait=`, per seat) — which
-together separate "the wire is slow" from "one seat is slow".
+together separate "the wire is slow" from "one seat is slow".  `lead=`
+and `tick=` say how far a hidden tab's game has run ahead of real time
+and whether the speaker is keeping its clock: leaving the tab and
+coming back should cost nothing but a skip in the sound.
 
 For play from OUTSIDE the network, `--forward` asks the router to open
 the port itself (NAT-PMP first, then UPnP), prints the public address

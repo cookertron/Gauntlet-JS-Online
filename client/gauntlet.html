@@ -2083,10 +2083,24 @@ class GauntletBeeperOut extends AudioWorkletProcessor {
     this.gap = 0;            // zeros emitted in the current underrun episode
     this.started = false;    // pre-start silence is not an underrun
     this.since = 0;          // samples since the last depth report
+    this.tickN = 0;          // samples since the last TICK to the main thread
     this.port.onmessage = (e) => {
       const d = e.data || {};
       if (typeof d.min === 'number') this.min = d.min;
       if (d.chunk){ this.q.push(d.chunk); this.depth += d.chunk.length; }
+      /* CATCH UP: drop the OLDEST samples down to the refill gate.  The
+         drain below sheds only flat runs, so a backlog of live sound
+         would otherwise ride between the sim and the speaker for ever
+         -- a tab that was hidden comes back to a queue the hidden clock
+         built, and this is how it is emptied: one skip, then present. */
+      if (d.catchUp){
+        while (this.depth > this.min && this.q.length){
+          const c = this.q[0];
+          const drop = Math.min(c.length - this.off, this.depth - this.min);
+          this.off += drop; this.depth -= drop;
+          if (this.off >= c.length){ this.q.shift(); this.off = 0; }
+        }
+      }
     };
   }
   process(inputs, outputs){
@@ -2129,6 +2143,13 @@ class GauntletBeeperOut extends AudioWorkletProcessor {
        latency, for info() and for reports from machines nobody can touch */
     this.since += out.length;
     if (this.since >= 32768){ this.since = 0; this.port.postMessage({ depth: this.depth }); }
+    /* THE SPEAKER IS A CLOCK.  Every 2048 samples (~43 ms) the processor
+       ticks the main thread -- real time, counted on the audio thread,
+       which a browser keeps running in a HIDDEN tab where it clamps
+       every timer to a second.  The hidden-tab pump paces on it (see
+       netPump); a visible tab ignores it. */
+    this.tickN += out.length;
+    if (this.tickN >= 2048){ this.tickN = 0; this.port.postMessage({ tick: 1 }); }
     return true;
   }
 }
@@ -2168,6 +2189,13 @@ class SoundOut{
     this.workletErr = '';      // why the worklet did not engage, for info()
     this.vbase = 0;           // sim frame at the stream's origin
     this.vsent = 0;           // samples pushed since that origin
+    this.tick = null;         // the processor's 2048-sample tick, for the hidden-tab pump
+  }
+  /* drop the FIFO's backlog down to the refill gate -- see the worklet's
+     catchUp; a no-op on the scheduled path, which has no queue */
+  catchUp(){
+    if (this.node && (this.mode === 'worklet' || this.mode === 'sproc'))
+      this.node.port.postMessage({ catchUp: 1 });
   }
   /* the underrun branch of both SCHEDULED flush paths: measure the deficit,
      cover it */
@@ -2301,6 +2329,7 @@ class SoundOut{
         this.node.port.onmessage = (e) => {
           if (e.data && e.data.underrun) this.ratchetSamples(e.data.underrun);
           if (e.data && typeof e.data.depth === 'number') this.lastDepth = e.data.depth;
+          if (e.data && e.data.tick && this.tick) this.tick();
         };
         this.node.port.postMessage(
           { min: Math.floor(this.fifoLead * this.ctx.sampleRate) });
@@ -2354,6 +2383,7 @@ class SoundOut{
       proc.port.postMessage = (m) => {
         if (m && m.underrun) this.ratchetSamples(m.underrun);
         if (m && typeof m.depth === 'number') this.lastDepth = m.depth;
+        if (m && m.tick && this.tick) this.tick();
       };
       let sp;
       try { sp = this.ctx.createScriptProcessor(1024, 0, 1); }
@@ -11222,6 +11252,8 @@ const game=new Game();
    not run an AudioContext until a user gesture, so start() is called from
    the first keydown.  Nothing in the simulation depends on it existing. */
 const sound=new SoundOut();
+/* the speaker's tick is the hidden tab's fine clock -- see netPump */
+sound.tick = () => netTick();
 
 /* ---- THE KEYBOARD, and it is now a REAL 48K keyboard -----------------
    Every one of the four control methods is ported, so the port can no longer
@@ -11557,8 +11589,10 @@ const net = {
   stat: {lastAt: 0, worst: 0, worstShown: 0, n: 0, t0: 0, rate: 0,
          wait: [], waitShown: []},          // NETPLAN 2.2: per-seat relay wait
   pumpTimer: null,         // the hidden-tab pacer -- see netPump()
-  pumpT0: 0, pumpN: 0,     // its trailing-window budget (the free-run guard)
-  pumpHeld: 0,             // times that guard deferred an answer (held= in info)
+  pumpHeld: 0,             // times its guard deferred an answer (held= in info)
+  hidePaced: false,        // the hidden clock has an origin (below)
+  hideAt: 0, hideSimT: 0,  // wall ms and sim seconds at that origin
+  tickAt: 0,               // wall ms of the speaker's last tick (netTick)
   forceAvailable: false,   // tests: offer the SERVER row with no location
 };
 function netNow(){
@@ -11598,7 +11632,7 @@ function netStart(url, cfgLocal, tpFactory){
   net.everLive = false; net.welcomed = false; net.chars = null;
   net.step = 0; net.sentInput = false; net.pendDirs = null;
   net.acc = 0; net.accAt = netNow(); net.desyncs = 0; net.autoFire = false;
-  net.names = null; net.pumpT0 = 0; net.pumpN = 0; net.pumpHeld = 0;
+  net.names = null; net.pumpHeld = 0; net.hidePaced = false; net.tickAt = 0;
   net.compose = null;
   net.stat = {lastAt: 0, worst: 0, worstShown: 0, n: 0, t0: 0, rate: 0,
               wait: [], waitShown: []};
@@ -11867,6 +11901,8 @@ function netInfo(){
                     : '?') +
          ' wait=' + (waits.length ? waits.map(w => Math.round(w)).join('/') : '?') + 'ms' +
          ' hidden=' + (netHidden() ? 1 : 0) + ' held=' + net.pumpHeld +
+         ' lead=' + (net.hidePaced ? Math.round(netHideLead(netNow()) * 1000) + 'ms' : '?') +
+         ' tick=' + (net.tickAt && netNow() - net.tickAt < 500 ? 1 : 0) +
          ' desyncs=' + net.desyncs;
 }
 /* THE BACKGROUND-TAB CLOCK.  A hidden tab gets no requestAnimationFrame
@@ -11884,7 +11920,15 @@ function netHidden(){
   return typeof document !== 'undefined' && !!document.hidden;
 }
 function netPump(){
-  if (net.phase !== 'live' || !netHidden()) return;
+  if (net.phase !== 'live') return;
+  if (!netHidden()){ if (net.hidePaced) netUnhide(); return; }
+  /* the hidden clock's origin: THIS moment, before anything in flight
+     lands -- an origin taken after the echo would credit the sim a free
+     pass (measured: a steady lead a pass higher than the bound) */
+  const nowMs = netNow();
+  if (!net.hidePaced || game.simT < net.hideSimT || nowMs < net.hideAt){
+    net.hidePaced = true; net.hideAt = nowMs; net.hideSimT = game.simT;
+  }
   while (net.pendDirs){
     const d = net.pendDirs; net.pendDirs = null;
     netApply(d);
@@ -11897,55 +11941,76 @@ function netPump(){
   if (typeof sound !== 'undefined' && sound.flush)
     sound.flush(game.sound.log, game.simFrame);
   if (net.sentInput) return;
-  /* HIDDEN PACING, SECOND CUT.  The first slept one tick per pass
-     through setTimeout -- and a browser CLAMPS a hidden tab's timers
-     to about a second, so a hidden participant fed one INPUT a second
-     and pure lockstep held the WHOLE session to it.  Found on the
-     bench 2026-09-01: WAITING FOR PLAYERS flashing in one-second
-     cycles on the VISIBLE machine, one step of movement per flash,
-     while the laptop's tab sat hidden -- and looking at the laptop
-     cured it, because looking IS unhiding.
-     A hidden tab must add ZERO delay while anyone visible is playing,
-     so it now answers AT ONCE -- unless the exchange is OUTRUNNING the
-     sim inside a trailing one-second window, which cannot happen while
-     any visible participant paces the loop (netFrame sends at
-     tickSeconds of real time) and is exactly the every-tab-hidden
-     free-run the first cut guarded against (measured 13,800 steps a
-     second).  Running hot, the clamped timer holds the NEXT window:
-     free-run becomes one-second BURSTS at the sim's own average rate,
-     in a session nobody is watching.  Where setTimeout does not exist
-     (the test sandboxes) the answer is always immediate and the tests
-     pace the wire themselves. */
-  const nowMs = netNow();
-  /* a BACKWARD clock jump is not a window: re-origin, exactly as the
-     sound bridge does (netNow can fall back to Date.now, which a clock
-     sync can move backwards) */
-  if (nowMs - net.pumpT0 >= 1000 || nowMs < net.pumpT0){
-    net.pumpT0 = nowMs; net.pumpN = 0;
-  }
-  /* THE BUDGET IS THREE TIMES THE SIM RATE, not the sim rate.  The first
-     cut allowed round(1/tick) = 13 answers a window against a 12.5/s
-     pace -- no headroom at all -- and the Sheffield session found it:
-     the HOST'S browser, occluded, answered on this path; any jitter
-     that put a 14th echo inside a window tripped the clamped timer, the
-     one-second hold piled up a backlog whose burst tripped it again,
-     and the relay sat holding Sheffield's byte for the host's (their
-     net.info: rate=7.8 of 12.5, worst=1190ms, wait=76/1020ms -- the
-     far seat waiting a second at a time for a 6 ms link).  Free-run is
-     hundreds to thousands a second; three times the sim rate still
-     catches it inside one window and never fires on a paced session. */
-  if (net.pumpN >= 3 * Math.max(1, Math.round(1 / game.tickSeconds())) &&
-      typeof setTimeout !== 'undefined'){
+  /* HIDDEN PACING, THIRD CUT (2026-09-03).  The first cut slept a tick
+     per pass and the browser's one-second timer clamp held the whole
+     session to one pass a second.  The second answered at once under a
+     RATE budget -- three times the sim rate a window -- and that was
+     the tab-away bug Anthony reported: with nobody visible to pace the
+     wire (a solo session, or every seat hidden) the sim ran at 2.2x
+     real time in bursts (MEASURED under the virtual clock: 66 s of sim
+     in 30 s hidden), the speaker was handed two extra seconds of sound
+     for every hidden second, the FIFO's flat-run drain could never shed
+     live sound, and the tab came back to audio a minute behind -- for
+     good.  The rate was never the quantity that mattered: the LEAD is.
+     The hidden clock keeps an origin (wall ms, sim seconds) and answers
+     an echo only while the sim is not ahead of the wall clock by more
+     than a bound; beyond it the answer waits.  A session paced by a
+     VISIBLE player never leads (his frame loop sends at real time, so
+     the sim here trails it), so a hidden participant still adds ZERO
+     delay -- the Sheffield rule -- and only the every-tab-hidden
+     free-run ever holds.  The bound depends on the wake-up available:
+       * the SPEAKER'S TICK (netTick, every 2048 samples off the audio
+         thread, which a hidden tab keeps running): a tenth of a second
+         -- the sim hovers a pass ahead, the FIFO holds a pass;
+       * else the clamped TIMER: half a second, because a visible
+         pacer's own post-stall catch-up (its 0.25 s accumulator cap)
+         arrives as a burst that must NOT trip a one-second hold -- the
+         hold would build the next burst, the Sheffield oscillation.
+     Where setTimeout does not exist (the test sandboxes) the answer is
+     always immediate and the tests pace the wire themselves. */
+  const lead = netHideLead(nowMs);
+  const ticking = net.tickAt && nowMs - net.tickAt < 500;
+  const leadMax = ticking ? NET_HIDE_LEAD_TICK : NET_HIDE_LEAD_TIMER;
+  if (lead > leadMax && typeof setTimeout !== 'undefined'){
     if (net.pumpTimer === null){
       net.pumpHeld++;
       net.pumpTimer = setTimeout(() => { net.pumpTimer = null; netPump(); },
-                                 Math.max(0, net.pumpT0 + 1000 - nowMs));
+                                 Math.max(1, Math.ceil((lead - leadMax) * 1000)));
     }
     return;
   }
-  net.pumpN++;
   netSend(NETP.msgs.INPUT, netU32(net.step).concat([netLocalDir()]));
   net.sentInput = true;
+}
+const NET_HIDE_LEAD_TICK = 0.1, NET_HIDE_LEAD_TIMER = 0.5;   // seconds, see above
+/* how far the sim has run ahead of the wall clock since the tab hid */
+function netHideLead(nowMs){
+  return (game.simT - net.hideSimT) - (nowMs - net.hideAt) / 1000;
+}
+/* the speaker's tick (SoundOut.tick -> here): real time, from the audio
+   thread.  A visible tab ignores it; a hidden one paces on it. */
+function netTick(){
+  net.tickAt = netNow();
+  netPump();
+}
+/* BACK TO A VISIBLE TAB.  While hidden, netApply kept debiting the
+   accumulator for every pass and nothing credited it, so a long stretch
+   left it on its -5 s floor -- and the first frame back then waited the
+   whole five seconds before sending a byte (MEASURED: first INPUT 5.08 s
+   after the return), the frozen game Anthony saw, with WAITING FOR
+   PLAYERS flashing off a lastProgress five seconds stale the moment the
+   byte finally went.  The hidden clock knows exactly how far the sim is
+   ahead of real time: that, and only that, is what the visible tab owes
+   before its next tick.  And the speaker is told to catch up: whatever
+   the hidden clock queued beyond the refill gate is dropped, oldest
+   first -- one skip, then the present. */
+function netUnhide(){
+  const nowMs = netNow();
+  const lead = Math.max(0, Math.min(5, netHideLead(nowMs)));
+  net.hidePaced = false;
+  net.acc = -lead; net.accAt = nowMs;
+  net.lastProgress = nowMs;
+  if (typeof sound !== 'undefined' && sound.catchUp) sound.catchUp();
 }
 /* THE rAF FIX (NETPLAN 2.5).  A PASS used to sit in pendDirs until the
    next animation frame, and the reply left in that same frame: ~8 ms on
@@ -11987,6 +12052,7 @@ function netDeliver(){
 }
 function netFrame(dt){
   if (net.phase !== 'live') return;
+  if (net.hidePaced && !netHidden()) netUnhide();   // the listener's job, if it missed
   net.acc += dt;
   net.accAt = netNow();
   if (net.acc > 0.25) net.acc = 0.25;

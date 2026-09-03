@@ -8325,18 +8325,17 @@ if (process.argv[2] === '--table') {
     sandbox.document.hidden = false;
   }
 
-  /* ---- THE HIDDEN-TAB TIMER CLAMP: a browser clamps a hidden tab's
-     setTimeout to about a second, so the first-cut per-pass sleep fed
-     one INPUT a second -- and pure lockstep held the WHOLE session to
-     it (the bench report: WAITING FOR PLAYERS flashing in one-second
-     cycles on the VISIBLE machine, one step of movement per flash,
-     while the laptop's tab sat hidden).  The sandbox has no setTimeout,
-     which is exactly how that shipped unseen -- so THIS block installs
-     one, plus a fake clock, and pins the law: at or under the sim's own
-     rate a hidden tab answers every pass AT ONCE, timer available or
-     not; only wire-speed echoes (every participant hidden) may defer to
-     the clamped timer, and the deferred byte flows when the window
-     turns. */
+  /* ---- THE HIDDEN-TAB CLOCK, THIRD CUT: a browser clamps a hidden
+     tab's setTimeout to about a second, so the first-cut per-pass
+     sleep fed one INPUT a second and pure lockstep held the WHOLE
+     session to it.  The second cut answered at once under a RATE
+     budget, and that over-ran a session nobody was pacing (the
+     tab-away bug: 2.2x real time hidden, audio a minute behind).  The
+     law now is the LEAD: a hidden tab answers at once while the sim
+     is not ahead of the wall clock -- so a session paced by a visible
+     player, jitter, catch-up bursts and all, never waits on it -- and
+     only wire-speed echoes (nobody visible) hold, until the speaker's
+     tick or the clamped timer says real time has caught up. */
   {
     sandbox.document.hidden = true;
     let fakeT = 200000;
@@ -8344,40 +8343,91 @@ if (process.argv[2] === '--table') {
     sandbox.performance = { now: () => fakeT };
     sandbox.setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
     const tickMs = G.game.tickSeconds() * 1000;
-    for (let i = 0; i < 3; i++){
-      fakeT += tickMs;
+    G.net.pump();                       // the visibility listener's call: the clock's origin
+    /* an echo at the SIM'S OWN PACE: a visible pacer sends the next byte
+       when real time has covered the pass just applied -- whatever that
+       pass cost (four frames, or five under the online cap) -- so the
+       clock advances by the previous pass's consumption, plus jitter */
+    let prev = tickMs;
+    const echo = extraMs => {
+      fakeT += prev + (extraMs || 0);
+      const t0 = G.game.simT;
       H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
-    }
+      prev = (G.game.simT - t0) * 1000;
+    };
+    const lead = () => (G.game.simT - S.hideSimT) - (fakeT - S.hideAt) / 1000;
+    for (let i = 0; i < 3; i++) echo(0);
     check('at the sim rate a hidden tab answers every pass AT ONCE, no timer',
           [timers.length, rd32(lastOf(M.INPUT), 1)], [0, S.step]);
-    /* THE SHEFFIELD REGRESSION: a paced session with ordinary jitter --
-       every tenth echo a hair early, so some one-second windows hold a
-       14th -- must never trip the guard.  The first cut's budget of
-       exactly the sim rate did, and its own one-second hold made the
-       backlog burst that tripped it again: rate 7.8 of 12.5 with the
-       far seat waiting a second at a time for a 6 ms link. */
-    for (let i = 0; i < 40; i++){
-      fakeT += (i % 10 === 9) ? 5 : tickMs;
-      H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
-    }
-    check('forty jittered at-rate echoes never trip the free-run guard',
+    /* THE SHEFFIELD REGRESSION, re-modelled honestly: a paced session
+       cannot run faster than its pacer's clock, so its jitter is ZERO-
+       MEAN -- every tenth echo forty ms early and the next forty late */
+    for (let i = 0; i < 40; i++) echo((i % 10 === 9) ? -40 : (i % 10 === 0 && i > 0) ? 40 : 0);
+    check('forty jittered at-rate echoes never trip the guard',
           [timers.length, S.pumpHeld, rd32(lastOf(M.INPUT), 1)], [0, 0, S.step]);
+    checkTrue('...the sim sits within a pass of the wall clock throughout', Math.abs(lead()) < 0.15, 'lead ' + lead());
+    /* a visible pacer's own CATCH-UP BURST after a stall: three passes
+       with no wall time between them (its 0.25 s accumulator cap) */
+    const s0 = G.game.simT;
+    for (let i = 0; i < 3; i++) H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
+    check('a pacer\'s catch-up burst (three passes, no wall time) does not trip the timer regime',
+          [timers.length, S.pumpHeld, rd32(lastOf(M.INPUT), 1)], [0, 0, S.step]);
+    fakeT += (G.game.simT - s0) * 1000 + prev;          // ...and the pace resumes
     let n = 0;
     while (timers.length === 0 && n < 100){
       H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
       n++;
     }
-    checkTrue('wire-speed echoes trip the free-run guard inside ONE window',
-              timers.length === 1 && n <= 3 * Math.ceil(1000 / tickMs) + 1 &&
-              S.sentInput === false && S.pumpHeld === 1,
-              'n ' + n + ' timers ' + timers.length);
+    checkTrue('wire-speed echoes (nobody visible) hold once the sim leads the wall clock by half a second',
+              timers.length === 1 && n >= 4 && n <= 9 && S.sentInput === false && S.pumpHeld === 1,
+              'n ' + n + ' timers ' + timers.length + ' held ' + S.pumpHeld + ' lead ' + lead());
+    checkTrue('...the deferral is sized to the lead beyond the bound, not a flat second',
+              timers[0].ms >= 1 && timers[0].ms < tickMs * 2, 'ms ' + timers[0].ms);
     fakeT += 1000;
-    timers[0].fn();
-    checkTrue('...and the held INPUT flows the moment the window turns',
+    timers.shift().fn();
+    checkTrue('...and the held INPUT flows the moment the timer turns',
               S.sentInput === true && rd32(lastOf(M.INPUT), 1) === S.step);
+    /* THE SPEAKER'S TICK: with the audio clock alive the bound is a
+       tenth of a second, and ticks (real time, off the audio thread)
+       release a held byte without waiting for the clamped timer */
+    fakeT = S.hideAt + (G.game.simT - S.hideSimT) * 1000;   // lead exactly 0
+    G.sound.out.tick();                                 // the processor's hook -> netTick
+    check('the speaker\'s tick reaches the pump', S.tickAt, fakeT);
+    let m = 0;
+    while (timers.length === 0 && m < 20){
+      H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
+      m++;
+    }
+    checkTrue('with the speaker ticking, wire-speed echoes hold after a TENTH of a second (a pass or two)',
+              timers.length === 1 && m >= 1 && m <= 3 && S.sentInput === false, 'm ' + m + ' lead ' + lead());
+    let ticks = 0;
+    while (!S.sentInput && ticks < 4){ fakeT += 43; G.sound.out.tick(); ticks++; }
+    checkTrue('...and the speaker\'s ticks release the byte inside a pass of real time -- the timer never had to fire',
+              S.sentInput === true && rd32(lastOf(M.INPUT), 1) === S.step && timers.length === 1 && ticks <= 3,
+              'ticks ' + ticks);
+    /* BACK TO VISIBLE: the accumulator is re-origined to the sim's lead,
+       never left on its floor; lastProgress is fresh; the speaker is
+       told to catch up.  (What the second cut did: first INPUT 5.08 s
+       after the return, WAITING FOR PLAYERS flashing off a stale
+       lastProgress -- measured, the frozen return Anthony reported.) */
+    S.acc = -5;                                         // what a long hidden stretch leaves
+    let caught = 0;
+    const realCatch = G.sound.out.catchUp;
+    G.sound.out.catchUp = function(){ caught++; };
     sandbox.document.hidden = false;
+    G.net.pump();
+    G.sound.out.catchUp = realCatch;
+    checkTrue('unhiding re-origins the accumulator to the sim\'s lead (a pass at most here), refreshes lastProgress, and tells the speaker to catch up',
+              S.acc <= 0 && S.acc > -0.2 && S.lastProgress === fakeT && caught === 1 && S.hidePaced === false,
+              'acc ' + S.acc + ' caught ' + caught);
+    /* the pending timer fires into a visible tab: a no-op that frees the slot */
+    while (timers.length) timers.shift().fn();
+    check('a deferral timer firing into a visible tab is a no-op that frees the slot', S.pumpTimer, null);
     delete sandbox.setTimeout;
     delete sandbox.performance;
+    /* the fake clock leaves: every wall stamp goes back onto the real one,
+       or the next block's credit is the distance between two clocks */
+    S.accAt = Date.now(); S.lastProgress = Date.now(); S.tickAt = 0;
   }
 
   /* ---- STOP-AND-WAIT: one INPUT in flight, ever.  The input is
@@ -8994,6 +9044,19 @@ if (process.argv[2] === '--table') {
     checkTrue('resuming reports the episode length, once',
               reports.length === 1 && reports[0].underrun === 244 &&
               o[0] === 0.75);
+    /* THE SPEAKER'S TICK and the CATCH-UP (this fork's hidden-tab clock) */
+    const ticksBefore = reports.filter(r => r.tick).length;
+    for (let i = 0; i < 16; i++) spin();                // 2048 samples
+    check('the processor ticks the main thread once per 2048 samples -- real time, off the audio thread',
+          reports.filter(r => r.tick).length - ticksBefore, 1);
+    msg({ chunk: new Float32Array(3000).fill(0.5) });
+    msg({ chunk: new Float32Array(200).fill(0.75) });   // (float32-exact values)
+    checkTrue('a backlog builds', p.depth > 3000);
+    msg({ catchUp: 1 });
+    check('catchUp drops the OLDEST samples down to the refill gate', p.depth, 100);
+    o = spin();
+    checkTrue('...and playback goes on from the NEWEST -- the present, not the past',
+              o[0] === 0.75 && o[99] === 0.75 && o[100] === 0);
   }
 }
 
@@ -9653,6 +9716,100 @@ if (process.argv[2] === '--table') {
     check('restore() preserves game.chat (the receiver\'s own display state)', G.game.chat[2] && G.game.chat[2].text, 'RIP');
   }
   S.phase = 'off'; S.tp = null; S.compose = null;
+  G.frontend.liveKb.releaseAll();
+  G.seed({});
+  G.settings.reset();
+}
+
+
+/* ====================================================================
+   THE TAB-AWAY REGRESSION (Anthony, 2026-09-03): "if I leave the
+   Chrome tab and come back the game is locked up, WAITING FOR PLAYERS
+   flashes though I'm the only player, and the audio lags by seconds."
+   Reproduced under the virtual clock on the second-cut pump: hidden 30 s
+   the sim ran 66 s (2.2x, in three-times-rate bursts), the first INPUT
+   after the return went 5.08 s late (the accumulator's floor), WAITING
+   tripped at that instant, and the sim stayed 31 s ahead of the wall
+   clock for good -- which is the audio lag.  This block is that
+   scenario, pinned to the third-cut numbers.
+   ==================================================================== */
+{
+  const { makeLagShim } = require('./netlag');
+  const NP = G.assets.protocol, M = NP.msgs, S = G.net.state;
+  const shim = makeLagShim(NP, { rttMs: 20, seed: 3 });
+  let hiddenFlag = false;
+  sandbox.performance = { now: () => shim.clock.now() };
+  /* Chrome's background rule: a hidden tab's timers run at most once a second */
+  sandbox.setTimeout = (fn, ms) => shim.clock.setTimeout(fn, hiddenFlag ? Math.max(ms, 1000) : ms);
+  sandbox.document.hidden = false;
+  const setHidden = v => { hiddenFlag = v; sandbox.document.hidden = v; G.net.pump(); };
+  G.frontend.liveKb.releaseAll();
+  G.net.start('away', { char: 3, method1: 3, zonePotion: false }, shim.tpFactory);
+  S.autoFire = true;
+  /* frames at 60 Hz; with `ticking` the speaker ticks every 43 ms as the
+     processor does whether the tab is visible or not */
+  let sinceTick = 0;
+  const frames = (n, ticking) => {
+    for (let i = 0; i < n; i++){
+      shim.clock.advance(1000 / 60); G.net.frame(1 / 60);
+      if (ticking && (sinceTick += 1000 / 60) >= 43){ sinceTick = 0; G.sound.out.tick(); }
+    }
+  };
+  const inputs = () => shim.stats.sends.filter(s => s.type === M.INPUT).length;
+  frames(180);
+  checkTrue('a solo session is in play after three visible seconds', G.game.mode === 'play' && S.step > 25, 'step ' + S.step);
+  /* hidden for `secs`: no frames; the wire and the timers run on the clock;
+     with `ticking` the speaker ticks every 43 ms */
+  const away = (secs, ticking) => {
+    const sim0 = G.game.simT, wall0 = shim.clock.now();
+    let maxLead = -1e9;
+    for (let i = 0; i < secs * 100; i++){
+      shim.clock.advance(10);
+      if (ticking && (sinceTick += 10) >= 43){ sinceTick = 0; G.sound.out.tick(); }
+      const lead = (G.game.simT - sim0) - (shim.clock.now() - wall0) / 1000;
+      if (lead > maxLead) maxLead = lead;
+    }
+    return { sim: G.game.simT - sim0, wall: (shim.clock.now() - wall0) / 1000, maxLead };
+  };
+  const back = secs => {
+    const wall0 = shim.clock.now(), n0 = inputs();
+    let firstInput = -1, waiting = false;
+    for (let i = 0; i < secs * 60; i++){
+      shim.clock.advance(1000 / 60);
+      G.net.frame(1 / 60);
+      if (firstInput < 0 && inputs() > n0) firstInput = (shim.clock.now() - wall0) / 1000;
+      if (S.sentInput && shim.clock.now() - S.lastProgress > 700) waiting = true;
+    }
+    return { firstInput, waiting };
+  };
+  /* 1. no speaker: the clamped-timer regime */
+  setHidden(true);
+  const a = away(30, false);
+  checkTrue('HIDDEN 30 s with no speaker: the sim runs at REAL TIME, one-second bursts and all (30 s of sim, not 66)',
+            Math.abs(a.sim - a.wall) <= 1.2, 'sim ' + a.sim.toFixed(2) + ' wall ' + a.wall.toFixed(2));
+  checkTrue('...never more than the half-second bound plus a pass ahead of the wall clock (the timer regime\'s headroom)',
+            a.maxLead <= 0.75, 'maxLead ' + a.maxLead.toFixed(2));
+  setHidden(false);
+  const r1 = back(3);
+  checkTrue('BACK: the first INPUT goes inside the lead -- well under a second, not five',
+            r1.firstInput >= 0 && r1.firstInput <= 0.7, 'first ' + r1.firstInput);
+  checkTrue('...and WAITING FOR PLAYERS never trips', !r1.waiting);
+  /* 2. the speaker ticking: the fine regime (the speaker was ticking
+     BEFORE the tab hid, as a running one is) */
+  frames(60, true);
+  setHidden(true);
+  const b = away(20, true);
+  checkTrue('HIDDEN 20 s with the speaker ticking: real time again, and the sim never more than the tenth-of-a-second bound plus a pass ahead',
+            Math.abs(b.sim - b.wall) <= 0.3 && b.maxLead <= 0.25, 'sim ' + b.sim.toFixed(2) + ' wall ' + b.wall.toFixed(2) + ' maxLead ' + b.maxLead.toFixed(3));
+  setHidden(false);
+  const r2 = back(3);
+  checkTrue('BACK: the first INPUT goes within a pass or two, WAITING never trips',
+            r2.firstInput >= 0 && r2.firstInput <= 0.25 && !r2.waiting, 'first ' + r2.firstInput);
+  checkTrue('the sim is where the wall clock is: no lasting lead for the speaker to lag by',
+            S.acc > -0.2 && S.acc <= 0.15, 'acc ' + S.acc);
+  S.phase = 'off'; S.tp = null;
+  delete sandbox.setTimeout; delete sandbox.performance;
+  sandbox.document.hidden = false;
   G.frontend.liveKb.releaseAll();
   G.seed({});
   G.settings.reset();
