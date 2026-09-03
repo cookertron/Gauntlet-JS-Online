@@ -563,5 +563,6 @@ Verified end to end (compiled, linked ws2_32.lib, ran, WSAStartup OK):
 - git repo (branch `main`); first commit is the pristine fork point —
   diff against it to see everything the fork has changed.
 - `gh` is authenticated as `cookertron`; repo-local `user.name` is set.
-  No GitHub remote yet — create with
-  `gh repo create gauntlet-online --private --source . --push` when wanted.
+  GitHub (2026-09-03): `origin` = https://github.com/cookertron/Gauntlet-JS-Online
+  (PRIVATE; `main` tracks `origin/main`, push after each commit).  The
+  `faithful` remote is the upstream port, for cherry-picks only.
