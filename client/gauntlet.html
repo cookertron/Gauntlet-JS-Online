@@ -9551,6 +9551,26 @@ class Game{
      offline wall clock) and stepNet() (the wire) step through the SAME
      body below, so the two paths cannot drift apart. */
   tickSeconds(){ return this.mode === 'play' ? PASS_SECONDS : 1/FRAME_HZ; }
+  /* THE WIRE'S TICK -- NETPLAN §3.1 (built 2026-09-03).  Stop-and-wait
+     costs one round trip per exchange, so an exchange of one 20 ms
+     video frame is round-trip-bound at any link slower than single-digit
+     milliseconds: at Sheffield's 28 ms the lobby ran at two thirds
+     speed while play was fine, and at Japan's 273 ms the attract page's
+     256 frames took 75 s and the five-second RIP hold over a minute.
+     So in the 50 Hz modes one exchange is FOUR frames -- the wire's
+     cadence is play's own 80 ms in every mode -- while the sim keeps
+     stepping video frames (the offline clock, advance(), is untouched).
+     NOT pipelining: nothing is sent ahead, one byte is in flight, the
+     sampling lead stays zero exchanges; the byte is applied to each
+     frame of its group, and the lobby's only input is the FIRE latch,
+     which a four-frame hold reads exactly as before.  The group ENDS
+     where the 50 Hz modes end: a join on frame k drops the rest of the
+     group, so no pass ever runs on a lobby byte -- widening this to play
+     would be pipelining's overshoot again, and the stop-and-wait pin
+     would fail it. */
+  static get NET_LOBBY_FRAMES(){ return 4; }
+  wireFrames(){ return this.mode === 'play' ? 1 : Game.NET_LOBBY_FRAMES; }
+  wireSeconds(){ return this.tickSeconds() * this.wireFrames(); }
   /* one tick of whichever clock the mode runs on; debits acc/simT for
      the tick and its blocking charges; returns true when the caller's
      loop should yield the frame (a level change, or the over-loop's own
@@ -9621,7 +9641,14 @@ class Game{
     const t0 = this.simT;
     this.serveIntroPause();
     if (this.simT !== t0){ this.acc = 0; return; }
-    this.stepTick({ netDirs: dirs });
+    /* NETPLAN §3.1: a lobby exchange is a GROUP of frames (wireFrames),
+       the same byte to each, ending the moment the mode leaves the
+       50 Hz set -- see tickSeconds' note */
+    const n = this.wireFrames();
+    for (let i = 0; i < n; i++){
+      this.stepTick({ netDirs: dirs });
+      if (n > 1 && this.mode === 'play') break;
+    }
     this.acc = 0;
   }
   serveIntroPause(){
@@ -11924,7 +11951,7 @@ function netInfo(){
   return 'phase=' + net.phase + ' step=' + net.step +
          ' inflight=' + (net.sentInput ? 1 : 0) +
          ' rate=' + (s.rate ? s.rate.toFixed(1) : '?') +
-         ' sim=' + (1 / game.tickSeconds()).toFixed(1) +
+         ' sim=' + (1 / game.wireSeconds()).toFixed(1) +
          ' worst=' + Math.round(s.worstShown || s.worst) + 'ms' +
          ' rtt=' + (r.samples.length
                     ? Math.round(r.min) + '/' + Math.round(r.med) + '/' + Math.round(r.worst)
@@ -12059,7 +12086,7 @@ function netUnhide(){
 function netSendWhenDue(){
   if (net.phase !== 'live' || net.sentInput || netHidden()) return;
   const credit = Math.max(0, netNow() - net.accAt) / 1000;
-  const wait = (game.tickSeconds() - net.acc - credit) * 1000;
+  const wait = (game.wireSeconds() - net.acc - credit) * 1000;
   /* due within a millisecond IS due: a timer for a hair less than
      nothing is pointless in a browser (which clamps it anyway) and a
      floating-point trap under a virtual clock, where t + 1e-13 is t */
@@ -12090,7 +12117,7 @@ function netFrame(dt){
     const d = net.pendDirs; net.pendDirs = null;
     netApply(d);
   }
-  if (!net.sentInput && net.acc >= game.tickSeconds()){
+  if (!net.sentInput && net.acc >= game.wireSeconds()){
     netSend(NETP.msgs.INPUT, netU32(net.step).concat([netLocalDir()]));
     net.sentInput = true;
   }

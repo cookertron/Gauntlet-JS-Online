@@ -147,6 +147,11 @@ async function main(){
     A.G.net.start('e2e', { char: 3, method1: 3, zonePotion: false,
                            name: 'anthony' }, vmTransport());
     await until([A], () => A.net.phase === 'live', 'client A goes live');
+    /* let A's lobby EXCHANGE before B arrives: a lobby tick is 80 ms now
+       (NETPLAN 3.1), so a B that connects inside the first one would be a
+       FRESH joiner whose pick applies -- legitimate, but not the mid-lobby
+       snapshot join this scenario is about */
+    await pump([A], 12);
     B.G.net.start('e2e', { char: 3, method1: 3, zonePotion: false,
                            name: 'NITRO 5' }, vmTransport());
     await until([A, B], () => B.net.phase === 'live',
@@ -252,16 +257,22 @@ async function main(){
           four.map(c => c.G.game.players.map(q => q.charIndex).slice().sort().join('')),
           four.map(() => '0123'));
     const at = c => c.G.game.players.map(q => [q.x, q.y]);
-    const before = at(A);
     A.kb.press('D'); C.kb.press('S'); D.kb.press('1'); E5.kb.press('Q');   // right, left, up, down
-    await pump(four, 60);
+    /* the BYTES, not the walk: the join ring can leave every player boxed
+       in by a neighbour or a wall, so what is asserted is that each seat's
+       direction reaches the sim -- read off A's sim, where every byte lands */
+    const seen = [0, 0, 0, 0];
+    for (let i = 0; i < 60; i++){
+      for (const c of four) c.G.net.frame(0.02);
+      A.G.game.players.forEach((q, k) => { seen[k] |= q.dir; });
+      await sleep(2);
+    }
     for (const c of four) c.kb.releaseAll();
     await barrierN(four, 'four walked');
-    checkTrue('four keyboards, four bytes: players 3 and 4 moved, and every sim agrees where everyone is',
-              JSON.stringify(at(A)) !== JSON.stringify(before) &&
-              (at(A)[2].join() !== before[2].join() || at(A)[3].join() !== before[3].join()) &&
-              four.every(c => JSON.stringify(at(c)) === JSON.stringify(at(A))),
-              JSON.stringify(before) + ' -> ' + JSON.stringify(at(A)));
+    check('four keyboards, four bytes: every seat\'s direction reached the sim (right, left, up, down)',
+          seen.map(d => d & 15), [8, 4, 1, 2]);
+    checkTrue('...and every sim agrees where everyone is',
+              four.every(c => JSON.stringify(at(c)) === JSON.stringify(at(A))));
     checkTrue('...fingerprints equal', four.every(c => c.G.game.fingerprint() === A.G.game.fingerprint()));
     /* ---- CHAT: a line typed on A rises on every sim ------------------- */
     for (const k of ['Enter', 'h', 'i', ' ', 'a', 'l', 'l', '!', 'Enter']) A.G.net.chatKey(k);

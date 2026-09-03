@@ -28,7 +28,7 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
   the exe, speaks real WebSocket at it (own client, every frame byte
   controlled), plays the full protocol conversation, then a four-seat
   run.
-- `tools/e2etest.js` — the full stack (31 checks): real client sims
+- `tools/e2etest.js` — the full stack (32 checks): real client sims
   (vm sandboxes on the BUILT file) through the real relay — two, a late
   joiner, then a fourth and a fifth: FOUR PLAYERS in one game, a sixth
   refused; the proof that browser windows play.  `tools/wsmini.js` is
@@ -340,8 +340,24 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      authorised; the readings are §3.1 (Sheffield) and §3.3 (Japan).
      DECIDED 2026-09-03 (Anthony): §3.3 rollback — the only full-rate
      answer to a Japan-class link — is PARKED: ON HOLD, SUBJECT TO
-     REQUIREMENT, recorded in NETPLAN.md's status.  §3.1's lobby fix is
-     likewise unstarted.
+     REQUIREMENT, recorded in NETPLAN.md's status.  **§3.1 BUILT
+     2026-09-03** (Anthony authorised it after asking, rightly, whether
+     it was pipelining again — it is not: nothing is sent ahead, one
+     byte in flight, sampling lead zero): in attract/over/rewind ONE
+     exchange is FOUR video frames (`Game.NET_LOBBY_FRAMES`,
+     `wireFrames()`/`wireSeconds()`; `stepNet` steps the group with the
+     same byte to each frame and ENDS it the moment the mode becomes
+     play, so a lobby byte never runs a pass), and the net layer paces
+     sends and reports `sim=` on the wire tick; the sim's own tick and
+     the offline clock are untouched.  The wire's cadence is 80 ms in
+     every mode, so the lobby and the RIP hold are as latency-tolerant
+     as play (250 frames = 63 exchanges).  Pinned: the two ticks, the
+     send clock, four frames a PASS, a join ending its group at one
+     frame and zero passes, the 63-exchange hold (headless 1472, e2e
+     32 — the e2e now lets A's lobby exchange before B connects, since
+     a B inside the first 80 ms tick is a FRESH joiner whose pick
+     applies, and asserts the four seats' BYTES rather than a walk the
+     join ring's geometry can box in).
 4. **FOUR PLAYERS — BUILT 2026-09-02** (agreed 2026-09-01; headless
    1330 → 1399, relaytest 40 → 50 with a four-seat run, e2e 20 → 30
    with a fourth and fifth client and a sixth refused; the relay

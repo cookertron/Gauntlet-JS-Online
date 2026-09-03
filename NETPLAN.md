@@ -12,6 +12,10 @@ PARKED — ON HOLD, SUBJECT TO REQUIREMENT.**  It is the only design
 that plays a Japan-class link at full rate, Task D priced it
 affordable, and its audio question (§3.3) is still open; nothing in §3
 starts without a new decision.  No transport redesign is authorised.
+**§3.1 BUILT (2026-09-03, authorised by Anthony):** a lobby exchange is
+four video frames (`Game.wireFrames`/`wireSeconds`, `stepNet`'s group,
+the net layer pacing on the wire tick); play untouched; pinned in
+`tools/headless.js` — see `CLAUDE.md`.
 **Audience:** Claude Code, starting a session in this repo.
 **Read before touching anything:** `CLAUDE.md`, `shared/PROTOCOL.md`.
 

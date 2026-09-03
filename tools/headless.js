@@ -8261,7 +8261,7 @@ if (process.argv[2] === '--table') {
 
   /* ---- a tick: INPUT out with the LOCAL byte, PASS steps the sim ------ */
   kb.press('Z');                                  // method 3 FIRE
-  G.net.frame(0.06);
+  G.net.frame(0.1);                               // a lobby exchange is 80 ms (§3.1)
   const inp = lastOf(M.INPUT);
   check('INPUT carries the local keyboard\'s byte for step 0',
         [rd32(inp, 1), inp[5]], [0, 0x10]);
@@ -8562,7 +8562,7 @@ if (process.argv[2] === '--table') {
     checkTrue('the autoFire latch survives the boot into the attract lobby',
               S.phase === 'live' && S.autoFire === true);
     checkTrue('...which paints NO join hint while the latch is mid-join', !painted());
-    G.net.frame(0.06);
+    G.net.frame(0.1);                      // a lobby exchange is 80 ms (NETPLAN 3.1)
     const auto = lastOf(M.INPUT);
     check('START crosses the wire: INPUT carries FIRE with no key down',
           [rd32(auto, 1), auto[5]], [0, 0x10]);
@@ -9862,6 +9862,71 @@ if (process.argv[2] === '--table') {
             /id="fs"/.test(html) && /Alt\+Enter, or double-click/.test(html));
   checkTrue('the fullscreen element is the overscan frame, laid out to fill the screen',
             /#overscan:fullscreen\{/.test(html));
+}
+
+
+/* ====================================================================
+   NETPLAN §3.1 -- THE LOBBY'S TICK IS FOUR FRAMES (built 2026-09-03).
+   One exchange in attract/over/rewind steps four video frames on one
+   byte; play is untouched.  Not pipelining: one byte in flight, the
+   sampling lead zero exchanges, and a lobby byte never runs a pass.
+   ==================================================================== */
+{
+  const F = G.frontend;
+  const NP = G.assets.protocol, M = NP.msgs, S = G.net.state;
+  const sent = [];
+  let H = null;
+  const tpF = (url, h) => { H = h; return { send: b => sent.push(Array.from(b)), close(){} }; };
+  const u32 = v => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+  const inputs = () => sent.filter(m => m[0] === M.INPUT).length;
+  const kb = F.liveKb; kb.releaseAll();
+  G.net.start('ws://mock31', { char: 3, method1: 3, zonePotion: false }, tpF);
+  H.open();
+  H.message(Uint8Array.from([M.WELCOME, 0, 2, ...u32(0x31), NP.welcomeModes.FRESH, ...u32(0)]));
+  H.message(Uint8Array.from([M.CHARS, 3, 255, 255, 255]));
+  const g = G.game;
+  check('in the attract lobby the SIM tick is still a frame and the WIRE tick is four of them',
+        [g.mode, Math.round(g.tickSeconds() * 1000), g.wireFrames(), Math.round(g.wireSeconds() * 1000)],
+        ['attract', 20, 4, 80]);
+  /* the send clock owes a byte per WIRE tick, not per frame */
+  sent.length = 0;
+  G.net.frame(0.05);
+  check('50 ms into the lobby no byte is owed (a frame tick would have sent at 20)', inputs(), 0);
+  G.net.frame(0.04);
+  check('...at 90 ms one is', inputs(), 1);
+  checkTrue('net.info() reports the wire\'s own rate in the lobby: 12.5, not 50', /sim=12\.5/.test(G.net.info()));
+  /* one PASS, no FIRE: four attract frames, no pass */
+  const fc0 = g.frameCtr, at0 = g.attractT, pass0 = g.pass, step0 = S.step;
+  H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
+  check('one lobby PASS steps FOUR video frames -- $8497 and the attract clock both -- and no pass',
+        [S.step - step0, (g.frameCtr - fc0) & 0xFF, g.attractT - at0, g.pass - pass0, g.mode],
+        [1, 4, 4, 0, 'attract']);
+  /* one PASS with FIRE: the join lands on the group's FIRST frame and the
+     group ENDS there -- not one pass runs on a lobby byte */
+  G.net.frame(0.1);
+  const fc1 = g.frameCtr, pass1 = g.pass;
+  H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0x10, 0]));
+  check('a FIRE byte joins on the group\'s first frame and the group ends with the mode: one frame, ZERO passes',
+        [g.mode, g.players[0].inGame, (g.frameCtr - fc1) & 0xFF, g.pass - pass1],
+        ['play', true, 1, 0]);
+  check('...and in play the wire tick is ONE pass again', [g.wireFrames(), Math.round(g.wireSeconds() * 1000)], [1, 80]);
+  G.net.frame(0.1);
+  const pass2 = g.pass;
+  H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0]));
+  check('a play PASS is one pass, as it always was', g.pass - pass2, 1);
+  /* the RIP hold: 250 frames is 63 exchanges, not 250 */
+  g.players[0].health = 0;
+  let n = 0;
+  while (g.mode === 'play' && n < 10){ G.net.frame(0.1); H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0])); n++; }
+  check('death takes the session into the RIP hold', g.mode, 'over');
+  let m = 0;
+  while (g.mode === 'over' && m < 300){ G.net.frame(0.1); H.message(Uint8Array.from([M.PASS, ...u32(S.step), 2, 0, 0])); m++; }
+  check('the 250-frame RIP hold is 63 exchanges (four frames each), and the group runs on into the attract loop',
+        [m, g.mode, g.attractT], [63, 'attract', 2]);
+  S.phase = 'off'; S.tp = null;
+  kb.releaseAll();
+  G.seed({});
+  G.settings.reset();
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

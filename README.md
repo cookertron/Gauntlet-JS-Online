@@ -20,7 +20,7 @@ the same way.
 
 ```
 python tools/build.py     # client/template.html -> client/gauntlet.html
-node tools/headless.js    # the client test suite (1432/1432)
+node tools/headless.js    # the client test suite (1472/1472)
 ```
 
 Open `client/gauntlet.html` in a browser to play offline.
@@ -86,7 +86,7 @@ vcvars64 && cmake -S server -B server\build -G Ninja
          && ninja -C server\build
 python tools/protocheck.py                 # protocol constants in sync
 node tools/relaytest.js                    # the relay's own gate (54 checks)
-node tools/e2etest.js                      # four real clients through it (31 checks)
+node tools/e2etest.js                      # four real clients through it (32 checks)
 server\build\gauntlet-relay.exe            # run it (--port 33792 --seats 4)
 ```
 
