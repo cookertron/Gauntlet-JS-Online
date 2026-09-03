@@ -456,6 +456,18 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      BE BOUND: ENTER is the rebind capture's reserved key (skipped),
      ESC has no KEYMAP entry at all — both pinned.  `build/ui/chat.png`
      shows three bubbles, one stacked under a name tag.
+6. **FULL SCREEN — BUILT 2026-09-03.**  The PICTURE only (Anthony:
+   "render exactly how the port intends, no extension of the playing
+   field" — the 256×160 window is a rule: actors freeze outside it,
+   shots die at its edge).  `#overscan` is the fullscreen element, so
+   the whole screen is the $84CA border; `fullscreenScale` picks the
+   largest WHOLE multiple in DEVICE pixels (HiDPI-safe, or the 4x5 tag
+   font blurs); Alt+Enter toggles (the PC convention; F5 was suggested
+   and is the browser's reload, F11 the browser's own window mode),
+   as do a double-click on the canvas and a second faint corner button
+   (`#fs`).  The browser owns Escape in full screen (it leaves; the
+   page never sees it), so an open chat line closes with Enter there.
+   Pinned: the scale table, the key rule, the furniture.
 3. Netcode design — **SETTLED with Anthony 2026-08-29:**
    - **LOCKSTEP RELAY.**  Every client runs the JS sim it already has; the
      C++ server relays one direction byte per player per pass, owns the

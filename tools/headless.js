@@ -9837,5 +9837,28 @@ if (process.argv[2] === '--table') {
   G.settings.reset();
 }
 
+
+/* ====================================================================
+   FULL SCREEN (this fork, 2026-09-03): the picture at the largest whole
+   multiple that fits, Alt+Enter to toggle.  The API itself is the
+   browser's; what the suite can pin is the arithmetic, the key rule and
+   the page furniture.
+   ==================================================================== */
+{
+  const FS = G.fullscreen;
+  check('the full-screen scale is the largest WHOLE multiple that fits, in DEVICE pixels',
+        [FS.scale(1920, 1080, 1), FS.scale(1280, 720, 1), FS.scale(2560, 1440, 1),
+         FS.scale(1440, 900, 2), FS.scale(200, 100, 1)],
+        [5, 3, 7, 9, 1]);
+  check('Alt+Enter is the toggle; plain Enter (the chat), F5 (the browser\'s reload) and Ctrl+Alt+Enter are not',
+        [FS.isKey({ key: 'Enter', altKey: true }), FS.isKey({ key: 'Enter' }),
+         FS.isKey({ key: 'F5' }), FS.isKey({ key: 'Enter', altKey: true, ctrlKey: true })],
+        [true, false, false, false]);
+  checkTrue('the page carries the full-screen button beside the theme button, and says how',
+            /id="fs"/.test(html) && /Alt\+Enter, or double-click/.test(html));
+  checkTrue('the fullscreen element is the overscan frame, laid out to fill the screen',
+            /#overscan:fullscreen\{/.test(html));
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`);
 process.exit(failures ? 1 : 0);

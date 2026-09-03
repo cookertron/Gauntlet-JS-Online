@@ -22,13 +22,20 @@
              transition:background 40ms linear, border-color 140ms linear }
   canvas{ image-rendering:pixelated; background:#000; border:0; display:block;
           max-width:100%; height:auto; width:768px }
-  /* deliberately faint: it is the only thing on the page that is not the game */
-  #theme{ position:fixed; top:10px; right:12px; width:28px; height:28px;
+  /* deliberately faint: the two things on the page that are not the game */
+  #theme,#fs{ position:fixed; top:10px; right:12px; width:28px; height:28px;
           border:1px solid var(--edge); border-radius:50%; background:transparent;
           color:var(--btn); font:14px/1 system-ui,sans-serif; cursor:pointer;
           opacity:.22; transition:opacity 140ms linear, color 140ms linear;
           display:flex; align-items:center; justify-content:center; padding:0 }
-  #theme:hover,#theme:focus-visible{ opacity:1 }
+  #fs{ right:48px }
+  #theme:hover,#theme:focus-visible,#fs:hover,#fs:focus-visible{ opacity:1 }
+  /* FULL SCREEN: #overscan is the fullscreen element, so the whole screen
+     is the Spectrum border ($84CA paints it) and the picture sits centred
+     in it at the whole multiple fit() chooses -- see the fullscreen code */
+  #overscan:fullscreen{ display:flex; align-items:center; justify-content:center;
+                        width:100%; height:100%; padding:0; border:0; border-radius:0 }
+  #overscan:fullscreen canvas{ max-width:none }
 </style>
 
 <!-- THE OVERSCAN FRAME.  A real Spectrum draws a border around the 256x192
@@ -38,6 +45,8 @@
 <div id="overscan"><canvas id="scr" width="256" height="192"></canvas></div>
 <button id="theme" type="button" title="theme: system / dark / light"
         aria-label="switch theme">&#9680;</button>
+<button id="fs" type="button" title="full screen: Alt+Enter, or double-click the game"
+        aria-label="toggle full screen">&#9974;</button>
 
 <script type="application/json" id="assets">__ASSETS__</script>
 <script>
@@ -11367,6 +11376,9 @@ addEventListener('pointerdown', unlockAudio);
 const inField=e=>{const t=e.target; return !!t &&
   (t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable);};
 addEventListener('keydown',e=>{ if(inField(e))return; unlockAudio();
+  /* FULL SCREEN: Alt+Enter toggles it -- taken before the chat can read
+     the Enter, and before KEYMAP's own ENTER (the options screen's) */
+  if (fullscreenKey(e)){ e.preventDefault(); if (fullscreenToggle) fullscreenToggle(); return; }
   /* SPEECH BUBBLES: online in play, ENTER opens the line, ESC closes it,
      ENTER again sends -- and while it is open every key is the line's,
      none the game's (see netChatKey; the player stands meanwhile). */
@@ -12208,6 +12220,54 @@ requestAnimationFrame(frame);
   apply();
 })();
 
+/* ---- FULL SCREEN (this fork, 2026-09-03) --------------------------------
+   The PICTURE, not the playfield: the same 256x192 the port renders,
+   scaled to the LARGEST WHOLE MULTIPLE that fits the screen -- whole in
+   DEVICE pixels, or the 4x5 tag font and the 1 px bubble borders go
+   soft on a HiDPI display -- and letterboxed in the border colour:
+   #overscan is the fullscreen element and $84CA paints it, so the whole
+   screen IS the Spectrum border, as on a television.  The window is a
+   RULE (actors freeze outside it, shots die at its edge), so nothing
+   here shows more dungeon.
+   Alt+Enter toggles it: the PC convention for exactly this, and a chord
+   no browser claims.  (F5 was suggested and is every browser's RELOAD;
+   F11 is the browser's own window-fullscreen, which does not fit the
+   picture.)  A double-click on the game and the faint corner button do
+   the same.  The browser owns Escape in full screen -- it leaves, and
+   the page never sees the key -- so a chat line open in full screen
+   closes with Enter, not Escape. */
+function fullscreenScale(w, h, dpr){
+  const d = dpr || 1;
+  return Math.max(1, Math.floor(Math.min(w * d / 256, h * d / 192)));
+}
+function fullscreenKey(e){
+  return !!e && e.key === 'Enter' && !!e.altKey && !e.ctrlKey && !e.metaKey;
+}
+let fullscreenToggle = null;
+(function(){
+  const box = OVERSCAN, btn = el('fs');
+  /* headless has a stub document and no fullscreen API: nothing to do */
+  if (!box || !cvs || !box.requestFullscreen){ if (btn) btn.hidden = true; return; }
+  const active = () => document.fullscreenElement === box;
+  function fit(){
+    if (active()){
+      const dpr = devicePixelRatio || 1;
+      const s = fullscreenScale(innerWidth, innerHeight, dpr) / dpr;   // CSS px per game px
+      cvs.style.width = (s * 256) + 'px'; cvs.style.height = (s * 192) + 'px';
+    } else { cvs.style.width = ''; cvs.style.height = ''; }
+  }
+  function toggle(){
+    if (active()){ if (document.exitFullscreen) document.exitFullscreen(); return; }
+    const p = box.requestFullscreen();
+    if (p && p.catch) p.catch(() => {});
+  }
+  document.addEventListener('fullscreenchange', fit);
+  addEventListener('resize', fit);
+  cvs.addEventListener('dblclick', toggle);
+  if (btn) btn.onclick = () => { toggle(); btn.blur(); };
+  fullscreenToggle = toggle;
+})();
+
 
 globalThis.__GAUNTLET__={
   Game,game,render,assets:A,
@@ -12222,6 +12282,7 @@ globalThis.__GAUNTLET__={
   settings:{save:settingsSave, load:settingsLoad, reset:settingsReset,
       get slowdown(){ return loadSlowdown; },
       set slowdown(v){ loadSlowdown = !!v; }},
+  fullscreen:{ scale:fullscreenScale, isKey:fullscreenKey },
   constants:{FRAMES_PER_PASS,FRAME_HZ,PASS_SECONDS,STEP,MAP_W,MAP_H,UNITS,PXU,
              OVER_RIP_FRAMES:Game.OVER_RIP_FRAMES,
              CELL,PLAYFIELD_ROWS,CAM_MIN,CAM_CX,CAM_CY,

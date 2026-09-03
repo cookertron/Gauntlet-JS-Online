@@ -48,6 +48,11 @@ little punctuation), shown as a speech bubble over your character on
 every screen that can see you, for five seconds.  You stand still while
 you type.  ENTER and ESC cannot be bound to anything else.
 
+**Full screen.**  Alt+Enter (or a double-click on the game, or the
+corner button) shows the same 256x192 picture at the largest whole
+multiple that fits your screen, letterboxed in the Spectrum border.
+Alt+Enter again, or Escape, comes back.
+
 The original's hurry-up -- doors opening, then every wall becoming an
 exit, after minutes of nobody shooting or picking anything up -- is off
 in this build: a table of four waiting on each other is not idling.
