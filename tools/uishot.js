@@ -137,6 +137,19 @@ g.players[1].score = 0x004200; g.players[1].keys = 1;
 g.players[2].score = 0x017350; g.players[2].health = 0x0850; g.players[2].potions = 2;
 g.players[3].score = 0x000090; g.players[3].keys = 12; g.players[3].p14 |= 0x05;
 save(outdir, 'hud.png', cap => G.render(cap, g));
+/* ---------- speech bubbles: two lines over one player, one over another,
+   the third's stacked under a name tag ----------------------------------- */
+{
+  const c = G.seed({});
+  c.mode = 'play'; c.jumpToLevel(1); c.introShow = null; c.bannerShow = null;
+  c.autoJoin(4); c.names[0] = 'ANTHONY'; c.names[2] = 'NITRO 5';
+  for (let i = 0; i < 12; i++) c.onePass({ down: true, p2: { down: true, right: true },
+                                          p3: { down: true }, p4: { down: true, right: true } });
+  c.chat[0] = { text: 'THE QUICK BROWN FOX JUMPS OVER', until: Infinity };
+  c.chat[1] = { text: 'HI ALL!', until: Infinity };
+  c.chat[3] = { text: 'WHO HAS THE KEY?', until: Infinity };
+  save(outdir, 'chat.png', cap => G.render(cap, c));
+}
 /* ...and the same band with two seats empty: an out block's quarter is blank */
 {
   const g2 = G.seed({});

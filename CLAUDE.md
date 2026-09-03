@@ -21,14 +21,14 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
   an ISP box, its "external" address 192.168.1.239).  Build inside
   vcvars64:
   `cmake -S server -B server\build -G Ninja && ninja -C server\build`.
-- `shared/PROTOCOL.md` + `shared/protocol.json` — the wire contract, v1.
+- `shared/PROTOCOL.md` + `shared/protocol.json` — the wire contract, v3.
   The JSON is the source of truth; `python tools/protocheck.py` holds
-  the C++ constants block to it (33 constants, both directions).
-- `tools/relaytest.js` — the relay's empirical gate (50 checks): spawns
+  the C++ constants block to it (36 constants, both directions).
+- `tools/relaytest.js` — the relay's empirical gate (54 checks): spawns
   the exe, speaks real WebSocket at it (own client, every frame byte
   controlled), plays the full protocol conversation, then a four-seat
   run.
-- `tools/e2etest.js` — the full stack (30 checks): real client sims
+- `tools/e2etest.js` — the full stack (31 checks): real client sims
   (vm sandboxes on the BUILT file) through the real relay — two, a late
   joiner, then a fourth and a fifth: FOUR PLAYERS in one game, a sixth
   refused; the proof that browser windows play.  `tools/wsmini.js` is
@@ -354,32 +354,46 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      RASTERIZE the draw list: the captured panel art is painted first
      and the quarter's fill covers it.  `build/ui/hud.png` shows four
      in, `hud2.png` two.
-5. **QUEUED — SPEECH BUBBLES (Anthony, 2026-09-01).**  Chat messages
-   drawn as a speech bubble from the player's sprite, in the game's
-   own graphical style.  His spec, verbatim where it matters: max 32
-   characters; ENTER opens the text box in game; ESC closes it, ENTER
-   again sends.  Design notes from the survey:
-   - Display metadata end to end, the NAMES pattern exactly: a new
-     MSG_CHAT (13 is NAMES, so 14) client->server with the text, the
-     relay sanitizes (the tag font's charset: upper A-Z 0-9 space —
-     the micro font has no other glyphs) and broadcasts it stamped
-     with the SEAT.  Never in the sim, the snapshot, or fingerprint().
-     A light rate limit relay-side (spam guard).  protocheck +1.
-   - The bubble rides the TAG PASS machinery (position over the
-     sprite, stacking, playfield clipping): Spectrum-styled box (1 px
-     border, paper behind micro-font text, a small tail to the
-     sprite), 32 chars wrapped as two 16-char lines (16x5 = 79 px;
-     one 160 px line would span most of the window), shown ~4-5 s,
-     newest replaces.  The MEETING gate does NOT apply — a bubble is
-     deliberate speech — but it clips like a tag: a viewer whose
-     window doesn't hold the speaker misses it (v1; acceptable).
-   - ENTER is FREE in play (only the options screen reads it) and ESC
-     is unmapped (KEYMAP grows Escape).  While composing, the keydown
-     handler feeds a compose buffer directly (real typing, not the
-     rebind's release-gated capture) and `netLocalDir()` returns 0 —
-     the player stands, which is just a byte on the wire, sim-safe.
-     Compose UI candidate: the bubble itself, live over your own head
-     as you type.  ONLINE-only (offline has nobody to talk to).
+5. **SPEECH BUBBLES — BUILT 2026-09-03** (Anthony's spec 2026-09-01:
+   max 32 characters; ENTER opens the line in game, ESC closes it,
+   ENTER again sends; headless 1402 → 1432, relaytest 50 → 54, e2e
+   30 → 31, protocol v3, protocheck 36).  Display metadata end to end,
+   the NAMES pattern exactly:
+   - **The wire:** MSG_CHAT (16; 14/15 were taken by PING/PONG) C→S
+     `u8 len, text` and S→C `u8 seat, u8 len, text`; `chatLen` 32;
+     the relay sanitizes to the micro font's charset — upper A-Z 0-9
+     space and the punctuation `. , ? ! ' -` ADDED to TAG_FONT for
+     speech (names stay A-Z 0-9 space) — cuts to 32, stamps the SEAT
+     and echoes to everyone seated, the SPEAKER INCLUDED (his bubble
+     rises on the echo like everyone's: one path, one timing); one
+     line per seat per `limits.chatMinMs` (500), the rest and empty
+     lines dropped silently; an unseated CHAT drops the connection.
+     `game.chat[seat] = {text, until}` (until = netNow + CHAT_MS,
+     5 s), reset() clears it, restore() preserves it like names;
+     never in fingerprint() or the snapshot (both pinned).
+   - **The bubble** (drawBubbles, called from the TAG PASS with its
+     `placed` list — the tag records grew an `h`): the sprite's own
+     draw arithmetic anchors it, a DEAD speaker's at his RIP cell; two
+     lines of 16 via `chatLines` (wrap at a space inside 16 when the
+     tail also fits, else hard split); 1 px border in the speaker's
+     panel ink (steady, no flash), bright white paper, black micro
+     text, a two-row tail; placed above the sprite, stepping up past
+     tags/bubbles, else BELOW with the tail up (the window's top edge,
+     where a sprite has no room above); clipped to the playfield like
+     a tag; NO meeting gate.  The newest line replaces the last.
+   - **Composing:** `netChatKey(key)` is the keydown handler's first
+     stop (before KEYMAP): online, live, in play, for a player in the
+     game or lying dead, ENTER opens `net.compose`; then every key is
+     the line's — letters/digits/space/punctuation upper-cased,
+     Backspace, cap 32, all else swallowed — ESC closes (nothing
+     sent), ENTER sends the trimmed line.  `netLocalDir()` returns 0
+     while a line is open (the player STANDS: just a byte on the
+     wire; mutation-verified), the overlay says ENTER SENDS  ESC
+     CANCELS, and your own bubble shows the line so far with a
+     blinking `_` cursor — the text box IS the bubble.  ENTER falls
+     through to KEYMAP (the options screen's own) whenever the chat
+     does not take it.  `build/ui/chat.png` shows three bubbles, one
+     stacked under a name tag.
 3. Netcode design — **SETTLED with Anthony 2026-08-29:**
    - **LOCKSTEP RELAY.**  Every client runs the JS sim it already has; the
      C++ server relays one direction byte per player per pass, owns the

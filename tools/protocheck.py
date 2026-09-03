@@ -26,12 +26,14 @@ expected = {
     'DEFAULT_SEATS': P['defaultSeats'],
     'FP_EVERY': P['fpEvery'],
     'NAME_LEN': P['nameLen'],
+    'CHAT_LEN': P['chatLen'],
     'LIM_FRAME_MAX': P['limits']['frameMax'],
     'LIM_MESSAGE_MAX': P['limits']['messageMax'],
     'LIM_HANDSHAKE_MAX': P['limits']['handshakeMax'],
     'LIM_INPUT_MS': P['limits']['inputTimeoutMs'],
     'LIM_HANDSHAKE_MS': P['limits']['handshakeTimeoutMs'],
     'LIM_SYNC_MS': P['limits']['syncTimeoutMs'],
+    'LIM_CHAT_MS': P['limits']['chatMinMs'],
 }
 for name, v in P['msgs'].items():
     expected['MSG_' + name] = v

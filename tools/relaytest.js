@@ -205,6 +205,26 @@ async function main(){
     check('a seated PING mid-session is answered at once, loop untouched',
           (await c0.expect(M.PONG)).readUInt32LE(1), 42);
 
+    /* ---- CHAT: sanitized, stamped, echoed to every seat; spam-guarded */
+    c0.msg(M.CHAT, 16, Buffer.from('hello, world! @#'));
+    const ch0 = await c0.expect(M.CHAT), ch1 = await c1.expect(M.CHAT);
+    check('a CHAT line echoes to BOTH seats stamped with the speaker\'s seat, upper-cased, junk to space',
+          [ch0[1], ch0[2], ch0.subarray(3).toString(), ch1[1], ch1.subarray(3).toString()],
+          [0, 16, 'HELLO, WORLD!   ', 0, 'HELLO, WORLD!   ']);
+    c0.msg(M.CHAT, 5, Buffer.from('AGAIN'));
+    await c1.silent(300);
+    checkTrue('a second line inside chatMinMs is DROPPED without a word (the spam guard)', true);
+    await sleep(400);
+    c0.msg(M.CHAT, 40, Buffer.from('Y'.repeat(40)));
+    const ch2 = await c1.expect(M.CHAT);
+    check('...after the window a line speaks again, cut to chatLen (32)',
+          [ch2[2], ch2.subarray(3).toString()], [32, 'Y'.repeat(32)]);
+    await c0.expect(M.CHAT);
+    await sleep(600);
+    c1.msg(M.CHAT, 0);
+    await c0.silent(200);
+    checkTrue('an EMPTY line is dropped too', true);
+
     /* ---- pure lockstep: a missing input HOLDS the loop --------------- */
     c0.msg(M.INPUT, U32(pass), 0x11);
     await c0.silent(300);

@@ -263,6 +263,13 @@ async function main(){
               four.every(c => JSON.stringify(at(c)) === JSON.stringify(at(A))),
               JSON.stringify(before) + ' -> ' + JSON.stringify(at(A)));
     checkTrue('...fingerprints equal', four.every(c => c.G.game.fingerprint() === A.G.game.fingerprint()));
+    /* ---- CHAT: a line typed on A rises on every sim ------------------- */
+    for (const k of ['Enter', 'h', 'i', ' ', 'a', 'l', 'l', '!', 'Enter']) A.G.net.chatKey(k);
+    await until(four, () => four.every(c => c.G.game.chat[0] && c.G.game.chat[0].text === 'HI ALL!'),
+                'a line typed on A (ENTER, the keys, ENTER) reaches every sim as seat 0\'s speech');
+    await barrierN(four, 'after the chat');
+    checkTrue('...and the lockstep did not notice', four.every(c => c.G.game.fingerprint() === A.G.game.fingerprint()));
+
     /* ---- a fifth is refused ------------------------------------------- */
     const F = loadClient('F');
     F.G.net.start('e2e', { char: 0, method1: 3, zonePotion: false, name: 'five' }, vmTransport());

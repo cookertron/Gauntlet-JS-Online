@@ -20,7 +20,7 @@ the same way.
 
 ```
 python tools/build.py     # client/template.html -> client/gauntlet.html
-node tools/headless.js    # the client test suite (1399/1399)
+node tools/headless.js    # the client test suite (1432/1432)
 ```
 
 Open `client/gauntlet.html` in a browser to play offline.
@@ -41,6 +41,12 @@ running.  After a game ends the attract screen waits for
 FIRE to begin the next one, exactly as the arcade did.  Opening the
 page from disk (or setting SERVER LOCAL) plays offline;
 `?server=host:port` joins a relay from a page hosted elsewhere.
+
+**Chat.**  In play, ENTER opens a line of speech, ESC closes it, ENTER
+again sends it: up to 32 characters (letters, digits, space and a
+little punctuation), shown as a speech bubble over your character on
+every screen that can see you, for five seconds.  You stand still while
+you type.
 
 If a session stutters, paste `__GAUNTLET__.net.info()` from the
 browser console (F12) on BOTH machines.  It names each machine's
@@ -66,8 +72,8 @@ The C++ relay server (`server/relay.cpp`, protocol in
 vcvars64 && cmake -S server -B server\build -G Ninja
          && ninja -C server\build
 python tools/protocheck.py                 # protocol constants in sync
-node tools/relaytest.js                    # the relay's own gate (50 checks)
-node tools/e2etest.js                      # four real clients through it (30 checks)
+node tools/relaytest.js                    # the relay's own gate (54 checks)
+node tools/e2etest.js                      # four real clients through it (31 checks)
 server\build\gauntlet-relay.exe            # run it (--port 33792 --seats 4)
 ```
 

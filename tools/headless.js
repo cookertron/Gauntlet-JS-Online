@@ -8204,7 +8204,7 @@ if (process.argv[2] === '--table') {
 {
   const F = G.frontend;
   const NP = G.assets.protocol, M = NP.msgs, S = G.net.state;
-  checkTrue('the protocol constants ship inside the client', !!NP && NP.version === 2);
+  checkTrue('the protocol constants ship inside the client', !!NP && NP.version === 3);
   const sent = [];
   let H = null;
   const tpF = (url, h) => { H = h; return { send: b => sent.push(Array.from(b)), close(){} }; };
@@ -9505,6 +9505,148 @@ if (process.argv[2] === '--table') {
     G.frontend.liveKb.releaseAll();
   }
 
+  G.seed({});
+  G.settings.reset();
+}
+
+
+/* ====================================================================
+   SPEECH BUBBLES (this fork; Anthony's spec, CLAUDE.md planned work 5).
+   Chat is display metadata end to end -- the NAMES pattern: a CHAT line
+   out, the relay's stamped echo in, a bubble over the speaker's sprite,
+   never the sim's.  Driven through the mock transport and the compose
+   feed the DOM keydown handler calls (netChatKey).
+   ==================================================================== */
+{
+  const F = G.frontend;
+  const NP = G.assets.protocol, M = NP.msgs, S = G.net.state;
+  const sent = [];
+  let H = null;
+  const tpF = (url, h) => { H = h; return { send: b => sent.push(Array.from(b)), close(){} }; };
+  const u32 = v => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+  const lastOf = t => { for (let i = sent.length - 1; i >= 0; i--)
+                          if (sent[i][0] === t) return sent[i]; return null; };
+  const kb = F.liveKb; kb.releaseAll();
+  check('the protocol carries CHAT (16) and chatLen 32', [M.CHAT, NP.chatLen], [16, 32]);
+  check('chatLines wraps at a space inside sixteen, else hard, never past two lines',
+        [G.net.chatLines('HI'), G.net.chatLines('THE QUICK BROWN FOX JUMPS OVER'),
+         G.net.chatLines('ABCDEFGHIJKLMNOPQRSTUVWXYZ012345'), G.net.chatLines('A BCDEFGHIJKLMNOPQRSTUVWXYZ01234')],
+        [['HI'], ['THE QUICK BROWN', 'FOX JUMPS OVER'],
+         ['ABCDEFGHIJKLMNOP', 'QRSTUVWXYZ012345'], ['A BCDEFGHIJKLMNO', 'PQRSTUVWXYZ01234']]);
+  /* offline nothing opens */
+  S.phase = 'off';
+  check('OFFLINE, ENTER is not a chat key (nobody to talk to)', G.net.chatKey('Enter'), false);
+
+  /* a four-seat session, seat 1, everyone in */
+  G.net.start('ws://mockchat', { char: 1, method1: 3, zonePotion: false }, tpF);
+  H.open();
+  H.message(Uint8Array.from([M.WELCOME, 1, 4, ...u32(0xC0FFEE), NP.welcomeModes.FRESH, ...u32(0)]));
+  H.message(Uint8Array.from([M.CHARS, 0, 1, 2, 3]));
+  check('in the attract LOBBY, ENTER is not a chat key either (no sprite to speak from)',
+        [S.phase, G.game.mode, G.net.chatKey('Enter'), S.compose], ['live', 'attract', false, null]);
+  G.net.frame(0.06);
+  H.message(Uint8Array.from([M.PASS, ...u32(0), 4, 0x10, 0x10, 0x10, 0x10, 0, 0, 0, 0]));
+  G.net.frame(0);
+  check('four in the game', [G.game.mode, G.game.players.every(q => q.inGame)], ['play', true]);
+
+  /* ---- the compose line ---------------------------------------------- */
+  kb.press('D');                                    // method 3 RIGHT, held throughout
+  G.net.frame(0.1);
+  check('before the line opens the held key reaches the wire', lastOf(M.INPUT)[5] & 0x0F, 0x08);
+  H.message(Uint8Array.from([M.PASS, ...u32(1), 4, 8, 0, 0, 0, 0, 0, 0, 0]));
+  G.net.frame(0);
+  check('ENTER opens the line', [G.net.chatKey('Enter'), S.compose], [true, '']);
+  sent.length = 0;
+  G.net.frame(0.1);
+  check('...and while it is open the wire carries 0: the player STANDS with RIGHT still held',
+        lastOf(M.INPUT)[5], 0);
+  H.message(Uint8Array.from([M.PASS, ...u32(2), 4, 0, 0, 0, 0, 0, 0, 0, 0]));
+  G.net.frame(0);
+  for (const k of ['h', 'i', ' ', 'a', 'l', 'l', '?', '@', '1', 'Backspace', '!', '\'', '-']) G.net.chatKey(k);
+  check('typing upper-cases, keeps the micro font\'s punctuation, drops what it cannot draw, rubs out on Backspace',
+        S.compose, 'HI ALL?!\'-');
+  for (let i = 0; i < 40; i++) G.net.chatKey('X');
+  check('...and stops at chatLen (32)', S.compose.length, 32);
+  check('a movement key while the line is open is the LINE\'s, not the game\'s (swallowed)',
+        [G.net.chatKey('ArrowLeft'), G.net.chatKey('F12'), S.compose.length], [true, true, 32]);
+  check('ESC closes the line and sends nothing', [G.net.chatKey('Escape'), S.compose, lastOf(M.CHAT)], [true, null, null]);
+  G.net.chatKey('Enter'); G.net.chatKey('Enter');
+  check('ENTER on an empty line closes it and sends nothing', [S.compose, lastOf(M.CHAT)], [null, null]);
+  G.net.chatKey('Enter');
+  for (const k of ['g', 'o', ' ', 'l', 'e', 'f', 't', ' ']) G.net.chatKey(k);
+  check('ENTER on a line SENDS it: CHAT, the length, the bytes, trailing space trimmed; the line closes',
+        [G.net.chatKey('Enter'), S.compose, lastOf(M.CHAT)],
+        [true, null, [M.CHAT, 7].concat(Array.from('GO LEFT', c => c.charCodeAt(0)))]);
+  G.net.frame(0.1);
+  check('...and the next byte is the held key again', lastOf(M.INPUT)[5] & 0x0F, 0x08);
+  kb.releaseAll();
+
+  /* ---- the echo and the bubble ----------------------------------------- */
+  const paint = () => { recording = true; drawCalls.length = 0;
+                        G.render(ctxStub, G.game); recording = false;
+                        return drawCalls.slice(); };
+  /* the PAPER is the one white fill taller than a sprite row */
+  const papers = list => list.filter(c => c[0] === 'fillRect' && c[5] === '#ffffff' && c[4] >= 7 && c[2] < 160);
+  const fp0 = G.game.fingerprint();
+  check('no bubble yet: no paper on the playfield', papers(paint()).length, 0);
+  H.message(Uint8Array.from([M.CHAT, 2, 8].concat(Array.from('HI THERE', c => c.charCodeAt(0)))));
+  check('the relay\'s echo lands on game.chat for the stamped seat, with a life',
+        [G.game.chat[2] && G.game.chat[2].text, G.game.chat[2] && G.game.chat[2].until > 0,
+         G.game.chat[0], G.game.chat[1], G.game.chat[3]], ['HI THERE', true, null, null, null]);
+  const L1 = paint();
+  const pp = papers(L1);
+  check('...and a bubble rises: one paper, one line tall (13 px wide per glyph x 8 + 2 px of border)',
+        [pp.length, pp[0] && pp[0][4], pp[0] && pp[0][3]], [1, 7, 8 * 5 - 1 + 2]);
+  {
+    const q = G.game.players[2], d = G.game.players[G.game.localIdx];
+    /* the sprite's own draw arithmetic (SPRITE_DX/DY are 0 in the asset);
+       at the window's top edge the bubble goes UNDER the sprite, tail up */
+    const psx = (((q.x - d.camX) & 0x7E) >> 1) * 8, psy = (((q.y - d.camY) & 0x7E) >> 1) * 8;
+    const paper = pp[0];
+    const above = paper[2] + paper[4] + 2 <= psy, below = paper[2] - 2 >= psy + 16;
+    checkTrue('...over the SPEAKER\'s sprite (under it at the window\'s top edge), centred on him',
+              (above || below) && Math.abs((paper[1] + paper[3] / 2) - (psx + 8)) <= 2,
+              JSON.stringify([paper, psx, psy]));
+    const border = L1.filter(c => c[0] === 'fillRect' && c[2] === paper[2] - 1 && c[1] === paper[1] - 1);
+    checkTrue('...bordered in the speaker\'s own ink (the wizard, block 3: bright yellow)',
+              border.length === 1 && border[0][5] === '#ffff00');
+    const textPx = L1.filter(c => c[0] === 'fillRect' && c[5] === '#000000' && c[3] === 1 && c[4] === 1 &&
+                             c[1] > paper[1] && c[1] < paper[1] + paper[3] && c[2] > paper[2] && c[2] < paper[2] + paper[4]);
+    checkTrue('...the line in black on the paper', textPx.length > 20);
+  }
+  check('SPEECH IS NOT SIM STATE: the fingerprint did not move', G.game.fingerprint(), fp0);
+  checkTrue('...and the snapshot wire does not carry it', !('chat' in JSON.parse(JSON.stringify(G.game.snapshot())).game));
+  G.game.chat[2].until = 0;
+  check('the bubble goes when its life is up', papers(paint()).length, 0);
+  /* a two-line bubble, and the newest line replaces the last */
+  H.message(Uint8Array.from([M.CHAT, 2, 30].concat(Array.from('THE QUICK BROWN FOX JUMPS OVER', c => c.charCodeAt(0)))));
+  const p2 = papers(paint());
+  check('a thirty-character line: one bubble, two lines tall, the longer line\'s width',
+        [p2.length, p2[0][4], p2[0][3]], [1, 13, 15 * 5 - 1 + 2]);
+  H.message(Uint8Array.from([M.CHAT, 2, 2].concat(Array.from('OK', c => c.charCodeAt(0)))));
+  check('...the next line REPLACES it', [G.game.chat[2].text, papers(paint())[0][3]], ['OK', 2 * 5 - 1 + 2]);
+  /* the composing bubble: your own line, live, with a cursor */
+  G.net.chatKey('Enter');
+  for (const k of ['y', 'o']) G.net.chatKey(k);
+  const pc = papers(paint());
+  check('while composing, YOUR bubble shows the line so far (plus the cursor cell): two papers now',
+        [pc.length, pc.some(p => p[3] === 3 * 5 - 1 + 2)], [2, true]);
+  G.net.chatKey('Escape');
+  check('...and ESC takes it down', papers(paint()).length, 1);
+  /* a dead speaker speaks from his corpse */
+  G.game.players[2].health = 0;
+  G.game.onePass({});
+  H.message(Uint8Array.from([M.CHAT, 2, 3].concat(Array.from('RIP', c => c.charCodeAt(0)))));
+  check('a dead player\'s line rises from his corpse (the RIP cell)',
+        [G.game.players[2].died, papers(paint()).length], [true, 1]);
+  /* restore keeps the receiver's own live speech, as it keeps names */
+  {
+    const wire = JSON.stringify(G.game.snapshot());
+    G.game.restore(JSON.parse(wire));
+    check('restore() preserves game.chat (the receiver\'s own display state)', G.game.chat[2] && G.game.chat[2].text, 'RIP');
+  }
+  S.phase = 'off'; S.tp = null; S.compose = null;
+  G.frontend.liveKb.releaseAll();
   G.seed({});
   G.settings.reset();
 }

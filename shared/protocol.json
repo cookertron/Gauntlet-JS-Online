@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "port": 33792,
   "maxSeats": 4,
   "defaultSeats": 4,
@@ -11,7 +11,8 @@
     "handshakeMax": 8192,
     "inputTimeoutMs": 10000,
     "handshakeTimeoutMs": 5000,
-    "syncTimeoutMs": 15000
+    "syncTimeoutMs": 15000,
+    "chatMinMs": 500
   },
   "msgs": {
     "HELLO": 1,
@@ -28,7 +29,8 @@
     "CHARS": 12,
     "NAMES": 13,
     "PING": 14,
-    "PONG": 15
+    "PONG": 15,
+    "CHAT": 16
   },
   "errors": {
     "FULL": 1,
@@ -39,5 +41,6 @@
   "welcomeModes": {
     "FRESH": 0,
     "SNAPSHOT": 1
-  }
+  },
+  "chatLen": 32
 }

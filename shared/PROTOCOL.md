@@ -55,6 +55,7 @@ One message = `u8 type` then the fields.  C→S / S→C marks direction.
 | 13   | NAMES   | S→C | `maxSeats × nameLen × u8` name per seat, space-padded |
 | 14   | PING    | C→S | `u32 tag` — answered at once, seat or no seat, ahead of every other duty |
 | 15   | PONG    | S→C | `u32 tag` echoed verbatim                          |
+| 16   | CHAT    | C→S and S→C | C→S: `u8 len, len × u8 text` (len ≤ `chatLen`); S→C: `u8 seat, u8 len, len × u8 text` — the line sanitized (uppercase A-Z, 0-9, space, `. , ? ! ' -`), stamped with the speaker's seat, echoed to everyone seated |
 
 `dir` is the engine's own per-pass direction byte
 (up/down/left/right/fire/potion — the unit the sim always read).
@@ -89,6 +90,16 @@ One message = `u8 type` then the fields.  C→S / S→C marks direction.
   stays with his standing block mid-game — whoever reuses the seat
   overwrites it — and clears with his pick pre-start.  Names never
   enter the sim, the snapshot, or the fingerprint.
+* **Chat is display metadata**, the names rule again: a client sends
+  CHAT with a line of up to `chatLen` (32) characters; the server
+  sanitizes it to the micro font's charset, cuts it to `chatLen`,
+  stamps it with the sender's seat and echoes it to every seated
+  client — the sender included, so his own bubble rises on the echo
+  like everyone's.  A seat may speak once per `limits.chatMinMs`;
+  lines inside that window are dropped silently (the spam guard), as
+  are empty ones.  An unseated CHAT drops the connection.  Chat never
+  enters the sim, the snapshot, or the fingerprint; the client shows a
+  line as a speech bubble over the speaker's sprite for a few seconds.
 * **The page is the server.**  A plain HTTP `GET /` (no `Upgrade`
   header) on the same port answers with `client/gauntlet.html`, so the
   server's address is the page's own origin and the client needs no
@@ -134,3 +145,6 @@ its trailing per-seat wait bytes and PING/PONG were added.  Neither
 changes the lockstep; both exist so that a slow session can be
 measured — the far seat's clean round trip, and how long each seat's
 byte waited at the relay — before any transport redesign is chosen.
+
+Version 3 (2026-09-03): CHAT (16) was added — display metadata only;
+the lockstep is untouched.

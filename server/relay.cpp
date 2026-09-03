@@ -54,18 +54,20 @@
    tools/protocheck.py parses this block by the `= value;` on each line;
    change shared/protocol.json first, then here, and the checker holds
    the two together. */
-constexpr uint8_t  PROTO_VERSION       = 2;
+constexpr uint8_t  PROTO_VERSION       = 3;
 constexpr uint16_t DEFAULT_PORT        = 33792;
 constexpr int      MAX_SEATS           = 4;
 constexpr int      DEFAULT_SEATS       = 4;
 constexpr uint32_t FP_EVERY            = 32;
 constexpr int      NAME_LEN            = 8;
+constexpr int      CHAT_LEN            = 32;
 constexpr uint32_t LIM_FRAME_MAX       = 262144;
 constexpr uint32_t LIM_MESSAGE_MAX     = 1048576;
 constexpr uint32_t LIM_HANDSHAKE_MAX   = 8192;
 constexpr uint32_t LIM_INPUT_MS        = 10000;
 constexpr uint32_t LIM_HANDSHAKE_MS    = 5000;
 constexpr uint32_t LIM_SYNC_MS         = 15000;
+constexpr uint32_t LIM_CHAT_MS         = 500;
 constexpr uint8_t  MSG_HELLO           = 1;
 constexpr uint8_t  MSG_WELCOME         = 2;
 constexpr uint8_t  MSG_INPUT           = 3;
@@ -81,6 +83,7 @@ constexpr uint8_t  MSG_CHARS           = 12;
 constexpr uint8_t  MSG_NAMES           = 13;
 constexpr uint8_t  MSG_PING            = 14;
 constexpr uint8_t  MSG_PONG            = 15;
+constexpr uint8_t  MSG_CHAT            = 16;
 constexpr uint8_t  ERR_FULL            = 1;
 constexpr uint8_t  ERR_VERSION         = 2;
 constexpr uint8_t  ERR_PROTOCOL        = 3;
@@ -516,6 +519,7 @@ struct Conn {
   bool hasFp = false;
   uint32_t fpPass = 0, fpVal = 0;
   uint64_t bornMs = 0;            // for the handshake timeout
+  uint64_t chatAtMs = 0;          // the last CHAT accepted (the spam guard)
 };
 
 /* ---- the session ------------------------------------------------------ */
@@ -892,6 +896,37 @@ struct Relay {
         m.insert(m.end(), p, p + 4);              // the tag, verbatim
         queueMsg(c, m);
         flushTx(c);
+        break;
+      }
+      case MSG_CHAT: {
+        /* SPEECH BUBBLES -- display metadata, the NAMES pattern exactly:
+           never the sim's.  The line is sanitized to the micro font's
+           charset (uppercase A-Z, 0-9, space and . , ? ! ' -), cut to
+           CHAT_LEN, stamped with the SEAT and echoed to everyone seated,
+           the speaker included -- his bubble rises on the echo like
+           everyone's.  A seat may speak once per LIM_CHAT_MS; anything
+           inside that window is dropped without a word (the spam guard).
+           The relay never looks at the game; it does not here either. */
+        if (c.seat < 0){ drop(c, "CHAT unseated"); return; }
+        if (n < 1){ drop(c, "bad CHAT"); return; }
+        size_t len = p[0]; if (len > size_t(CHAT_LEN)) len = CHAT_LEN;
+        if (n < 1 + len){ drop(c, "bad CHAT"); return; }
+        if (len == 0) break;
+        uint64_t tNow = now();
+        if (c.chatAtMs && tNow - c.chatAtMs < LIM_CHAT_MS) break;
+        c.chatAtMs = tNow;
+        std::vector<uint8_t> m; m.push_back(MSG_CHAT);
+        m.push_back(uint8_t(c.seat)); m.push_back(uint8_t(len));
+        for (size_t j=0;j<len;j++){
+          uint8_t ch = p[1 + j];
+          if (ch >= 'a' && ch <= 'z') ch = uint8_t(ch - 32);
+          if (!(ch == ' ' || (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') ||
+                ch == '.' || ch == ',' || ch == '?' || ch == '!' || ch == '\'' || ch == '-'))
+            ch = ' ';
+          m.push_back(ch);
+        }
+        for (auto& o : conns)
+          if (o->open && o->state == Conn::UP && o->seat >= 0) queueMsg(*o, m);
         break;
       }
       case MSG_FP: {

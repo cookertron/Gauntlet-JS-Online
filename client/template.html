@@ -4338,6 +4338,10 @@ class Game{
        Never fingerprinted, never in the snapshot manifest, and no sim
        rule ever reads one. */
     this.names = ['', '', '', ''];
+    /* SPEECH BUBBLES (this fork) -- display-only, the names rule again:
+       one live line per block, {text, until}, written by the relay's
+       CHAT echo, read by drawBubbles() and by nothing in the sim. */
+    this.chat = [null, null, null, null];
     for (const q of this.players){
       q.camX = A.player.cam_x; q.camY = A.player.cam_y;
       q.camTgtX = 0; q.camTgtY = 0;
@@ -9810,9 +9814,11 @@ class Game{
     if (!s || s.v !== 2) throw new Error('SNAPSHOT V' + (s && s.v));
     const li = this.localIdx | 0;       // the receiver's own display choice
     const nm = this.names;              // ...and the receiver's own name table
+    const ch = this.chat;               // ...and his own live speech
     this.reset(s.cfg);
     this.localIdx = li;
     this.names = nm;
+    this.chat = ch;
     for (const k of SNAP_GAME) this[k] = s.game[k];
     this.scal = difficulty(this.level); // derived, as levelInit derives it
     this.map = s.map.map(r => r.slice());
@@ -10404,6 +10410,11 @@ const TAG_FONT = {
   Y:'99644', Z:'F248F', '0':'6BD96', '1':'4C44E', '2':'E168F',
   '3':'E161E', '4':'99F11', '5':'F8E1E', '6':'78E96', '7':'F1244',
   '8':'69696', '9':'6971E',
+  /* the CHAT's punctuation and its cursor (ADDED with the speech
+     bubbles): a NAME stays A-Z 0-9 space, a line of speech may also
+     carry these -- the relay's sanitizer and CHAT_OK agree on the set */
+  '.':'00004', ',':'00048', '?':'69202', '!':'44404', "'":'44000', '-':'00E00',
+  '_':'0000F',
 };
 /* the name a tag wears: the player's SET name, else his CHARACTER's own.
    The character text prefers block A's class_names entry (charInfo's
@@ -10470,6 +10481,87 @@ function drawMicroIcon(ctx, rows, x, ty, colour){
     const bits = parseInt(rows[r], 16);
     for (let b = 0; b < MICRO_ICON_W; b++)
       if (bits & (0x80 >> b)) ctx.fillRect(x + b, ty + r, 1, 1);
+  }
+}
+
+/* ---- SPEECH BUBBLES (this fork; Anthony's spec, 2026-09-01) ----------
+   A line of chat rises from the speaker's sprite as a Spectrum-styled
+   bubble: a 1 px border in the speaker's own ink, bright white paper,
+   the micro font in black, a two-row tail to the sprite.  Up to
+   chatLen (32) characters, wrapped as two lines of sixteen -- at a
+   space where one falls, else hard: 16 x 5 = 79 px, half the window.
+   The bubble RIDES THE TAG PASS: the sprite's own position (a corpse's
+   RIP cell when he is dead), the same stacking list so it never covers
+   a name tag, the playfield's clip -- but NOT the meeting gate: speech
+   is deliberate, a lone speaker is heard.  A viewer whose window does
+   not hold the speaker misses it (v1).  Shown CHAT_MS from the relay's
+   echo; the newest line replaces the last.  While the LOCAL player is
+   composing, his own bubble shows the line so far with a blinking
+   cursor -- the text box IS the bubble.  Display metadata end to end:
+   game.chat is never fingerprinted or snapshotted (restore preserves
+   the receiver's own) and the speaker stands while he types (see
+   netLocalDir). */
+const CHAT_MS = 5000;              // a bubble's life, from the echo
+const CHAT_COLS = 16;              // characters a line, two lines
+function chatLines(text){
+  const t = String(text || '');
+  if (t.length <= CHAT_COLS) return [t];
+  let cut = t.lastIndexOf(' ', CHAT_COLS);
+  if (cut <= 0 || t.length - cut - 1 > CHAT_COLS) cut = CHAT_COLS;   // no space, or too much after it: hard
+  const a = t.slice(0, cut).replace(/ +$/, ''), b = t.slice(cut).replace(/^ +/, '');
+  return [a, b.slice(0, CHAT_COLS)];
+}
+function drawBubbles(ctx, g, dcamX, dcamY, placed){
+  const now = netNow();
+  const live = net.phase === 'live';
+  for (const q of g.players){
+    const composing = live && net.compose !== null && q.idx === net.seat;
+    const c = g.chat && g.chat[q.idx];
+    let text;
+    if (composing) text = net.compose;
+    else if (c && now < c.until) text = c.text;
+    else continue;
+    /* the anchor: the sprite ($A446's dead and $A491's teleport gates),
+       else the corpse */
+    let ax, ay;
+    if (!(q.f11 & F_DEAD) && !(q.animCtl & 4)){ ax = q.x; ay = q.y; }
+    else if (q.died){ ax = q.diedX; ay = q.diedY; }
+    else continue;
+    const psx = (((ax - dcamX) & 0x7E) >> 1) * 8 + SPRITE_DX,
+          psy = (((ay - dcamY) & 0x7E) >> 1) * 8 + SPRITE_DY;
+    if (!(psx > -16 && psx < 256 && psy > -16 && psy < PLAYFIELD_H)) continue;
+    const lines = chatLines(text);
+    if (composing){                                 // the cursor rides the last line
+      const on = (Math.floor(now / 300) & 1) === 0;
+      const last = lines.length - 1;
+      if (lines[last].length < CHAT_COLS) lines[last] += on ? '_' : ' ';
+      else if (lines.length < 2) lines.push(on ? '_' : ' ');
+    }
+    const w = Math.max.apply(null, lines.map(l => l.length)) * 5 - 1 + 4;
+    const h = lines.length * 6 - 1 + 4;
+    const cx = psx + 8;
+    const x0 = Math.max(0, Math.min(256 - w, cx - (w >> 1)));
+    const hitsBox = yy => placed.some(r => yy < r.y + r.h && r.y < yy + h &&
+                                          x0 < r.x + r.w && r.x < x0 + w);
+    let y = psy - h - 2, tailUp = false;             // two rows of tail
+    while (y >= 0 && hitsBox(y)) y--;
+    if (y < 0){
+      y = psy + 16 + 2; tailUp = true;
+      while (y + h <= PLAYFIELD_H && hitsBox(y)) y++;
+      if (y + h > PLAYFIELD_H) continue;             // nowhere to put it
+    }
+    placed.push({x: x0, y, w, h});
+    const ink = panelInk(q, 0);                      // steady: no flash on speech
+    const inkC = ((ink & 0x40) ? PAL_BRT : PAL_DIM)[ink & 7];
+    ctx.fillStyle = inkC; ctx.fillRect(x0, y, w, h);              // the border...
+    ctx.fillStyle = PAL_BRT[7]; ctx.fillRect(x0 + 1, y + 1, w - 2, h - 2);   // ...round the paper
+    ctx.fillStyle = inkC;
+    const tx = Math.max(x0 + 1, Math.min(x0 + w - 2, cx));
+    if (tailUp){ ctx.fillRect(tx, y - 2, 1, 1); ctx.fillRect(tx - 1, y - 1, 3, 1); }
+    else { ctx.fillRect(tx - 1, y + h, 3, 1); ctx.fillRect(tx, y + h + 1, 1, 1); }
+    for (let i = 0; i < lines.length; i++)
+      drawNameTag(ctx, lines[i], x0 + 2 + ((lines[i].length * 5 - 1) >> 1),
+                  y + 2 + i * 6, PAL_BRT[0]);
   }
 }
 
@@ -11054,7 +11146,7 @@ function render(ctx,g){
     const put = (text, psx, psy, ink) => {
       if (!text) return;
       const w = text.length * 5 - 1, x0 = psx + 8 - (w >> 1);
-      const hits = y => placed.some(r => y < r.y + 5 && r.y < y + 5 &&
+      const hits = y => placed.some(r => y < r.y + r.h && r.y < y + 5 &&
                                          x0 < r.x + r.w && r.x < x0 + w);
       let y = psy >= 7 ? psy - 7 : psy + 17;
       while (y >= 0 && hits(y)) y -= 6;
@@ -11062,7 +11154,7 @@ function render(ctx,g){
         y = psy + 17;
         while (y < PLAYFIELD_H - 5 && hits(y)) y += 6;
       }
-      placed.push({x: x0, y, w});
+      placed.push({x: x0, y, w, h: 5});
       const pal = (ink & 0x40) ? PAL_BRT : PAL_DIM;
       drawNameTag(ctx, text, psx + 8, y, pal[ink & 7]);
     };
@@ -11090,6 +11182,8 @@ function render(ctx,g){
     }
     if (vis.length >= 2) for (const v of vis)
       put(tagNameFor(g, v.q), v.psx, v.psy, panelInk(v.q, g.frameCtr));
+    /* and the SPEECH BUBBLES, over the tags -- see drawBubbles */
+    drawBubbles(ctx, g, dcamX, dcamY, placed);
   }
 
   /* ---- the HUD ------------------------------------------------------
@@ -11221,6 +11315,10 @@ addEventListener('pointerdown', unlockAudio);
 const inField=e=>{const t=e.target; return !!t &&
   (t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable);};
 addEventListener('keydown',e=>{ if(inField(e))return; unlockAudio();
+  /* SPEECH BUBBLES: online in play, ENTER opens the line, ESC closes it,
+     ENTER again sends -- and while it is open every key is the line's,
+     none the game's (see netChatKey; the player stands meanwhile). */
+  if (netChatKey(e.key)){ e.preventDefault(); return; }
   const k=KEYMAP[e.code]; if(k){keyboard.press(k);e.preventDefault();}});
 addEventListener('keyup',e=>{ if(inField(e))return;
   const k=KEYMAP[e.code]; if(k){keyboard.release(k);e.preventDefault();}});
@@ -11448,6 +11546,7 @@ const net = {
   rtt: {min: Infinity, med: 0, worst: 0, samples: []},
   autoFire: false,     // START MEANS START, online -- see feHandover/netLocalDir
   names: null,         // the session name table (NAMES) -- display-only
+  compose: null,       // SPEECH BUBBLES: the line being typed, or null
   acc: 0, lastProgress: 0, desyncs: 0, seatMask: 0,
   stat: {lastAt: 0, worst: 0, worstShown: 0, n: 0, t0: 0, rate: 0,
          wait: [], waitShown: []},          // NETPLAN 2.2: per-seat relay wait
@@ -11494,6 +11593,7 @@ function netStart(url, cfgLocal, tpFactory){
   net.step = 0; net.sentInput = false; net.pendDirs = null;
   net.acc = 0; net.accAt = netNow(); net.desyncs = 0; net.autoFire = false;
   net.names = null; net.pumpT0 = 0; net.pumpN = 0; net.pumpHeld = 0;
+  net.compose = null;
   net.stat = {lastAt: 0, worst: 0, worstShown: 0, n: 0, t0: 0, rate: 0,
               wait: [], waitShown: []};
   net.pingTag = 0; net.pingAt = 0; net.pings = [];
@@ -11642,6 +11742,19 @@ function netOnMessage(b){
     game.names = nm.slice();
     return;
   }
+  if (t === M.CHAT){
+    /* SPEECH BUBBLES: the relay's echo, stamped with the seat.  Display
+       metadata (see drawBubbles): straight onto game.chat, for CHAT_MS. */
+    const seat = b[1] | 0, len = Math.min(b[2] | 0, NETP.chatLen);
+    if (seat >= NETP.maxSeats || b.length < 3 + len) return;
+    let text = '';
+    for (let i = 0; i < len; i++){
+      const cc = b[3 + i];
+      text += String.fromCharCode(cc >= 32 && cc < 127 ? cc : 32);
+    }
+    if (game.chat) game.chat[seat] = { text: text.replace(/ +$/, ''), until: netNow() + CHAT_MS };
+    return;
+  }
   if (t === M.ERROR){
     const E = NETP.errors, code = b[1] | 0;
     net.status = code === E.FULL ? 'SERVER FULL'
@@ -11660,6 +11773,7 @@ function netOnMessage(b){
    reused seat whose player still stands is already IN, so a reconnect
    spends the latch silently and simply resumes him. */
 function netLocalDir(){
+  if (net.compose !== null) return 0;   // typing a line: the player stands
   let d = controlRead(game.method1, keyboard) & 0xFF;
   if (net.autoFire){
     const q = game.players[net.seat];
@@ -11667,6 +11781,38 @@ function netLocalDir(){
     else d |= DIR_FIRE;
   }
   return d;
+}
+/* SPEECH BUBBLES -- the keyboard's side (Anthony's spec): ENTER opens
+   the line, ESC closes it (nothing sent), ENTER again sends it; while a
+   line is open every keystroke is the line's -- letters, digits, space
+   and the micro font's punctuation, upper-cased, Backspace rubbing out,
+   chatLen (32) the most -- and nothing reaches the game (netLocalDir
+   sends 0: the player stands, which is just a byte on the wire).
+   ONLINE ONLY, in play, for a player who is in the game or lying dead
+   (his bubble has a corpse to rise from).  Returns true when the key was
+   the line's, so the DOM handler keeps it from the KEYMAP. */
+const CHAT_OK = /^[A-Z0-9 .,?!'\-]$/;
+function netChatKey(key){
+  if (net.phase !== 'live' || !net.everLive) return false;
+  if (net.compose === null){
+    if (key !== 'Enter' || game.mode !== 'play') return false;
+    const q = game.players[net.seat];
+    if (!q || !(q.inGame || q.died)) return false;
+    net.compose = '';
+    return true;
+  }
+  if (key === 'Escape'){ net.compose = null; return true; }
+  if (key === 'Enter'){
+    const text = net.compose.replace(/ +$/, '');
+    net.compose = null;
+    if (text) netSend(NETP.msgs.CHAT,
+                      [text.length].concat(Array.from(text, ch => ch.charCodeAt(0))));
+    return true;
+  }
+  if (key === 'Backspace'){ net.compose = net.compose.slice(0, -1); return true; }
+  const ch = (typeof key === 'string' && key.length === 1) ? key.toUpperCase() : '';
+  if (ch && CHAT_OK.test(ch) && net.compose.length < NETP.chatLen) net.compose += ch;
+  return true;                        // every other key is swallowed while the line is open
 }
 function netApply(dirs){
   const t0 = game.simT;
@@ -11873,7 +12019,8 @@ function netOverlay(ctx){
   let line = net.status;
   if (net.phase === 'live'){
     const q = game.players[net.seat];
-    line = (net.sentInput && netNow() - net.lastProgress > 700)
+    line = (net.compose !== null) ? 'ENTER SENDS   ESC CANCELS'
+      : (net.sentInput && netNow() - net.lastProgress > 700)
       ? 'WAITING FOR PLAYERS'
       : (net.everLive && q && !q.inGame && !net.autoFire)
         ? 'PRESS ' + netFireKey() + ' TO JOIN'
@@ -11977,7 +12124,7 @@ globalThis.__GAUNTLET__={
   Game,game,render,assets:A,
   net:{ state:net, start:netStart, frame:netFrame, overlay:netOverlay,
         onMessage:netOnMessage, apply:netApply, boot:netBoot, pump:netPump,
-        localDir:netLocalDir, info:netInfo,
+        localDir:netLocalDir, info:netInfo, chatKey:netChatKey, chatLines,
         serverUrl, netAvailable, utf8Enc, utf8Dec },
   /* SETTINGS persistence -- the WIDGETS and the SCREEN that edits them are
      under `frontend` below (optRows()/optFrame()/optRender() on the live
