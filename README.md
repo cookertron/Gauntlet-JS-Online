@@ -42,11 +42,12 @@ FIRE to begin the next one, exactly as the arcade did.  Opening the
 page from disk (or setting SERVER LOCAL) plays offline;
 `?server=host:port` joins a relay from a page hosted elsewhere.
 
-**Chat.**  In play, ENTER opens a line of speech, ESC closes it, ENTER
-again sends it: up to 32 characters (letters, digits, space and a
-little punctuation), shown as a speech bubble over your character on
-every screen that can see you, for five seconds.  You stand still while
-you type.  ENTER and ESC cannot be bound to anything else.
+**Chat.**  In play, ENTER opens a line of speech and ENTER again sends
+it: up to 32 characters (letters, digits, space and a little
+punctuation), shown as a speech bubble over your character on every
+screen that can see you, for five seconds.  ENTER on an empty line just
+closes it.  You stand still while you type.  ENTER cannot be bound to
+anything else.
 
 **Full screen.**  Alt+Enter (or a double-click on the game, or the
 corner button) shows the same 256x192 picture at the largest whole

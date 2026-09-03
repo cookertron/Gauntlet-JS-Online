@@ -11379,9 +11379,10 @@ addEventListener('keydown',e=>{ if(inField(e))return; unlockAudio();
   /* FULL SCREEN: Alt+Enter toggles it -- taken before the chat can read
      the Enter, and before KEYMAP's own ENTER (the options screen's) */
   if (fullscreenKey(e)){ e.preventDefault(); if (fullscreenToggle) fullscreenToggle(); return; }
-  /* SPEECH BUBBLES: online in play, ENTER opens the line, ESC closes it,
-     ENTER again sends -- and while it is open every key is the line's,
-     none the game's (see netChatKey; the player stands meanwhile). */
+  /* SPEECH BUBBLES: online in play, ENTER opens the line and ENTER
+     again sends it (an empty line simply closes) -- and while it is
+     open every key is the line's, none the game's (see netChatKey; the
+     player stands meanwhile). */
   if (netChatKey(e.key)){ e.preventDefault(); return; }
   const k=KEYMAP[e.code]; if(k){keyboard.press(k);e.preventDefault();}});
 addEventListener('keyup',e=>{ if(inField(e))return;
@@ -11849,7 +11850,10 @@ function netLocalDir(){
   return d;
 }
 /* SPEECH BUBBLES -- the keyboard's side (Anthony's spec): ENTER opens
-   the line, ESC closes it (nothing sent), ENTER again sends it; while a
+   the line and ENTER again sends it; an EMPTY line closes and sends
+   nothing, which is also how a line is abandoned (rub it out, ENTER --
+   Escape was the cancel in the first cut and was dropped: one key, one
+   rule, and the browser owns Escape in full screen anyway).  While a
    line is open every keystroke is the line's -- letters, digits, space
    and the micro font's punctuation, upper-cased, Backspace rubbing out,
    chatLen (32) the most -- and nothing reaches the game (netLocalDir
@@ -11858,9 +11862,9 @@ function netLocalDir(){
    (his bubble has a corpse to rise from).  Returns true when the key was
    the line's, so the DOM handler keeps it from the KEYMAP.  No on-screen
    hint: a bubble could sit under it, and a text line needs no manual
-   (Anthony).  ENTER and ESC can never be game keys -- ENTER is the
-   rebind capture's reserved key (optCaptureFrame skips it) and ESC has
-   no KEYMAP entry at all, so neither can ever be bound over the chat. */
+   (Anthony).  ENTER can never be a game key -- it is the rebind
+   capture's reserved key (optCaptureFrame skips it), so it can never be
+   bound over the chat. */
 const CHAT_OK = /^[A-Z0-9 .,?!'\-]$/;
 function netChatKey(key){
   if (net.phase !== 'live' || !net.everLive) return false;
@@ -11871,7 +11875,6 @@ function netChatKey(key){
     net.compose = '';
     return true;
   }
-  if (key === 'Escape'){ net.compose = null; return true; }
   if (key === 'Enter'){
     const text = net.compose.replace(/ +$/, '');
     net.compose = null;
@@ -12233,9 +12236,9 @@ requestAnimationFrame(frame);
    no browser claims.  (F5 was suggested and is every browser's RELOAD;
    F11 is the browser's own window-fullscreen, which does not fit the
    picture.)  A double-click on the game and the faint corner button do
-   the same.  The browser owns Escape in full screen -- it leaves, and
-   the page never sees the key -- so a chat line open in full screen
-   closes with Enter, not Escape. */
+   the same.  (The browser owns Escape in full screen -- it leaves, and
+   the page never sees the key -- which the chat no longer minds: its
+   one key is Enter.) */
 function fullscreenScale(w, h, dpr){
   const d = dpr || 1;
   return Math.max(1, Math.floor(Math.min(w * d / 256, h * d / 192)));

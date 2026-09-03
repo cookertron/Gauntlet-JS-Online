@@ -9661,7 +9661,11 @@ if (process.argv[2] === '--table') {
   check('...and stops at chatLen (32)', S.compose.length, 32);
   check('a movement key while the line is open is the LINE\'s, not the game\'s (swallowed)',
         [G.net.chatKey('ArrowLeft'), G.net.chatKey('F12'), S.compose.length], [true, true, 32]);
-  check('ESC closes the line and sends nothing', [G.net.chatKey('Escape'), S.compose, lastOf(M.CHAT)], [true, null, null]);
+  check('ESC is NOT a chat key: swallowed like any other while the line is open, the line stays',
+        [G.net.chatKey('Escape'), S.compose.length, lastOf(M.CHAT)], [true, 32, null]);
+  for (let i = 0; i < 40; i++) G.net.chatKey('Backspace');
+  check('rubbing the line out and ENTER closes it and sends nothing -- the one way to abandon a line',
+        [S.compose, G.net.chatKey('Enter'), S.compose, lastOf(M.CHAT)], ['', true, null, null]);
   G.net.chatKey('Enter'); G.net.chatKey('Enter');
   check('ENTER on an empty line closes it and sends nothing', [S.compose, lastOf(M.CHAT)], [null, null]);
   G.net.chatKey('Enter');
@@ -9723,8 +9727,8 @@ if (process.argv[2] === '--table') {
   const pc = papers(paint());
   check('while composing, YOUR bubble shows the line so far (plus the cursor cell): two papers now',
         [pc.length, pc.some(p => p[3] === 3 * 5 - 1 + 2)], [2, true]);
-  G.net.chatKey('Escape');
-  check('...and ESC takes it down', papers(paint()).length, 1);
+  G.net.chatKey('Backspace'); G.net.chatKey('Backspace'); G.net.chatKey('Enter');
+  check('...and an emptied line plus ENTER takes it down', papers(paint()).length, 1);
   /* a dead speaker speaks from his corpse */
   G.game.players[2].health = 0;
   G.game.onePass({});

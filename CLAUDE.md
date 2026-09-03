@@ -414,8 +414,9 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      and the quarter's fill covers it.  `build/ui/hud.png` shows four
      in, `hud2.png` two.
 5. **SPEECH BUBBLES — BUILT 2026-09-03** (Anthony's spec 2026-09-01:
-   max 32 characters; ENTER opens the line in game, ESC closes it,
-   ENTER again sends; headless 1402 → 1432, relaytest 50 → 54, e2e
+   max 32 characters; ENTER opens the line in game, ENTER again sends,
+   an empty ENTER closes — ESC was the cancel in the first cut and was
+   dropped 2026-09-03: one key, one rule; headless 1402 → 1432, relaytest 50 → 54, e2e
    30 → 31, protocol v3, protocheck 36).  Display metadata end to end,
    the NAMES pattern exactly:
    - **The wire:** MSG_CHAT (16; 14/15 were taken by PING/PONG) C→S
@@ -444,17 +445,19 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      stop (before KEYMAP): online, live, in play, for a player in the
      game or lying dead, ENTER opens `net.compose`; then every key is
      the line's — letters/digits/space/punctuation upper-cased,
-     Backspace, cap 32, all else swallowed — ESC closes (nothing
-     sent), ENTER sends the trimmed line.  `netLocalDir()` returns 0
+     Backspace, cap 32, all else swallowed (ESC included: it is no
+     longer a chat key) — ENTER sends the trimmed line, an EMPTY line
+     closes without sending (rub it out, ENTER = abandon).
+     `netLocalDir()` returns 0
      while a line is open (the player STANDS: just a byte on the
      wire; mutation-verified), and your own bubble shows the line so
      far with a blinking `_` cursor — the text box IS the bubble.  NO
      on-screen hint (a first cut said ENTER SENDS  ESC CANCELS; a
      bubble could sit under it and a text line needs no manual —
      Anthony).  ENTER falls through to KEYMAP (the options screen's
-     own) whenever the chat does not take it, and NEITHER CHAT KEY CAN
-     BE BOUND: ENTER is the rebind capture's reserved key (skipped),
-     ESC has no KEYMAP entry at all — both pinned.  `build/ui/chat.png`
+     own) whenever the chat does not take it, and it CANNOT BE BOUND:
+     it is the rebind capture's reserved key (skipped) — pinned (ESC
+     has no KEYMAP entry either, pinned for the record).  `build/ui/chat.png`
      shows three bubbles, one stacked under a name tag.
 6. **FULL SCREEN — BUILT 2026-09-03.**  The PICTURE only (Anthony:
    "render exactly how the port intends, no extension of the playing
@@ -466,7 +469,7 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
    and is the browser's reload, F11 the browser's own window mode),
    as do a double-click on the canvas and a second faint corner button
    (`#fs`).  The browser owns Escape in full screen (it leaves; the
-   page never sees it), so an open chat line closes with Enter there.
+   page never sees it) — moot for the chat, whose one key is Enter.
    Pinned: the scale table, the key rule, the furniture.
 3. Netcode design — **SETTLED with Anthony 2026-08-29:**
    - **LOCKSTEP RELAY.**  Every client runs the JS sim it already has; the
@@ -540,7 +543,7 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
   `>` etc. with it.
 - Key rebinding: 6 slots, swap-on-own-key, nothing ever refused except
   ENTER (the screen's confirm and the chat's open/send: the capture
-  SKIPS it; ESC, the chat's cancel, is not a game key at all).  The
+  SKIPS it).  The
   cross-player conflict UI left with local P2.  The zone persists in
   localStorage; legacy two-zone saves migrate by taking player 1's own.
 - House discipline (keep it): mutation-test every fix — reintroduce the
