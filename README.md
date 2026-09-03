@@ -48,6 +48,10 @@ little punctuation), shown as a speech bubble over your character on
 every screen that can see you, for five seconds.  You stand still while
 you type.  ENTER and ESC cannot be bound to anything else.
 
+The original's hurry-up -- doors opening, then every wall becoming an
+exit, after minutes of nobody shooting or picking anything up -- is off
+in this build: a table of four waiting on each other is not idling.
+
 If a session stutters, paste `__GAUNTLET__.net.info()` from the
 browser console (F12) on BOTH machines.  It names each machine's
 exchange rate against the sim's own, the worst stall seen, the clean

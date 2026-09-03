@@ -2832,6 +2832,20 @@ const KEMPSTON_POTION = 0x20;
    around its two traces, exactly as the other two flags get flipped for
    their own faithful-path checks -- only the SHIPPED default differs. */
 let FAITHFUL_SYM_CHEAT = false;
+/* THE FOURTH FAITHFUL/ADDED BOUNDARY (this fork, 2026-09-03): THE
+   HURRY-UP.  $971B evicts an idle party -- at 23 drain ticks of no
+   shot, kill or pickup every door opens (and the floor keys vanish with
+   them), at 140 more every wall becomes an exit.  Ported faithfully
+   (hurryPass, gated cell for cell by tools/hurrygate.py) and OFF BY
+   DEFAULT here: Anthony -- "a bit chesty for the online multiplayer
+   version".  A four-seat game has people waiting on each other, on a
+   round trip, on a level pause; a clock that punishes standing still is
+   the wrong pressure for it.  $84B8 still counts (it is fingerprinted
+   and the drain owns it); only the two stages never fire.  The faithful
+   behaviour stays fully ported and fully tested: tools/headless.js's
+   own $971B block sets this true around its two Z80-measured stages,
+   the same shape as the other three flags. */
+let FAITHFUL_HURRY_UP = false;
 /* ADDED, not ported: WHERE the potion comes from.  False -- the default,
    and what every gate and headless check outside its own tests runs with --
    is the faithful wiring: $857E reads CAPS unconditionally, OUTSIDE the
@@ -6864,6 +6878,7 @@ class Game{
      play before it was ported ("all the doors open... wait even longer and
      all the wall structures turn into exits") and then read out of $971B. */
   hurryPass(){
+    if (!FAITHFUL_HURRY_UP) return;                  // retired here -- see the flag
     if (this.treasure) return;                       // $971B BIT 6,(IY-1)
     const h = this.hurry;                            // $9720 LD A,($84B8)
     if (!this.hurryDoors){                           // $9723 BIT 0,(IY-2)
@@ -12304,6 +12319,11 @@ globalThis.__GAUNTLET__={
   symCheat:{
     get(){ return FAITHFUL_SYM_CHEAT; },
     set(v){ FAITHFUL_SYM_CHEAT = !!v; return FAITHFUL_SYM_CHEAT; },
+  },
+  /* THE FOURTH -- the hurry-up, off by default; see FAITHFUL_HURRY_UP */
+  hurryUp:{
+    get(){ return FAITHFUL_HURRY_UP; },
+    set(v){ FAITHFUL_HURRY_UP = !!v; return FAITHFUL_HURRY_UP; },
   },
   /* the beeper's speaker model (see SPEAKER_FILTER) -- live-toggleable so
      the modelled and raw-voltage renders can be A/B'd mid-game from the

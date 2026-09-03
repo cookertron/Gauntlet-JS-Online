@@ -5348,6 +5348,27 @@ if (process.argv[2] === '--table') {
     checkTrue('build/_hurry2.json present (python tools/hurrygate.py)', false);
   } else {
     const H = JSON.parse(fs.readFileSync(hPath, 'utf8'));
+    /* THE HURRY-UP IS RETIRED IN THIS FORK (FAITHFUL_HURRY_UP, off by
+       default -- Anthony, 2026-09-03): with the shipped default, driving
+       $84B8 past BOTH thresholds changes nothing -- no door opens, no
+       key vanishes, no wall turns, no sound 14 or 16, no latch -- while
+       the counter itself still runs (it is fingerprinted, the drain's). */
+    checkTrue('FAITHFUL_HURRY_UP defaults to off', G.hurryUp.get() === false);
+    {
+      const r = G.seed({ char: 0x2A, char2: 0x2A });
+      for (const p of H.plant) r.map[p[1]][p[0]] = p[2];
+      const before = JSON.stringify(r.map);
+      const rs = []; const realR = r.sfx.bind(r);
+      r.sfx = function (n) { rs.push(n); return realR(n); };
+      for (let k = 0; k < 40; k++){ r.hurry = 0x17 + k; r.onePass({}); }
+      for (let k = 0; k < 40; k++){ r.hurry = 0x8C + k; r.onePass({}); }
+      check('RETIRED: past both thresholds the map is untouched, no eviction sound, no latch',
+            [JSON.stringify(r.map) === before, rs.filter(n => n === 14 || n === 16).length,
+             r.hurryDoors, r.hurryExits],
+            [true, 0, false, false]);
+      checkTrue('...and $84B8 still counts under the drain', r.hurry >= 0x8C);
+    }
+    G.hurryUp.set(true);                 // the faithful path, for the measured stages below
     const g = G.seed({ char: 0x2A, char2: 0x2A });
     for (const p of H.plant) g.map[p[1]][p[0]] = p[2];
     const flat = () => { const a = []; for (let r = 0; r < 32; r++)
@@ -5403,6 +5424,7 @@ if (process.argv[2] === '--table') {
     t.onePass({});
     check('a TREASURE ROOM never hurries ($971B BIT 6,(IY-1) / RET nz)',
           [t.map[2][6], t.hurryDoors], [0x11, false]);
+    G.hurryUp.set(false);                // back to the shipped default
   }
 
   /* --- $A7FC, the $2F switch, and $9967's wall re-tiling --------------

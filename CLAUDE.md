@@ -93,7 +93,13 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
    FIXED at the faithful ON default).  `loadSlowdown` survives only as
    the suite's boundary hook (`G.settings.slowdown`), a legacy blob's
    `slowdown` key is ignored on load, and the heavy-scene cap gates
-   still drive the flag directly.  **Deliberately KEPT:** the
+   still drive the flag directly.  And (2026-09-03) THE HURRY-UP:
+   $971B's idle-party eviction (doors at 23 drain ticks, every wall an
+   exit at 140) is OFF by default behind `FAITHFUL_HURRY_UP`, the
+   fourth faithful/added boundary flag (Anthony: "a bit chesty for the
+   online multiplayer version") — the counter still runs, the stages
+   never fire, the Z80-measured checks flip the flag on around
+   themselves (`G.hurryUp`).  **Deliberately KEPT:** the
    sim's two player blocks and the join/leash/shove machinery.  The engine
    has NO 1P/2P switch (NOTES: "There is no one-player/two-player switch.
    There never was.") -- both blocks ship marked not-in-game and whoever
@@ -510,7 +516,8 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
   bit joins him mid-game through `joinPass()` -- no session plumbing
   needed in the sim itself.
 - Faithful/added boundary flags exist throughout: `STREAMLINED_FRONTEND`,
-  `FAITHFUL_TAPE_PROMPTS`, `FAITHFUL_SYM_CHEAT`, `zonePotion`. In this fork
+  `FAITHFUL_TAPE_PROMPTS`, `FAITHFUL_SYM_CHEAT`, `FAITHFUL_HURRY_UP`,
+  `zonePotion`. In this fork
   they can be collapsed toward the modern side — but strip incrementally
   and keep `headless.js` green at every step.
 - The HUD font has verified glyphs ONLY for digits, uppercase letters and
