@@ -25,6 +25,12 @@ node tools/headless.js    # the client test suite (1472/1472)
 
 Open `client/gauntlet.html` in a browser to play offline.
 
+## Ready-made package
+
+`python tools/package.py` builds `dist/Gauntlet-JS-Online-<tag>.zip` —
+the server exe, the game page, the batch files and a README for hosts
+and players — and each one is published as a GitHub release.
+
 ## Play online
 
 The relay serves the game itself: run it, share the address, done.

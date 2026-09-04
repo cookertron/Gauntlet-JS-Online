@@ -37,6 +37,12 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
   DEGENERACY fixture (see planned work 4): scenarios + per-pass digest,
   the reference recorded on the two-block build.
 - `tools/build.py` — `python tools/build.py` regenerates the client.
+- `tools/package.py` + `package/` — `python tools/package.py [tag]`
+  writes `dist/Gauntlet-JS-Online-<tag>.zip` (git-ignored): the relay
+  exe, the built page + .gz, Anthony's `relay-port-forwarding.bat` (his
+  one-liner from the build folder, kept verbatim) with LAN-only and
+  unforward siblings, the player/host README.txt and a VERSION.txt.
+  Each package goes up as a GitHub release asset under the same tag.
 - `tools/headless.js` — `node tools/headless.js`, the test suite
   (1211/1211 at fork point). Boots the BUILT file in a vm sandbox.
 - `tools/uishot.js`, `tools/dungeonshot.js` — PNG screenshot tools.
