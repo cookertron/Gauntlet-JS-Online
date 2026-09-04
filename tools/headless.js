@@ -10140,5 +10140,89 @@ if (process.argv[2] === '--table') {
   }
 }
 
+
+/* ====================================================================
+   GAME OVER ENDS THE SESSION (this fork, 2026-09-04).  Reported: after a
+   death the lobby said PRESS Z TO JOIN and FIRE did nothing -- the
+   block sat out with the MATERIALISING mark up, because this port's
+   $B35A tail places the block for dungeon 1 before the attract marks
+   everyone out.  Fixed at the join, and the flow changed: the RIP hold
+   hands the player to a STATS screen, then the title and the options
+   screen, disconnected from the relay.
+   ==================================================================== */
+{
+  const F = G.frontend;
+  const NP = G.assets.protocol, M = NP.msgs, S = G.net.state;
+  const sent = [];
+  let H = null;
+  const tpF = (url, h) => { H = h; return { send: b => sent.push(Array.from(b)), close(){ sent.push(['closed']); } }; };
+  const u32 = v => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+  const kb = F.liveKb; kb.releaseAll();
+  /* the stray materialise mark, at the sim: a game over leaves the block
+     out with bit 0 up, and FIRE brings it back within two polls */
+  {
+    const g = G.seed({});
+    g.autoJoin(1);
+    g.players[0].health = 0;
+    for (let i = 0; i < 4 && g.mode === 'play'; i++){ g.onePass({}); if (g.levelDone) g.levelOver(); }
+    check('one player, dead: the RIP hold', g.mode, 'over');
+    const st = g.finalStats;
+    check('enterGameOver captured the party\'s final state before the block is wiped',
+          [st.level, st.players[0].played, st.players[0].score === g.players[0].score], [1, true, true]);
+    while (g.mode === 'over') g.overTick();
+    check('the hold ends in the attract loop with the block OUT and the materialise mark up (the port\'s $B35A order)',
+          [g.mode, g.players[0].inGame, g.players[0].animCtl & 1, g.overEnded], ['attract', false, 1, true]);
+    g.overEnded = false;
+    g.attractTick({ fire: true }); g.attractTick({ fire: true });
+    check('...and FIRE brings the block back through $9440 within two polls (it never did)',
+          [g.players[0].inGame, g.mode], [true, 'play']);
+  }
+  /* the stats screen's lines, from the captured state */
+  {
+    const g = G.seed({});
+    g.autoJoin(2); g.names = ['ANTHONY', '', '', ''];
+    g.players[0].score = 0x012340; g.players[1].score = 0x000500; g.level = 3;
+    g.enterGameOver();
+    const lines = F.live.statsLines();
+    check('the stats screen says GAME OVER, the dungeon, each player who played with character and score, and PRESS ENTER',
+          lines.map(l => l.text.replace(/ +/g, ' ').trim()),
+          ['GAME OVER', 'DUNGEON 3', 'ANTHONY ELF 12340', 'VALKYRIE VALKYRIE 500', 'PRESS ENTER']);
+    checkTrue('...every line in the HUD font\'s charset', lines.every(l => /^[A-Z0-9 ]+$/.test(l.text) && l.text.length <= 32));
+  }
+  /* online, end to end: die, the hold, the handback -- disconnected */
+  G.net.start('ws://mockover', { char: 3, method1: 3, zonePotion: false }, tpF);
+  H.open();
+  H.message(Uint8Array.from([M.WELCOME, 0, 4, ...u32(0x0BAD), NP.welcomeModes.FRESH, ...u32(0)]));
+  H.message(Uint8Array.from([M.CHARS, 3, 255, 255, 255]));
+  S.autoFire = true;
+  const xchg = () => { G.net.frame(0.1); const inp = sent.filter(m => m[0] === M.INPUT).pop();
+                       H.message(Uint8Array.from([M.PASS, ...u32(S.step), 4, inp ? inp[5] : 0, 0, 0, 0, 0, 0, 0, 0])); G.net.frame(0); };
+  xchg();
+  check('START joins the online game', [G.game.mode, G.game.players[0].inGame], ['play', true]);
+  G.game.players[0].health = 0;
+  let n = 0; while (G.game.mode === 'play' && n < 10){ xchg(); n++; }
+  let m = 0; while (G.game.mode === 'over' && m < 300){ xchg(); m++; }
+  check('the RIP hold runs its 63 exchanges in lockstep and the sim reaches the attract loop', [m, G.game.mode], [63, 'attract']);
+  checkTrue('the frame loop\'s check then hands the screen back: session OFF, transport closed, the front end at STATS',
+            G.gameOverCheck() === true && S.phase === 'off' && S.tp === null && sent[sent.length - 1][0] === 'closed' &&
+            G.feRunning === true && F.live.phase === 'stats');
+  check('...and a second check is a no-op', G.gameOverCheck(), false);
+  const rec = []; const cap = { set fillStyle(v){ this._f = v; }, get fillStyle(){ return this._f; },
+    fillRect(x, y, w, h){ rec.push([x, y, w, h, this._f]); } };
+  F.live.statsRender(cap);
+  checkTrue('the stats screen draws: the panel, the logo, the lines', rec.length > 500 && rec.some(c => c[4] === '#ffff00'));
+  /* ENTER (after a release) leaves for the title, whose fade leads to the options screen */
+  const fe = F.live, ev = [];
+  let f = 0;
+  for (let i = 0; i < 12; i++) fe.frame(kb, ev, f++);        // armed after a release
+  kb.press('ENTER'); fe.frame(kb, ev, f++); kb.releaseAll();
+  check('ENTER on the stats screen goes to the title', fe.phase, 'title');
+  for (let i = 0; i < 80 && fe.phase !== 'options'; i++) fe.frame(kb, ev, f++);
+  check('...and the title\'s own fade leads to the options screen', fe.phase, 'options');
+  kb.releaseAll();
+  G.seed({});
+  G.settings.reset();
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`);
 process.exit(failures ? 1 : 0);

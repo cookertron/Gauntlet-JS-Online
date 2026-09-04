@@ -108,7 +108,13 @@ const SCENARIOS = [
   /* player 1 dies with player 2 alive (the actors' one-pass aim at a
      corpse, the drop, the RIP marker), then player 2 dies too: the
      game-over chain, the hold, the new game's attract loop */
-  { name: 'duo-death', cfg: {}, passes: 420,
+  /* 371 passes, not 420: the reference ran on into the attract loop, but
+     the two-block build left the block out with the MATERIALISING mark
+     up (its $B35A tail places the block before the attract marks it
+     out) and the four-block build spends that mark on the first attract
+     poll (2026-09-04, the FIRE-does-nothing fix) -- so the comparison
+     ends with the hold, pass 371, and the fix is pinned on its own */
+  { name: 'duo-death', cfg: {}, passes: 371,
     input: (i, g) => {
       if (i === 60) g.players[0].health = 0;
       if (i === 120) g.players[1].health = 0;

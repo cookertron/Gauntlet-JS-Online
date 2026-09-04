@@ -187,6 +187,21 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      dungeon 1, fresh block, attract.  Nothing files into the ranked
      tables — hsInsert/hsDrawPage stay ported (attract furniture, tool
      gates).  `overFrames` is fingerprinted now: it ends the hold.
+     **GAME OVER ENDS THE SESSION (2026-09-04)**: when the hold ends the
+     SIM goes to its attract loop as $B35A→$B374 does (every client
+     agrees), but the PLAYER goes to a STATS screen (`FrontEnd.stats*`:
+     GAME OVER, the dungeon, each player who played with character and
+     score, from `game.finalStats` captured in enterGameOver before the
+     block is wiped — display-only) and then, on ENTER/SPACE/pad FIRE
+     after a release, to the title and the options screen, DISCONNECTED
+     (`gameOverCheck` in the driver, off `game.overEnded`; the transport
+     is closed, the relay's session empties and resets).  Anthony: the
+     lobby is not where a dead party belongs.  FOUND ON THE WAY: after a
+     game over FIRE in the lobby did nothing — this port's $B35A tail
+     places the block for dungeon 1 (startLevel → $96AB's materialising
+     mark) before $B474 marks everyone out, so the block sat out with
+     bit 0 up and $9445 refused it for ever; joinOne spends that mark
+     like the death mark now (`& ~0x91`).
    - `restore()` now repairs `feScr` (attract/rewind shadow screen) —
      found by the e2e: a mid-lobby joiner crashed the page redraw.
    - **The background-tab clock** (found by Anthony's first real test):

@@ -45,8 +45,9 @@ Everyone opens `http://<host-ip>:33792/`, picks a character and a NAME
 (worn over your head when players meet on screen, in your own colour —
 left unset, your character's name), and STARTs with SERVER ONLINE —
 START drops you straight into the dungeon, joining any game already
-running.  After a game ends the attract screen waits for
-FIRE to begin the next one, exactly as the arcade did.  Opening the
+running.  When the whole party is dead you see everyone's scores, then
+land back on the options screen, disconnected: START joins again.
+Opening the
 page from disk (or setting SERVER LOCAL) plays offline;
 `?server=host:port` joins a relay from a page hosted elsewhere.
 

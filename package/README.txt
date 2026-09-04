@@ -55,7 +55,9 @@ between options, LEFT and RIGHT toggle, ENTER modifies.  Pick a
 character and a NAME (up to 8 letters; it floats over your head when
 players meet), make sure SERVER says ONLINE, and choose START GAME.
 You drop straight into whatever game is running.  Whoever presses FIRE
-is in; a dead player comes back with FIRE too.
+is in; a dead player comes back with FIRE too.  When the whole party is
+dead you see everyone's scores, then land back on the options screen:
+START joins again.
 
 Keyboard (the defaults -- change them under REBIND KEYS)
    1  up      Q  down      S  left      D  right

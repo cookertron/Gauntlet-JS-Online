@@ -3466,6 +3466,7 @@ class FrontEnd {
       case 'boxout': this.saveAttr(); break;      // $C2FE CALL $C6EA
       case 'options':                             // ADDED -- see optFrame()
         this.optSel = 0; this.optBinding = -1; this.optEdge = {}; break;
+      case 'stats': s.clear(); this.statsArmed = false; break;   // ADDED -- see statsFrame()
       case 'players': this.drawBox('oneortwo'); break;   // $C307
       /* p1choose/p2choose print their box at u === 8, AFTER $C393's fade
          out -- printing it here would show it over the un-faded title. */
@@ -3561,6 +3562,7 @@ class FrontEnd {
         }
         break;
       case 'options': this.optFrame(); break;     // ADDED -- see below
+      case 'stats': this.statsFrame(); break;     // ADDED -- the game-over stats
       /* $C379 LD B,$14 then $C37E CALL $C617, then $C386's poll loop --
          which has NO frame wait in it (7,528 instructions and 0 HALTs per
          frame, 765 polls in 4 frames, measured).  Both of $C5F1's arms CLAMP
@@ -4014,6 +4016,50 @@ class FrontEnd {
     for (const it of items)
       it.narrow = previews.some(pv => it.y >= pv.y && it.y < pv.y + PH);
     return {W, H, col, row, rowStart, pCol, PW, PH, items, previews};
+  }
+  /* ---- THE STATS SCREEN (this fork, 2026-09-04) ----------------------
+     GAME OVER used to drop the party into the attract lobby to wait for
+     FIRE (and, by the bug spent in joinOne, FIRE did nothing).  Anthony:
+     "they should be taken to a stats screen and then ... back to the
+     options screen disconnected from the lobby".  So the driver hands
+     the screen back here when the RIP hold ends (gameOverCheck): the
+     party's scores, the dungeon reached, and any of ENTER, SPACE or a
+     pad's FIRE -- after a release, so a key held through the death does
+     not skip it -- goes on to the TITLE, whose own fade leads to the
+     options screen.  Everything drawn is the HUD font on the message
+     panel, as the options screen is.  statsLines() is the data, so the
+     suite can read what the screen says. */
+  statsLines(){
+    const st = (typeof game !== 'undefined' && game.finalStats) || null;
+    const L = [{ row: 6, text: 'GAME OVER', attr: 0x46 }];
+    if (!st) return L;
+    L.push({ row: 8, text: 'DUNGEON ' + st.level, attr: UI_ATTR });
+    const names = (typeof game !== 'undefined' && game.names) || [];
+    const CH = ['WARRIOR', 'VALKYRIE', 'WIZARD', 'ELF'];
+    let row = 11;
+    for (const p of st.players){
+      if (!p.played) continue;
+      const nm = (names[p.idx] || CH[p.charIndex & 3]).slice(0, 8);
+      const sc = p.score.toString(16).toUpperCase();            // packed BCD
+      L.push({ row, text: nm.padEnd(9) + CH[p.charIndex & 3].padEnd(10) + sc.padStart(6), attr: UI_ATTR });
+      row += 2;
+    }
+    L.push({ row: 21, text: 'PRESS ENTER', attr: 0x47 });
+    return L;
+  }
+  statsFrame(){
+    const padv = (padStatus.bits && padStatus.bits[0]) | 0;
+    const go = this.key(FE_ENTER) || this.key(FE_SPACE) || !!(padv & 0x10);
+    if (!this.statsArmed){ if (!go && this.t >= 10) this.statsArmed = true; return; }
+    if (go) this.enter('title');                  // the title's own fade leads to options
+  }
+  statsRender(ctx){
+    uiPanel(ctx, 0, 0, 32, 24, UI_ATTR);
+    drawLogo(ctx, 0, 8);
+    drawLogoOnline(ctx, 0, 8);
+    uiPanelBorder(ctx, 0, 0, 32, 24, UI_ATTR);
+    for (const l of this.statsLines())
+      uiText(ctx, l.text, (32 - l.text.length) >> 1, l.row, l.attr);
   }
   /* the keys page's body -- see KEYS_PAGE.  Revealed by the page's own
      row clock: a line shows once the 8 px row its bottom falls in has
@@ -5342,7 +5388,13 @@ class Game{
          byte (a walk phase, the low bits) is the original's own refusal.
          Without this a dead player in a running game could never
          rejoin, and after a game over neither could the second block. */
-      if (this.animCtl & ~0x90) return;
+      /* ...and bit 0, the MATERIALISING mark, on an OUT block: this port's
+         $B35A tail starts dungeon 1 (startLevel places the block, $96AB
+         sets the mark) BEFORE $B474 marks everyone out, so the block sat
+         out with the mark up and $9445 refused it for ever -- PRESS FIRE
+         TO JOIN, and FIRE did nothing (reported 2026-09-04).  Spent here
+         like the death mark; the join proper sets it again. */
+      if (this.animCtl & ~0x91) return;
       this.animCtl = 0;                                  // $93A8 (IX+14) = 0
       this.p14 &= 0x80;                                  // $948C AND $80
       return;
@@ -9376,6 +9428,16 @@ class Game{
        AAA, cursor and stamp) is retired with it -- the hold is a timer. */
     this.overFrames = 0;
     this.gameOver = true;
+    /* THE PARTY'S FINAL STATE, for the stats screen (this fork, 2026-09-04
+       -- see gameOverCheck in the driver): taken NOW, before $B35A's tail
+       wipes the block, and display-only -- never fingerprinted, never in
+       the snapshot (a joiner arriving during the hold sees no stats; he
+       was not playing). */
+    this.finalStats = {
+      level: this.level,
+      players: this.players.map(q => ({ idx: q.idx, played: !!(q.died || q.score !== 0),
+                                        score: q.score, charIndex: q.charIndex })),
+    };
   }
 
   /* One iteration of $B3B9, driven once per VIDEO FRAME.  No input: the
@@ -9415,6 +9477,10 @@ class Game{
     this.startLevel(1);                                  // $B36B / $B381
     this.pass = 0;
     this.enterAttract();                                 // $B374 CALL $B470
+    /* the hold has ended: the driver hands the screen back to the front
+       end (display-only; the sim itself is in the attract loop, as the
+       original's is, and every client's sim agrees) */
+    this.overEnded = true;
   }
 
   /* ====================================================================
@@ -11836,7 +11902,7 @@ function netStart(url, cfgLocal, tpFactory){
     open(){ netSend(NETP.msgs.HELLO, [NETP.version & 0xFF, net.cfgLocal.char & 3]
                     .concat(netNameBytes(net.cfgLocal.name))); },
     message(b){ netOnMessage(b); },
-    close(){ if (net.phase !== 'ended'){ net.status = 'DISCONNECTED'; net.phase = 'ended'; } },
+    close(){ if (net.phase !== 'ended' && net.phase !== 'off'){ net.status = 'DISCONNECTED'; net.phase = 'ended'; } },
   };
   net.tp = (tpFactory || netWsTransport)(url, h);
   return h;                            // tests drive the handlers directly
@@ -12312,6 +12378,29 @@ function netOverlay(ctx){
   uiText(ctx, line, (32 - line.length) >> 1, 11, UI_ATTR);
 }
 
+/* GAME OVER ENDS THE SESSION (this fork, 2026-09-04).  When the RIP
+   hold ends the sim goes to its attract loop, exactly as $B35A -> $B374
+   does -- but the PLAYER goes to the stats screen and then the options
+   screen, disconnected from the relay: the lobby is not where a dead
+   party belongs (Anthony).  Online the transport is closed here -- every
+   client reaches this tick together, so the session empties and the
+   relay resets it (or holds it for anyone who has not yet returned to a
+   hidden tab; he leaves when he does).  Offline it is the same handback
+   without the wire.  Returns true when the screen changed hands. */
+function gameOverCheck(){
+  if (!game.overEnded) return false;
+  game.overEnded = false;
+  if (net.phase !== 'off'){
+    const tp = net.tp;
+    net.phase = 'off'; net.everLive = false; net.tp = null; net.compose = null;
+    net.sentInput = false; net.pendDirs = null;
+    if (tp && tp.close) try { tp.close(); } catch (e) {}
+  }
+  keyboard.releaseAll();
+  feRunning = true; feAcc = 0;
+  frontend.enter('stats');
+  return true;
+}
 let last=null;
 function frame(t){
   if(last===null) last=t;
@@ -12335,6 +12424,7 @@ function frame(t){
          renderScreen just painted, exactly the way the panel below overlays
          the dungeon -- same trick, same two draw calls, different clock. */
       if (frontend.phase === 'options') frontend.optRender(ctx);
+      if (frontend.phase === 'stats') frontend.statsRender(ctx);
       frontend.pageRender(ctx);   // ONLINE in the logos (loading/credits/keys); KEYS_PAGE
       requestAnimationFrame(frame);
       return;
@@ -12346,6 +12436,7 @@ function frame(t){
      then rides above the game for stalls and status. */
   if (net.phase !== 'off'){
     netFrame(dt);
+    if (gameOverCheck()){ requestAnimationFrame(frame); return; }
     sound.flush(game.sound.log, game.simFrame);
     if (net.everLive) render(ctx, game);
     else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 256, 192); }
@@ -12354,6 +12445,7 @@ function frame(t){
     return;
   }
   game.advance(dt,input);          // simulation clock
+  if (gameOverCheck()){ requestAnimationFrame(frame); return; }
   /* THE BRIDGE, and note what it is handed: the driver's event log and the
      SIMULATED FRAME the engine has reached, never `t` and never dt.  Sound
      belongs to the simulation clock. */
@@ -12459,6 +12551,7 @@ globalThis.__GAUNTLET__={
       get slowdown(){ return loadSlowdown; },
       set slowdown(v){ loadSlowdown = !!v; }},
   fullscreen:{ scale:fullscreenScale, isKey:fullscreenKey },
+  gameOverCheck, get feRunning(){ return feRunning; },
   constants:{FRAMES_PER_PASS,FRAME_HZ,PASS_SECONDS,STEP,MAP_W,MAP_H,UNITS,PXU,
              OVER_RIP_FRAMES:Game.OVER_RIP_FRAMES,
              CELL,PLAYFIELD_ROWS,CAM_MIN,CAM_CX,CAM_CY,
