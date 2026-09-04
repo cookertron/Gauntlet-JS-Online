@@ -1,5 +1,7 @@
 # Gauntlet Online
 
+![Gauntlet Online -- the title screen](build/ui/tune.png)
+
 Online multiplayer fork of a faithful ZX Spectrum *Gauntlet* (1986, U.S.
 Gold) JavaScript port. The plan: a single-player browser client, a
 standalone C++ Windows server, and online play for up to 4 players — keeping
