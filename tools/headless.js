@@ -10048,6 +10048,35 @@ if (process.argv[2] === '--table') {
               ov.calls.some(c => c[4] === '#00ff00' && c[1] >= 17 && c[1] <= 21) &&
               !ov.calls.some(c => c[4] === '#00ff00' && c[1] >= 24));
   }
+  /* the LOADING SCREEN: the big wordmark on the red band, the big ONLINE
+     under it in the HUD font, ink only, on pixels the picture leaves clear */
+  {
+    const s = new F.SpecScreen();
+    s.load(Buffer.from(F.FE.loading_screen, 'base64'));
+    const ink = (x, y) => { const cr = y >> 3, col = x >> 3;
+      return !!(s.m[((cr >> 3) << 11) | ((y & 7) << 8) | ((cr & 7) << 5) | col] & (0x80 >> (x & 7))); };
+    const O = F.FE_LOADING_ONLINE;
+    let clash = 0, above = 0;
+    for (let y = O.y - 1; y < O.y + 9; y++) for (let x = O.x - 2; x < O.x + 49; x++) if (y < 192 && ink(x, y)) clash++;
+    for (let y = 160; y < 168; y++) for (let x = O.x; x < O.x + 47; x++) if (ink(x, y)) above++;
+    check('the big ONLINE sits on clear picture (a row of air around it) UNDER the big wordmark\'s letters',
+          [clash, above > 0, O.y + 8 <= 192], [0, true, true]);
+    const r = rec(); F.drawLoadingOnline(r.cap);
+    const px = r.calls.filter(c => c[4] === '#00ff00');
+    const xs = px.map(c => c[0]), ys = px.map(c => c[1]);
+    checkTrue('...drawn in the HUD font, bright green, ink only: x 120..166, rows 169..176, no paper fill',
+              px.length > 100 && px.every(c => c[2] === 1 && c[3] === 1) &&
+              Math.min(...xs) >= 120 && Math.max(...xs) <= 166 && Math.min(...ys) >= 169 && Math.max(...ys) <= 176 &&
+              r.calls.every(c => c[4] === '#00ff00'),
+              'x ' + Math.min(...xs) + '..' + Math.max(...xs) + ' y ' + Math.min(...ys) + '..' + Math.max(...ys));
+    const fe = toPhase('tune');
+    const ov = rec(); fe.pageRender(ov.cap);
+    checkTrue('...and the front end draws it through the tune, over the loading screen',
+              fe.phase === 'tune' && ov.calls.some(c => c[4] === '#00ff00' && c[1] >= 169));
+    const fk = toPhase('keys');
+    const ok = rec(); fk.pageRender(ok.cap);
+    checkTrue('...and not on the pages after it', !ok.calls.some(c => c[4] === '#00ff00' && c[1] >= 169));
+  }
   /* the options panel: the logo sits at row 1 (y 8), so ONLINE is at rows 25..29 */
   {
     const fe = toPhase('options');

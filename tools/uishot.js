@@ -183,7 +183,7 @@ function toPhase(name){
   for (let i = 0; i < 40; i++) fe.frame(kb, ev, n++);   // the page rolls fully in
   return fe;
 }
-for (const name of ['credits', 'keys', 'title']){
+for (const name of ['credits', 'keys', 'title', 'tune']){
   const fe = toPhase(name);
   save(outdir, name + '.png', cap => { F.renderScreen(cap, fe.scr, fe.frameCtr);
                                        if (fe.pageRender) fe.pageRender(cap); });

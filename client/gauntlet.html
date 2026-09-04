@@ -3051,6 +3051,33 @@ const FE_LOGO_INK = FE_LOGO_SCR ? (() => {
       }
   return x1 < 0 ? null : { x0, x1, y1 };
 })() : null;
+/* THE BIG ONE (2026-09-04, Anthony's second mock-up): the LOADING
+   SCREEN -- up through the title tune -- carries the big wordmark on its
+   red band, and ONLINE goes under that too, in the HUD font's 8x8 (a
+   size up from the micro face, as the picture's logo is a size up), ink
+   only so the band's red shows through.  Read off FE_LOADING's bitmap
+   the same way: the letters end at row 167, one tail descends at
+   x 98..111 to row 177 and the KB signature sits at x 210..231, so the
+   band is clear from x 112 to 209 across rows 168..177 -- and there,
+   right of the tail and level with it, directly under the letters, is
+   where the mock-up puts it: ONLINE (six 8 px cells, 47 px of ink) at
+   x 120..166, rows 169..176, one row under the letters' bottoms. */
+const FE_LOADING_ONLINE = { x: 120, y: 169 };
+function drawTextInk(ctx, text, x, y, colour){   // the HUD font, ink only
+  ctx.fillStyle = colour;
+  for (let i = 0; i < text.length; i++){
+    const g = FONT[text.charCodeAt(i)];
+    if (!g) continue;
+    for (let r = 0; r < 8; r++){
+      const bits = g[r];
+      for (let b = 0; b < 8; b++)
+        if (bits & (0x80 >> b)) ctx.fillRect(x + i * 8 + b, y + r, 1, 1);
+    }
+  }
+}
+function drawLoadingOnline(ctx){
+  drawTextInk(ctx, 'ONLINE', FE_LOADING_ONLINE.x, FE_LOADING_ONLINE.y, PAL_BRT[4]);
+}
 function drawLogoOnline(ctx, dx, dy){
   if (!FE_LOGO_INK) return;
   drawNameTag(ctx, 'ONLINE', dx + FE_LOGO_ONLINE.x + 14, dy + FE_LOGO_ONLINE.y,
@@ -3974,6 +4001,8 @@ class FrontEnd {
      row clock: a line shows once the 8 px row its bottom falls in has
      rolled in, exactly as printPage revealed the original's rows. */
   pageRender(ctx){
+    /* the loading screen, up through the tune: the big ONLINE */
+    if (this.phase === 'loading' || this.phase === 'tune'){ drawLoadingOnline(ctx); return; }
     if (this.phase !== 'keys' && this.phase !== 'credits') return;
     const rows = Math.floor(this.t / PAGE_ROW_FRAMES);
     if (rows >= FE_LOGO_ROWS) drawLogoOnline(ctx, 0, 0);   // once the logo has rolled in
@@ -12283,8 +12312,7 @@ function frame(t){
          renderScreen just painted, exactly the way the panel below overlays
          the dungeon -- same trick, same two draw calls, different clock. */
       if (frontend.phase === 'options') frontend.optRender(ctx);
-      if (frontend.phase === 'keys' || frontend.phase === 'credits')
-        frontend.pageRender(ctx);                  // ONLINE under the logo; KEYS_PAGE
+      frontend.pageRender(ctx);   // ONLINE in the logos (loading/credits/keys); KEYS_PAGE
       requestAnimationFrame(frame);
       return;
     }
@@ -12522,6 +12550,7 @@ globalThis.__GAUNTLET__={
             renderScreen, feHandover, pollGamepads, liveKb:keyboard,
             drawCharPreview, PREVIEW_SCALE, CHAR_FRAMES, drawLogo, FE_LOGO_ROWS,
             drawLogoOnline, FE_LOGO_INK, FE_LOGO_ONLINE,
+            drawLoadingOnline, FE_LOADING_ONLINE,
             get padStatus(){ return padStatus; },
             KB_HALFROWS, CTRL_KEYS, CTRL_MAGIC, KEMPSTON_MAP, KEMPSTON_POTION,
             KEYMAP,

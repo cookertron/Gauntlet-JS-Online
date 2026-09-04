@@ -497,8 +497,15 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
    the suite checks the wordmark is blank under it, inked above it and
    beside it.  A first cut put it under the logo and shifted the
    credits text a row — wrong: it is part of the logo, and the credits
-   page is untouched again.  The title screen has no wordmark; the
-   attract HUD's captured one keeps PRESS FIRE under it.
+   page is untouched again.  THE BIG ONE: the LOADING screen's wordmark
+   (up through the tune) gets ONLINE in the HUD font's 8x8, ink only on
+   the red band (`drawTextInk`), at x 120..166, rows 169..176 — right of
+   the tail, level with it, under the letters — read off
+   FE_LOADING's bitmap: letters end at row 167, one tail to 177, the KB
+   signature at x 210+ (`FE_LOADING_ONLINE`, `drawLoadingOnline`; the
+   suite checks the picture is clear under it and inked above).  The
+   character-portraits title screen has no wordmark; the attract HUD's
+   captured one keeps PRESS FIRE under it.
 6. **FULL SCREEN — BUILT 2026-09-03.**  The PICTURE only (Anthony:
    "render exactly how the port intends, no extension of the playing
    field" — the 256×160 window is a rule: actors freeze outside it,
