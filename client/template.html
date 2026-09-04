@@ -2064,6 +2064,20 @@ const SND_LEAD_MAX = 0.24;    // the adaptive ratchet's ceiling -- see `lead`
    play: action-to-sound latency audibly behind a native emulator's; the
    refill gate IS that latency, every millisecond of it. */
 const SND_LEAD_FIFO = 0.05;
+/* THE CLOCK-JUMP GUARD (2026-09-04).  The FIFO bridge maps sim frames to
+   samples continuously, so a sim clock that leaps FORWARD looks like
+   frames not yet rendered, and it rendered them: a late joiner's
+   snapshot put the clock a minute ahead and the bridge queued 49.9 s
+   of silence in one chunk (MEASURED), behind which every real sound
+   then played a minute late -- the flat-run drain sheds such a backlog
+   at a sixteenth of playback speed, three seconds a minute.  A forward
+   jump beyond the largest legitimate one (the level-entry pause is 104
+   frames, a hidden tab's timer burst about 50) is a restart of the
+   stream, not sound: the bridge re-origins at the new frame, exactly
+   as it does for a backward jump.  restore() says so explicitly too
+   (SoundOut.rebase, from the snapshot handler); this guard is the net
+   under any jump nobody announced. */
+const SND_JUMP_FRAMES = 250;
 const SND_AHEAD = 3.0;        // never schedule further ahead than this
 const SND_VOICES = 48;        // the hard cap on LIVE scheduled buffers
 /* THE WORKLET -- one continuous stream, the way an emulator does it.
@@ -2199,6 +2213,10 @@ class SoundOut{
     this.vsent = 0;           // samples pushed since that origin
     this.tick = null;         // the processor's 2048-sample tick, for the hidden-tab pump
   }
+  /* the sim's clock has been REPLACED -- a snapshot restored (a late
+     join, a desync resync): the next flush re-origins at the new frame,
+     as the first flush does, with nothing rendered for the gap */
+  rebase(){ this.next = null; }
   /* drop the FIFO's backlog down to the refill gate -- see the worklet's
      catchUp; a no-op on the scheduled path, which has no queue */
   catchUp(){
@@ -2457,7 +2475,7 @@ class SoundOut{
   flushWorklet(events, upto){
     if (!this.on){ events.length = 0; return; }
     const sr = this.ctx.sampleRate;
-    if (this.next === null || upto < this.next){
+    if (this.next === null || upto < this.next || upto - this.next > SND_JUMP_FRAMES){
       if (this.next !== null){
         this.resyncs++;
         if (events.length) this.chip.lvl = events[events.length-1][1];
@@ -11917,6 +11935,11 @@ function netOnMessage(b){
     if (!snap){ net.status = 'BAD SNAPSHOT'; net.phase = 'ended'; return; }
     game.localIdx = net.seat;          // restore preserves the receiver's own
     game.restore(snap);
+    /* the sim clock has jumped to the session's: the audio bridge starts
+       over at the restored frame rather than rendering the gap as sound
+       (a late joiner got the whole running game's silence queued: 50 s
+       behind, for good -- see SND_JUMP_FRAMES) */
+    if (typeof sound !== 'undefined' && sound.rebase) sound.rebase();
     net.step = pass; net.sentInput = false; net.pendDirs = null;
     net.everLive = true; net.lastProgress = netNow(); net.accAt = net.lastProgress;
     netSend(NETP.msgs.READY, netU32(pass));

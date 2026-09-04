@@ -8295,8 +8295,13 @@ if (process.argv[2] === '--table') {
   /* ---- DESYNC -> SNAP restores and re-readies ------------------------- */
   H.message(Uint8Array.from([M.DESYNC, ...u32(3)]));
   checkTrue('DESYNC leaves the loop and waits for state', S.phase === 'snap');
+  let rebased = 0;
+  const realRebase = G.sound.out.rebase;
+  G.sound.out.rebase = function(){ rebased++; return realRebase.apply(this, arguments); };
   H.message(Uint8Array.from([M.SNAP, ...u32(S.step),
                              ...G.net.utf8Enc(JSON.stringify(parsed))]));
+  G.sound.out.rebase = realRebase;
+  check('...and tells the audio bridge the clock has been replaced (rebase)', rebased, 1);
   checkTrue('the snapshot restores and the client re-readies',
             S.phase === 'live' && rd32(lastOf(M.READY), 1) === S.step);
   checkTrue('...on the exact state it served', G.game.fingerprint() ===
@@ -10084,6 +10089,54 @@ if (process.argv[2] === '--table') {
     const band = ov.calls.filter(c => c[4] === '#00ff00' && c[0] >= 121 && c[0] <= 149 && c[1] >= 25 && c[1] <= 29);
     checkTrue('options: ONLINE in bright green at x 121..149, rows 25..29 -- inside the logo, above the first row',
               band.length > 40, 'green in band ' + band.length);
+  }
+}
+
+
+/* ====================================================================
+   THE AUDIO CLOCK-JUMP GUARD (2026-09-04): a late joiner's snapshot put
+   the sim clock a minute ahead and the FIFO bridge rendered the gap --
+   49.9 s of silence queued in one chunk, every real sound a minute late
+   for good.  A forward jump beyond the largest legitimate one re-origins
+   the stream; restore() says so explicitly through rebase().
+   ==================================================================== */
+{
+  const mk = () => {
+    const so = new G.sound.SoundOut();
+    so.ctx = { sampleRate: 48000, currentTime: 0 }; so.mode = 'worklet'; so.initPending = false;
+    so.chip = { lvl: 0, render(){ return 0; } };
+    const posted = [];
+    so.node = { port: { postMessage(m){ if (m.chunk) posted.push(m.chunk.length); } } };
+    return { so, posted };
+  };
+  const secs = n => n / 48000;
+  {
+    const { so, posted } = mk();
+    const ev = [];
+    for (let f = 1; f <= 100; f++) so.flush(ev, f);
+    const n0 = posted.length;
+    so.flush(ev, 100 + 104);                             // the level-entry pause: 104 frames of real time
+    checkTrue('a level-entry pause (104 frames) renders as ~2.1 s of sound, one chunk -- real time, kept',
+              posted.length === n0 + 1 && Math.abs(secs(posted[n0]) - 104 / 50.08) < 0.05 && so.resyncs === 0,
+              'chunk ' + secs(posted[n0] || 0).toFixed(2) + ' s');
+    const n1 = posted.length;
+    so.flush(ev, 204 + 2500);                            // a late join: the clock leaps 50 s
+    check('a 2500-frame jump (a snapshot join) renders NOTHING: the stream re-origins, one resync',
+          [posted.length - n1, so.resyncs, so.next], [0, 1, 2704]);
+    so.flush(ev, 2705);
+    checkTrue('...and the next frame renders from the new origin, a frame\'s worth',
+              posted.length === n1 + 1 && Math.abs(secs(posted[n1]) - 1 / 50.08) < 0.002);
+  }
+  {
+    const { so, posted } = mk();
+    const ev = [];
+    for (let f = 1; f <= 50; f++) so.flush(ev, f);
+    const n0 = posted.length;
+    so.rebase();
+    so.flush(ev, 2000);
+    check('rebase(): the next flush re-origins with nothing rendered, whatever the jump', [posted.length - n0, so.next], [0, 2000]);
+    so.flush(ev, 2001);
+    check('...and the stream carries on from there', posted.length - n0, 1);
   }
 }
 

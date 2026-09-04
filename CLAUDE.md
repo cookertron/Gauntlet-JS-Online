@@ -82,6 +82,16 @@ reverse handover, all field-verified here 2026-08-30):
   jitter the big buffer guarded); `?audio=stable` restores 'playback'.
 Confirmed from play: crackle gone AND sfx latency at native-emulator
 feel, on both the worklet (localhost) and sproc (LAN) paths.
+- THE CLOCK-JUMP GUARD (2026-09-04; Anthony: "joined a running game,
+  the audio was roughly 50 seconds behind"): a snapshot restore put
+  `simFrame` a minute ahead and the FIFO bridge rendered the gap --
+  MEASURED 49.9 s of silence queued in one chunk, which the flat-run
+  drain sheds at a sixteenth of playback speed.  Now a forward jump
+  beyond `SND_JUMP_FRAMES` (250: past the 104-frame level pause and a
+  hidden tab's ~50-frame burst) re-origins the stream like a backward
+  one, and the SNAP handler calls `sound.rebase()` explicitly after
+  `restore()` (late join and desync resync alike).  Pinned: the pause
+  still renders, the jump renders nothing, rebase re-origins.
 
 ## Planned work (agreed with Anthony, in order of intent)
 
