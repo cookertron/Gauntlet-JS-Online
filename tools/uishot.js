@@ -201,6 +201,14 @@ for (const name of ['credits', 'keys', 'title', 'tune']){
   sg.enterGameOver();
   const fe = new F.FrontEnd(); fe.enter('stats');
   save(outdir, 'stats.png', cap => { F.renderScreen(cap, fe.scr, fe.frameCtr); fe.statsRender(cap); });
+  /* and a lone player: no name column, the sprite row centred on the screen */
+  const s1 = G.seed({});
+  s1.autoJoin(1); s1.names = ['COOKIE', '', '', ''];
+  s1.players[0].score = 0x000380; s1.players[0].kills = [5, 0, 0, 0, 0, 0];
+  s1.level = 1;
+  s1.enterGameOver();
+  const fe1 = new F.FrontEnd(); fe1.enter('stats');
+  save(outdir, 'stats1.png', cap => { F.renderScreen(cap, fe1.scr, fe1.frameCtr); fe1.statsRender(cap); });
 }
 
 /* ---------- the options screen, boot-time, replacing the old escape menu */

@@ -206,7 +206,11 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      line of the SIX MONSTER SPRITES (the actor bank's own frames facing
      down, `drawClassSprite`, each centred BY ITS INK — `classInkSpan`,
      the art sits differently in every 16×16 box — on the column
-     centres STATS_SPRITE_CX, y 120) with, under each, one micro count
+     centres STATS_SPRITE_CX, y 120 — 58 + 28i, the ROW centred on the
+     screen: a first cut at 72 + 32i filled the table's right-hand region
+     and a lone player, with no name column, saw it 24 px right of
+     centre; `build/ui/stats1.png` is that case) with, under each, one
+     micro count
      line per player; the values under the HUD-font header (name, race,
      score, kills) and DUNGEON are the micro font's too (KILLS BY CLASS:
      ghost,

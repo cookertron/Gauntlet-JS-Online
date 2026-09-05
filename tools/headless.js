@@ -10207,15 +10207,19 @@ if (process.argv[2] === '--table') {
       for (let yy = 0; yy < 16; yy++) for (let bx = 0; bx < 2; bx++) for (let bit = 0; bit < 8; bit++)
         if (b[yy * 2 + bx] & (0x80 >> bit)){ const x = bx * 8 + bit; if (x < x0) x0 = x; if (x > x1) x1 = x; }
       return { x0, x1 }; };
-    check('six monster sprites on y 120, one per class, on a 32 px pitch of column centres',
-          micro.sprites.map(s => [s.cls, s.cx, s.y]), [[0, 72, 120], [1, 104, 120], [2, 136, 120], [3, 168, 120], [4, 200, 120], [5, 232, 120]]);
+    check('six monster sprites on y 120, one per class, on a 28 px pitch of column centres',
+          micro.sprites.map(s => [s.cls, s.cx, s.y]), [[0, 58, 120], [1, 86, 120], [2, 114, 120], [3, 142, 120], [4, 170, 120], [5, 198, 120]]);
+    checkTrue('...the ROW centred on the screen: the centres mirror about 128 (a lone player has no name column to balance a right-hand row)',
+              micro.sprites.every((s, i) => s.cx + micro.sprites[5 - i].cx === 256));
+    checkTrue('...and an eight-letter name at x 8 clears a three-digit count in the first column',
+              8 + 8 * 5 - 1 < micro.sprites[0].cx - 7);
     checkTrue('...each placed so its INK is centred on the column (within half a pixel)',
               micro.sprites.every(s => { const sp = inkSpan(s.cls); return Math.abs((s.x + (sp.x0 + sp.x1 + 1) / 2) - s.cx) <= 0.5; }),
               JSON.stringify(micro.sprites.map(s => { const sp = inkSpan(s.cls); return [s.cls, s.x, sp.x0, sp.x1]; })));
     checkTrue('...and the art is not all the same width, so the box alone would not have centred it',
               new Set(micro.sprites.map(s => { const sp = inkSpan(s.cls); return sp.x1 - sp.x0; })).size > 1);
     check('under them one count line per player, named, each count centred on its column',
-          micro.lines.map(l => [l.y, l.name, l.counts.map(c => c.text).join(' '), l.counts.every((c, i) => c.cx === 72 + 32 * i)]),
+          micro.lines.map(l => [l.y, l.name, l.counts.map(c => c.text).join(' '), l.counts.every((c, i) => c.cx === 58 + 28 * i)]),
           [[138, 'ANTHONY', '2 1 0 0 0 0', true], [145, 'VALKYRIE', '0 0 0 0 0 0', true]]);
     const rec2 = []; const cap2 = { set fillStyle(v){ this._f = v; }, get fillStyle(){ return this._f; },
       fillRect(x, y, w, h){ rec2.push([x, y, w, h, this._f]); } };

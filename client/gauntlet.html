@@ -3026,10 +3026,15 @@ const KEYS_HEAD_ATTR = 0x46, KEYS_FOOT_ATTR = 0x47;   // bright yellow, bright w
    ladder: 0 ghost, 1 grunt, 2 demon, 3 lobber, 4 sorcerer, 5 death) --
    the stats screen's kill columns */
 const KILL_CLASSES = ['GHOST', 'GRUNT', 'DEMON', 'LOBBER', 'SORCERER', 'DEATH'];
-/* the six columns' CENTRES on the stats screen (a 32 px pitch inside the
-   panel's border) and the sprites' y; a sprite is placed by its ink's
-   centre (classInkSpan), a count by drawNameTag's own centring */
-const STATS_SPRITE_CX = [72, 104, 136, 168, 200, 232];
+/* the six columns' CENTRES on the stats screen and the sprites' y: a
+   28 px pitch centred on the SCREEN (128 +- 14, 42, 70 -- the first cut's
+   72 + 32i was the table's right-hand region, and a lone player, who has
+   no name column, saw the row sit 24 px right of centre: Anthony, "the
+   enemy sprites are still misaligned"); the multi-player name column
+   (x 8..46) clears a three-digit first count (51..65).  A sprite is
+   placed by its ink's centre (classInkSpan), a count by drawNameTag's
+   own centring */
+const STATS_SPRITE_CX = [58, 86, 114, 142, 170, 198];
 const STATS_SPRITE_Y = 120;
 /* the columns a class's stats frame (facing down, phase 0) actually inks,
    0..15 within its 16 x 16 box -- measured once off the bank */
@@ -4099,8 +4104,9 @@ class FrontEnd {
                  (x 80), the score right-aligned under SCORE (ending at
                  x 200), the kills under KILLS (ending at x 248)
        sprites   the six monsters, each centred BY ITS INK on the column
-                 centre 72 + 32i (classInkSpan: the art sits differently
-                 in every class's 16 x 16 box)
+                 centre 58 + 28i, the row centred on the screen
+                 (classInkSpan: the art sits differently in every class's
+                 16 x 16 box)
        counts    one line per player under the sprites from y 138 at 7 px,
                  each count centred on the same column centre, the name
                  at the left when more than one played */
