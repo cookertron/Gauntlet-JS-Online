@@ -44,8 +44,10 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
 - `tools/package.py` + `package/` — `python tools/package.py [tag]`
   writes `dist/Gauntlet-JS-Online-<tag>.zip` (git-ignored): the relay
   exe, the built page + .gz, Anthony's `relay-port-forwarding.bat` (his
-  one-liner from the build folder, kept verbatim) with LAN-only and
-  unforward siblings, the player/host README.txt and a VERSION.txt.
+  one-liner from the build folder, kept verbatim — since 2026-09-05 it
+  opens THE WINDOW with the port) with LAN-only, unforward and
+  `relay-console.bat` (the terminal relay, kept for reference)
+  siblings, the player/host README.txt and a VERSION.txt.
   Each package goes up as a GitHub release asset under the same tag.
 - `tools/headless.js` — `node tools/headless.js`, the test suite
   (1211/1211 at fork point). Boots the BUILT file in a vm sandbox.
@@ -637,11 +639,14 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
    player?").  `server/gui.cpp` (+ `relay.h`, the data contract):
    plain Win32 — user32/gdi32/comctl32/shell32, the comctl v6 manifest
    by linker pragma, per-monitor DPI v2 — no framework, the same exe.
-   DOUBLE-CLICKED (no arguments) the exe opens the window and frees the
-   console Explorer made for it (`GetConsoleProcessList` == 1); ANY
-   argument keeps it the console relay the bats and the tests drive;
-   `--gui`/`--console` force either; `--gui --forward` opens the port
-   on its thread at start.
+   THE WINDOW IS THE SERVER (Anthony, later that day: "make that the
+   main server for this repo, maybe keep the old one for reference"):
+   EVERY launch opens it — a double-click (the console Explorer made is
+   freed: `GetConsoleProcessList` == 1), the bats' `--forward` (the
+   port opens on its thread at start; a shared console keeps printing
+   the log) — unless `--console` asks for the terminal relay, the old
+   one, which relaytest/e2etest spawn with; `--gui` is accepted and
+   means nothing now.
    - **The relay runs on its own thread** and the window never touches
      it: the loop PUBLISHES a `RelayStatus` copy after every turn
      (`publish()`: port, pass, pass rate, the seats — name, character,

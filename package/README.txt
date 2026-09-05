@@ -13,8 +13,9 @@ What is in this folder
                                 double-click it for the server window
   client\gauntlet.html          the game page the server hands out
   client\gauntlet.html.gz       the same page compressed, for joiners
-  relay-port-forwarding.bat     run the server and open the port
-  relay-lan-only.bat            run the server for the local network
+  relay-port-forwarding.bat     the server window, port opened at once
+  relay-lan-only.bat            the server window for the local network
+  relay-console.bat             the old console server, for reference
   relay-unforward.bat           remove the router mapping by hand
   VERSION.txt                   which build this is
 
@@ -49,11 +50,12 @@ join again.  View > Log opens the console: every event with a
 timestamp, chat lines included; "Copy all" puts it on the clipboard
 for a bug report.
 
-The batch files run the same exe without the window; its log prints in
-the console instead and Ctrl+C stops it:
-  relay-port-forwarding.bat   the server with the router port opened
-  relay-lan-only.bat          the server for your own network only
-  relay-unforward.bat         remove a mapping that was left behind
+The batch files open the same window: relay-port-forwarding.bat with
+the router port opened at once, relay-lan-only.bat for your own network
+only.  relay-console.bat is the old console server kept for reference
+(the same exe with --console: the log prints in the console window and
+Ctrl+C stops it), and relay-unforward.bat removes a mapping that was
+left behind.
 
 Server options (add them after the exe name in a .bat)
    --port N       listen on port N (default 33792)
@@ -61,8 +63,7 @@ Server options (add them after the exe name in a .bat)
    --html PATH    serve a different page file
    --forward      open the port on the router at once
    --unforward    remove the router mapping and exit
-   --gui          open the window even with other options
-   --console      never open the window
+   --console      the console server instead of the window
 
 Playing
 -------

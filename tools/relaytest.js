@@ -71,7 +71,7 @@ async function main(){
   console.log('relaytest: ' + EXE);
   /* the two-seat table, explicitly: the relay's DEFAULT is four seats now
      (the sim carries four blocks) and the four-seat run is below */
-  const proc = spawn(EXE, ['--port', String(PORT), '--seats', '2'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn(EXE, ['--console', '--port', String(PORT), '--seats', '2'], { stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   proc.stdout.on('data', d => { out += d.toString(); });
   proc.stderr.on('data', d => { out += d.toString(); });
@@ -340,7 +340,7 @@ async function main(){
 
   /* ---- FOUR SEATS, the default table (this fork's four-block sim) ---- */
   const PORT4 = PORT + 1;
-  const proc4 = spawn(EXE, ['--port', String(PORT4)], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc4 = spawn(EXE, ['--console', '--port', String(PORT4)], { stdio: ['ignore', 'pipe', 'pipe'] });
   let out4 = '';
   proc4.stdout.on('data', d => { out4 += d.toString(); });
   proc4.stderr.on('data', d => { out4 += d.toString(); });

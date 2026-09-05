@@ -25,9 +25,9 @@
      vcvars64 && cmake -S server -B server/build -G Ninja
               && ninja -C server/build
    Run:
-     gauntlet-relay                      double-clicked: THE WINDOW (gui.cpp)
-     gauntlet-relay [--port 33792] [--seats 4] [--forward]   the console relay
-     (--gui / --console force either; the log is stamped in both)
+     gauntlet-relay [--port 33792] [--seats 4] [--forward]   THE WINDOW (gui.cpp)
+     gauntlet-relay --console ...                            the console relay
+     (the log is stamped in both; --unforward removes a mapping and exits)
    Test:
      node tools/relaytest.js server/build/gauntlet-relay.exe          */
 
@@ -1556,11 +1556,12 @@ int main(int argc, char** argv){
     else if (!strcmp(argv[i], "--gui")) mode = 1;
     else if (!strcmp(argv[i], "--console")) mode = 2;
   }
-  /* THE WINDOW: double-clicked -- no arguments at all -- the exe opens
-     gui.cpp's window.  Any argument means a script or a terminal is
-     driving it (the batch files, the tests) and it stays the console
-     relay; --gui / --console say so outright. */
-  const bool gui = mode == 1 || (mode == 0 && argc == 1);
+  /* THE WINDOW IS THE SERVER (Anthony, 2026-09-05: "make that the main
+     server for this repo, maybe keep the old one for reference"): every
+     launch opens gui.cpp's window -- a double-click, the batch files'
+     --forward -- unless --console asks for the terminal relay, the old
+     one, which the tests drive (their spawns pass it). */
+  const bool gui = mode != 2;
   /* the page (GET /): --html wins; otherwise look beside the cwd and the
      exe for client/gauntlet.html, the built single file */
   if (R.htmlPath.empty()){

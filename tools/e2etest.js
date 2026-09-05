@@ -124,7 +124,7 @@ async function barrier(a, b, label){ return barrierN([a, b], label); }
 
 async function main(){
   console.log('e2etest: ' + EXE);
-  const proc = spawn(EXE, ['--port', String(PORT)],
+  const proc = spawn(EXE, ['--console', '--port', String(PORT)],
                      { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   proc.stdout.on('data', d => { out += d.toString(); });

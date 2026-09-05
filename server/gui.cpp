@@ -403,8 +403,8 @@ void about(){
     "The lockstep relay for the browser Gauntlet: it seats up to four players, "
     "relays one direction byte a pass, arbitrates fingerprints and moves a state "
     "snapshot to every joiner.  It never runs the game.\n\n"
-    "Double-clicked it opens this window; with arguments it is the console server "
-    "the batch files run (--gui or --console force either).\n\n"
+    "Every launch opens this window; --console runs the terminal relay instead, "
+    "the same server without it.\n\n"
     "Protocol v" + std::to_string(s.proto) + "   |   built " __DATE__ "\n"
     "https://github.com/cookertron/Gauntlet-JS-Online");
   MessageBoxW(U.main, msg.c_str(), L"About", MB_OK | MB_ICONINFORMATION);

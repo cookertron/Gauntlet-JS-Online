@@ -36,15 +36,16 @@ and players — and each one is published as a GitHub release.
 ## Play online
 
 The relay serves the game itself: run it, share the address, done.
-Double-click `gauntlet-relay.exe` and it opens a window: the addresses,
-the seats (name, character, address, time connected, the ping the
-server measures to each player, and how long their moves wait for the
-rest — the seat that never waits is the one holding everyone up), a
-button that opens the router port, a Kick, and the stamped log behind
-View > Log.  With any argument it is the console relay instead:
+`gauntlet-relay.exe` opens a window: the addresses, the seats (name,
+character, address, time connected, the ping the server measures to
+each player, and how long their moves wait for the rest — the seat that
+never waits is the one holding everyone up), a button that opens the
+router port, a Kick, and the stamped log behind View > Log.  The old
+console relay is kept behind `--console`:
 
 ```
-server\build\gauntlet-relay.exe --console   # --port/--seats/--html (four seats by default); --gui forces the window
+server\build\gauntlet-relay.exe             # the window; --port/--seats/--html (four seats by default)
+server\build\gauntlet-relay.exe --console   # the console relay, for reference and for scripts
 ```
 
 ![The server window](build/ui/server.png)
