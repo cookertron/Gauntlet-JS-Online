@@ -221,7 +221,7 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      grunt, demon, lobber, sorcerer, death = the state byte's top three
      bits).  `Player.kills[6]` is display metadata credited by
      `creditKill` where a monster dies BY WEAPON OR POTION (Anthony's
-     rule): a melee hit that finishes a monster ($A60A, by the class
+     rule): a melee hit that finishes a monster (CONFIRMED by Anthony 2026-09-05: hand-to-hand is a weapon; $A60A, by the class
      read before the hit — $A606's borrow runs into the class bits), the
      potion sweep (to `potionBy`, Death included), the shot
      (`shotDamage`, its owner; a monster's shot credits nobody).  NOT
