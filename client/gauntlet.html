@@ -3026,10 +3026,29 @@ const KEYS_HEAD_ATTR = 0x46, KEYS_FOOT_ATTR = 0x47;   // bright yellow, bright w
    ladder: 0 ghost, 1 grunt, 2 demon, 3 lobber, 4 sorcerer, 5 death) --
    the stats screen's kill columns */
 const KILL_CLASSES = ['GHOST', 'GRUNT', 'DEMON', 'LOBBER', 'SORCERER', 'DEATH'];
-/* the six sprites' x on the stats screen (16 px each on a 32 px pitch,
-   inside the panel's border) and their y */
-const STATS_SPRITE_X = [64, 96, 128, 160, 192, 224];
+/* the six columns' CENTRES on the stats screen (a 32 px pitch inside the
+   panel's border) and the sprites' y; a sprite is placed by its ink's
+   centre (classInkSpan), a count by drawNameTag's own centring */
+const STATS_SPRITE_CX = [72, 104, 136, 168, 200, 232];
 const STATS_SPRITE_Y = 120;
+/* the columns a class's stats frame (facing down, phase 0) actually inks,
+   0..15 within its 16 x 16 box -- measured once off the bank */
+const CLASS_INK_SPAN = {};
+function classInkSpan(cls){
+  if (cls in CLASS_INK_SPAN) return CLASS_INK_SPAN[cls];
+  const set = ACTOR_FRAMES[cls], bmp = set && set.frames[4];
+  let x0 = 16, x1 = -1;
+  if (bmp) for (let yy = 0; yy < 16; yy++)
+    for (let bx = 0; bx < 2; bx++){
+      const b = bmp[yy * 2 + bx];
+      for (let bit = 0; bit < 8; bit++) if (b & (0x80 >> bit)){
+        const x = bx * 8 + bit;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+      }
+    }
+  return (CLASS_INK_SPAN[cls] = x1 < 0 ? null : { x0, x1 });
+}
 /* one monster of a class, as the actor blitter draws it: the bank's own
    frame facing DOWN (slot 4), phase 0, in the class's own ink, opaque
    over the panel's black */
@@ -4064,41 +4083,52 @@ class FrontEnd {
     const st = (typeof game !== 'undefined' && game.finalStats) || null;
     const L = [{ row: 5, text: 'GAME OVER', attr: 0x46 }];
     if (!st) return L;
-    L.push({ row: 6, text: 'DUNGEON ' + st.level, attr: UI_ATTR });
-    /* 30 cells at col 1: inside the panel's border, never over it */
-    const cols = (a, b, c, d) => a.padEnd(8) + ' ' + b.padEnd(8) + ' ' + c.padStart(6) + ' ' + d.padStart(5);
-    L.push({ row: 8, col: 1, text: cols('NAME', 'RACE', 'SCORE', 'KILLS'), attr: 0x46 });
-    const names = (typeof game !== 'undefined' && game.names) || [];
-    const CH = ['WARRIOR', 'VALKYRIE', 'WIZARD', 'ELF'];
-    let row = 10;
-    for (const p of st.players){
-      if (!p.played) continue;
-      const nm = (names[p.idx] || CH[p.charIndex & 3]).slice(0, 8);
-      const sc = p.score.toString(16).toUpperCase();            // packed BCD
-      const kills = (p.kills || []).reduce((a, b) => a + b, 0);
-      L.push({ row, col: 1, text: cols(nm, CH[p.charIndex & 3], sc, String(kills)), attr: UI_ATTR });
-      row += 1;
-    }
+    /* the HEADER in the HUD font, 30 cells at col 1 inside the panel's
+       border: NAME at 1, RACE at 10, SCORE ending at 24, KILLS at 30;
+       the values under it are the micro font's (statsMicro) */
+    L.push({ row: 8, col: 1, text: 'NAME'.padEnd(8) + ' ' + 'RACE'.padEnd(8) + ' ' +
+                                   'SCORE'.padStart(6) + ' ' + 'KILLS'.padStart(5), attr: 0x46 });
     L.push({ row: 22, text: 'PRESS ENTER OR SPACE', attr: 0x47 });
     return L;
   }
-  /* the enemy line: six sprites (class 0..5, facing down, phase 0, each
-     in its own ink) at STATS_SPRITE_X on y 120, and under them one micro
-     line per player who played -- his name at the left when more than
-     one did, then his count centred under each sprite */
+  /* the MICRO-FONT parts (Anthony, 2026-09-05: the dungeon and the
+     values in the 4x5 face, the sprites centred on their counts):
+       dungeon   'DUNGEON n' centred under GAME OVER
+       rows      one 7 px line per player who played, from y 74: the name
+                 left-aligned under NAME (x 8), the race under RACE
+                 (x 80), the score right-aligned under SCORE (ending at
+                 x 200), the kills under KILLS (ending at x 248)
+       sprites   the six monsters, each centred BY ITS INK on the column
+                 centre 72 + 32i (classInkSpan: the art sits differently
+                 in every class's 16 x 16 box)
+       counts    one line per player under the sprites from y 138 at 7 px,
+                 each count centred on the same column centre, the name
+                 at the left when more than one played */
   statsMicro(){
     const st = (typeof game !== 'undefined' && game.finalStats) || null;
-    if (!st) return { sprites: [], lines: [] };
+    if (!st) return { dungeon: null, rows: [], sprites: [], lines: [] };
     const names = (typeof game !== 'undefined' && game.names) || [];
     const CH = ['WARRIOR', 'VALKYRIE', 'WIZARD', 'ELF'];
-    const sprites = STATS_SPRITE_X.map((x, cls) => ({ cls, x, y: STATS_SPRITE_Y }));
+    const w = t => t.length * 5 - 1;
     const played = st.players.filter(p => p.played);
+    const rows = played.map((p, k) => {
+      const nm = (names[p.idx] || CH[p.charIndex & 3]).slice(0, 8);
+      const sc = p.score.toString(16).toUpperCase();            // packed BCD
+      const kills = String((p.kills || []).reduce((a, b) => a + b, 0));
+      const y = 74 + 7 * k;
+      return { y, cells: [{ x: 8, text: nm }, { x: 80, text: CH[p.charIndex & 3] },
+                          { x: 200 - w(sc), text: sc }, { x: 248 - w(kills), text: kills }] };
+    });
+    const sprites = STATS_SPRITE_CX.map((cx, cls) => {
+      const span = classInkSpan(cls);
+      return { cls, cx, x: span ? Math.round(cx - (span.x0 + span.x1 + 1) / 2) : cx - 8, y: STATS_SPRITE_Y };
+    });
     const lines = played.map((p, k) => ({
       y: STATS_SPRITE_Y + 18 + 7 * k,
       name: played.length > 1 ? (names[p.idx] || CH[p.charIndex & 3]).slice(0, 8) : '',
-      counts: STATS_SPRITE_X.map((x, i) => ({ cx: x + 8, text: String((p.kills || [])[i] | 0) })),
+      counts: STATS_SPRITE_CX.map((cx, i) => ({ cx, text: String((p.kills || [])[i] | 0) })),
     }));
-    return { sprites, lines };
+    return { dungeon: { cx: 128, y: 50, text: 'DUNGEON ' + st.level }, rows, sprites, lines };
   }
   statsFrame(){
     const padv = (padStatus.bits && padStatus.bits[0]) | 0;
@@ -4114,6 +4144,8 @@ class FrontEnd {
     for (const l of this.statsLines())
       uiText(ctx, l.text, l.col !== undefined ? l.col : (32 - l.text.length) >> 1, l.row, l.attr);
     const M = this.statsMicro();
+    if (M.dungeon) drawNameTag(ctx, M.dungeon.text, M.dungeon.cx, M.dungeon.y, PAL_BRT[7], 192);
+    for (const r of M.rows) for (const c of r.cells) drawMicro(ctx, c.text, c.x, r.y, PAL_BRT[7]);
     for (const s of M.sprites) drawClassSprite(ctx, s.cls, s.x, s.y);
     for (const ln of M.lines){
       if (ln.name) drawMicro(ctx, ln.name, 8, ln.y, PAL_BRT[7]);

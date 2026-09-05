@@ -10185,29 +10185,43 @@ if (process.argv[2] === '--table') {
     g.players[0].kills = [2, 1, 0, 0, 0, 0];
     g.enterGameOver();
     const lines = F.live.statsLines();
-    check('the stats screen: GAME OVER, the dungeon, a header row, a row per player who played (name, race, score, kills), PRESS ENTER OR SPACE',
+    check('the HUD-font lines: GAME OVER, the header row, PRESS ENTER OR SPACE -- the values are the micro font\'s',
           lines.map(l => l.text.replace(/ +/g, ' ').trim()),
-          ['GAME OVER', 'DUNGEON 3', 'NAME RACE SCORE KILLS', 'ANTHONY ELF 12340 3', 'VALKYRIE VALKYRIE 500 0', 'PRESS ENTER OR SPACE']);
+          ['GAME OVER', 'NAME RACE SCORE KILLS', 'PRESS ENTER OR SPACE']);
     checkTrue('...every line in the HUD font\'s charset and width', lines.every(l => /^[A-Z0-9 ]+$/.test(l.text) && l.text.length <= 32));
-    checkTrue('...the columns line up: NAME at col 1, RACE at 10, SCORE ending at 24, KILLS at 30',
-              lines[2].col === 1 && lines[3].col === 1 && lines[2].text.length === 30 &&
-              lines[2].text.indexOf('NAME') === 0 && lines[2].text.indexOf('RACE') === 9 &&
-              lines[2].text.indexOf('SCORE') + 5 === 24 && lines[2].text.indexOf('KILLS') + 5 === 30 &&
-              lines[3].text.indexOf('ANTHONY') === 0 && lines[3].text.indexOf('ELF') === 9 &&
-              lines[3].text.indexOf('12340') + 5 === 24);
+    checkTrue('...the header at col 1, 30 cells: NAME at 1, RACE at 10, SCORE ending at 24, KILLS at 30',
+              lines[1].col === 1 && lines[1].text.length === 30 && lines[1].row === 8 &&
+              lines[1].text.indexOf('NAME') === 0 && lines[1].text.indexOf('RACE') === 9 &&
+              lines[1].text.indexOf('SCORE') + 5 === 24 && lines[1].text.indexOf('KILLS') + 5 === 30);
     const micro = F.live.statsMicro();
-    check('the enemy line: six monster sprites (class 0..5) at 32 px across on y 120, and under them one count line per player, named',
-          [micro.sprites.map(s => [s.cls, s.x, s.y]), micro.lines.map(l => [l.y, l.name, l.counts.map(c => c.text).join(' ')])],
-          [[[0, 64, 120], [1, 96, 120], [2, 128, 120], [3, 160, 120], [4, 192, 120], [5, 224, 120]],
-           [[138, 'ANTHONY', '2 1 0 0 0 0'], [145, 'VALKYRIE', '0 0 0 0 0 0']]]);
-    checkTrue('...each count centred under its sprite', micro.lines.every(l => l.counts.every((c, i) => c.cx === 72 + 32 * i)));
-    check('the player rows sit on consecutive rows under the header, the footer on row 22',
-          [lines[3].row, lines[4].row, lines[5].row], [10, 11, 22]);
+    const w = t => t.length * 5 - 1;
+    check('DUNGEON in the micro font, centred under GAME OVER', [micro.dungeon.text, micro.dungeon.cx, micro.dungeon.y], ['DUNGEON 3', 128, 50]);
+    check('the values in the micro font, one 7 px row per player: name under NAME, race under RACE, score and kills right-aligned under theirs',
+          micro.rows.map(r => [r.y, r.cells.map(c => c.text), r.cells.map(c => c.x)]),
+          [[74, ['ANTHONY', 'ELF', '12340', '3'], [8, 80, 200 - w('12340'), 248 - w('3')]],
+           [81, ['VALKYRIE', 'VALKYRIE', '500', '0'], [8, 80, 200 - w('500'), 248 - w('0')]]]);
+    /* the sprites: each class's INK centred on its column, allowing for
+       where the art sits in the 16 x 16 box */
+    const AFR = G.sprite.ACTOR_FRAMES;
+    const inkSpan = cls => { const b = AFR[cls].frames[4]; let x0 = 16, x1 = -1;
+      for (let yy = 0; yy < 16; yy++) for (let bx = 0; bx < 2; bx++) for (let bit = 0; bit < 8; bit++)
+        if (b[yy * 2 + bx] & (0x80 >> bit)){ const x = bx * 8 + bit; if (x < x0) x0 = x; if (x > x1) x1 = x; }
+      return { x0, x1 }; };
+    check('six monster sprites on y 120, one per class, on a 32 px pitch of column centres',
+          micro.sprites.map(s => [s.cls, s.cx, s.y]), [[0, 72, 120], [1, 104, 120], [2, 136, 120], [3, 168, 120], [4, 200, 120], [5, 232, 120]]);
+    checkTrue('...each placed so its INK is centred on the column (within half a pixel)',
+              micro.sprites.every(s => { const sp = inkSpan(s.cls); return Math.abs((s.x + (sp.x0 + sp.x1 + 1) / 2) - s.cx) <= 0.5; }),
+              JSON.stringify(micro.sprites.map(s => { const sp = inkSpan(s.cls); return [s.cls, s.x, sp.x0, sp.x1]; })));
+    checkTrue('...and the art is not all the same width, so the box alone would not have centred it',
+              new Set(micro.sprites.map(s => { const sp = inkSpan(s.cls); return sp.x1 - sp.x0; })).size > 1);
+    check('under them one count line per player, named, each count centred on its column',
+          micro.lines.map(l => [l.y, l.name, l.counts.map(c => c.text).join(' '), l.counts.every((c, i) => c.cx === 72 + 32 * i)]),
+          [[138, 'ANTHONY', '2 1 0 0 0 0', true], [145, 'VALKYRIE', '0 0 0 0 0 0', true]]);
     const rec2 = []; const cap2 = { set fillStyle(v){ this._f = v; }, get fillStyle(){ return this._f; },
       fillRect(x, y, w, h){ rec2.push([x, y, w, h, this._f]); } };
     F.live.statsRender(cap2);
-    checkTrue('the sprites are drawn with the actor bank\'s own frames: six 16 px blocks on y 120..135, each in its class ink',
-              [64, 96, 128, 160, 192, 224].every(x => rec2.some(c => c[0] >= x && c[0] < x + 16 && c[1] >= 120 && c[1] < 136 && c[4] !== '#000000')));
+    checkTrue('the sprites are drawn with the actor bank\'s own frames: six blocks of ink on y 120..135, one per column',
+              micro.sprites.every(s => rec2.some(c => c[0] >= s.x && c[0] < s.x + 16 && c[1] >= 120 && c[1] < 136 && c[4] !== '#000000')));
   }
   /* online, end to end: die, the hold, the handback -- disconnected */
   G.net.start('ws://mockover', { char: 3, method1: 3, zonePotion: false }, tpF);

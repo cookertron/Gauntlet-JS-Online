@@ -204,8 +204,12 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      like the death mark now (`& ~0x91`).  THE TABLE (2026-09-05):
      NAME, RACE, SCORE, KILLS at fixed columns, and under each row a
      line of the SIX MONSTER SPRITES (the actor bank's own frames facing
-     down, `drawClassSprite`, at STATS_SPRITE_X on y 120) with, under
-     each, one micro count line per player (KILLS BY CLASS: ghost,
+     down, `drawClassSprite`, each centred BY ITS INK — `classInkSpan`,
+     the art sits differently in every 16×16 box — on the column
+     centres STATS_SPRITE_CX, y 120) with, under each, one micro count
+     line per player; the values under the HUD-font header (name, race,
+     score, kills) and DUNGEON are the micro font's too (KILLS BY CLASS:
+     ghost,
      grunt, demon, lobber, sorcerer, death = the state byte's top three
      bits).  `Player.kills[6]` is display metadata credited by
      `creditKill` where a monster dies BY WEAPON OR POTION (Anthony's
