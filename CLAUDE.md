@@ -201,7 +201,18 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      places the block for dungeon 1 (startLevel → $96AB's materialising
      mark) before $B474 marks everyone out, so the block sat out with
      bit 0 up and $9445 refused it for ever; joinOne spends that mark
-     like the death mark now (`& ~0x91`).
+     like the death mark now (`& ~0x91`).  THE TABLE (2026-09-05):
+     NAME, RACE, SCORE, KILLS at fixed columns, and under each row a
+     micro-font line of KILLS BY CLASS (ghost, grunt, demon, lobber,
+     sorcerer, death = the state byte's top three bits) beneath a line
+     of class labels.  `Player.kills[6]` is display metadata credited
+     by `creditKill` at the four places a monster dies by a player's
+     hand — the melee ($A627's ghost, $A60A's beaten monster), the
+     potion sweep (to `potionBy`), the shot (`shotDamage`, its owner;
+     a monster's shot credits nobody), the actor's own contact ($AEF8's
+     ghost, Death drained to $C8) — reset with the block, carried by
+     the snapshot (SNAP_PLAYER), never fingerprinted; the join landing,
+     the death scan and the off-screen recycle are not kills.
    - `restore()` now repairs `feScr` (attract/rewind shadow screen) —
      found by the e2e: a mid-lobby joiner crashed the page redraw.
    - **The background-tab clock** (found by Anthony's first real test):

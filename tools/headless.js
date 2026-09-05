@@ -10182,12 +10182,26 @@ if (process.argv[2] === '--table') {
     const g = G.seed({});
     g.autoJoin(2); g.names = ['ANTHONY', '', '', ''];
     g.players[0].score = 0x012340; g.players[1].score = 0x000500; g.level = 3;
+    g.players[0].kills = [2, 1, 0, 0, 0, 0];
     g.enterGameOver();
     const lines = F.live.statsLines();
-    check('the stats screen says GAME OVER, the dungeon, each player who played with character and score, and PRESS ENTER',
+    check('the stats screen: GAME OVER, the dungeon, a header row, a row per player who played (name, race, score, kills), PRESS ENTER OR SPACE',
           lines.map(l => l.text.replace(/ +/g, ' ').trim()),
-          ['GAME OVER', 'DUNGEON 3', 'ANTHONY ELF 12340', 'VALKYRIE VALKYRIE 500', 'PRESS ENTER OR SPACE']);
-    checkTrue('...every line in the HUD font\'s charset', lines.every(l => /^[A-Z0-9 ]+$/.test(l.text) && l.text.length <= 32));
+          ['GAME OVER', 'DUNGEON 3', 'NAME RACE SCORE KILLS', 'ANTHONY ELF 12340 3', 'VALKYRIE VALKYRIE 500 0', 'PRESS ENTER OR SPACE']);
+    checkTrue('...every line in the HUD font\'s charset and width', lines.every(l => /^[A-Z0-9 ]+$/.test(l.text) && l.text.length <= 32));
+    checkTrue('...the columns line up: NAME at col 1, RACE at 10, SCORE ending at 24, KILLS at 30',
+              lines[2].col === 1 && lines[3].col === 1 && lines[2].text.length === 30 &&
+              lines[2].text.indexOf('NAME') === 0 && lines[2].text.indexOf('RACE') === 9 &&
+              lines[2].text.indexOf('SCORE') + 5 === 24 && lines[2].text.indexOf('KILLS') + 5 === 30 &&
+              lines[3].text.indexOf('ANTHONY') === 0 && lines[3].text.indexOf('ELF') === 9 &&
+              lines[3].text.indexOf('12340') + 5 === 24);
+    const micro = F.live.statsMicro();
+    check('the breakdown: six class labels on the line under the header, and each player\'s six counts under his row',
+          [micro.filter(m => m.head).map(m => m.text), micro.filter(m => !m.head && m.y === 10 * 8 + 9).map(m => m.text),
+           micro.filter(m => !m.head && m.y === 13 * 8 + 9).map(m => m.text)],
+          [['GHOST', 'GRUNT', 'DEMON', 'LOBBER', 'SORCERER', 'DEATH'], ['2', '1', '0', '0', '0', '0'], ['0', '0', '0', '0', '0', '0']]);
+    checkTrue('...in the micro font\'s charset, one column per class', micro.every(m => /^[A-Z0-9]+$/.test(m.text)) &&
+              micro.filter(m => m.head).every((m, i) => m.x === [8, 48, 88, 128, 168, 214][i]));
   }
   /* online, end to end: die, the hold, the handback -- disconnected */
   G.net.start('ws://mockover', { char: 3, method1: 3, zonePotion: false }, tpF);
@@ -10233,6 +10247,61 @@ if (process.argv[2] === '--table') {
   for (let i = 0; i < 80 && fe.phase !== 'options'; i++) fe.frame(kb, ev, f++);
   check('...and the title\'s own fade leads to the options screen', fe.phase, 'options');
   kb.releaseAll();
+  G.seed({});
+  G.settings.reset();
+}
+
+
+/* ====================================================================
+   KILLS BY CLASS (this fork, 2026-09-05): every monster death by a
+   player's hand is counted for him by class -- display metadata for the
+   stats screen, credited where the sim removes the actor.
+   ==================================================================== */
+{
+  const g = G.seed({});
+  g.autoJoin(1);
+  const p0 = g.players[0];
+  check('a fresh block has no kills', p0.kills, [0, 0, 0, 0, 0, 0]);
+  /* the potion sweep credits the THROWER */
+  g.actors = [{ x: 20, y: 8, state: 0x20, flags: 0 }, { x: 24, y: 8, state: 0xA0, flags: 0 }];
+  g.potionBy = 0; g.potionLo = 8; g.potionHi = 8;
+  g.potionHit(1, 0xA0); g.potionHit(0, 0x20);
+  check('the potion: a grunt and Death, credited to the thrower by class', p0.kills, [0, 1, 0, 0, 0, 1]);
+  /* melee credits the walker */
+  g.p = p0; p0.x = 12; p0.y = 8;
+  g.actors = [{ x: 16, y: 8, state: 0x00, flags: 0 }];
+  g.playerScan(16, 8);
+  check('walking into a ghost: a ghost', p0.kills[0], 1);
+  g.actors = [{ x: 16, y: 8, state: 0x20, flags: 0 }]; g.passCtr = 0;
+  g.playerScan(16, 8);
+  check('a grunt beaten in melee: a grunt', p0.kills[1], 2);
+  /* the shot credits its owner; a monster's shot credits nobody */
+  g.actors = [{ x: 16, y: 8, state: 0x40, flags: 0 }];
+  g.shotDamage(0, { flags: 0 });
+  check('a player\'s shot: a demon', p0.kills[2], 1);
+  g.actors = [{ x: 16, y: 8, state: 0x40, flags: 0 }];
+  g.shotDamage(0, { flags: 0x80 });
+  check('a MONSTER\'s shot kills a demon and credits nobody', [g.actors.length, p0.kills[2]], [0, 1]);
+  /* Death worn out on the player it drained: his */
+  g.actors = [{ x: 14, y: 8, state: 0xA0, flags: 0 }];
+  g.drain.fill(0); g.drain[0] = 0xC4;                       // slot 0's accumulator, one contact short
+  let worn = 0;
+  for (let i = 0; i < 6 && g.actors.length; i++){ g.onePass({}); worn++; }
+  check('Death drained to $C8 on the player dies, and is his kill', [g.actors.length, p0.kills[5]], [0, 2]);
+  /* nothing a rule reads, everything the stats need */
+  const fp = g.fingerprint();
+  p0.kills[3] += 7;
+  check('kills are not sim state: the fingerprint does not move', g.fingerprint(), fp);
+  const wire = JSON.parse(JSON.stringify(g.snapshot()));
+  const before = p0.kills.slice();
+  g.reset({}); g.restore(wire);
+  check('the snapshot carries them, like the corpse marker (a late joiner sees the table too)', g.players[0].kills, before);
+  g.enterGameOver();
+  check('...and finalStats takes a copy', g.finalStats.players[0].kills, before);
+  g.mode = 'play'; g.p = g.players[0];
+  g.players[0].p14 |= 0x80; g.players[0].dead = true; g.players[0].animCtl = 0;
+  g.onePass({ fire: true });
+  check('a join resets them with the block', [g.players[0].inGame, g.players[0].kills], [true, [0, 0, 0, 0, 0, 0]]);
   G.seed({});
   G.settings.reset();
 }

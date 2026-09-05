@@ -3022,6 +3022,13 @@ const KEYS_PAGE = [                     // body lines 7 px apart: 5 px of glyph,
   ['f', 176, 'PRESS SPACE TO CONTINUE'],   // row 22, a blank row under it as the original left
 ];
 const KEYS_HEAD_ATTR = 0x46, KEYS_FOOT_ATTR = 0x47;   // bright yellow, bright white
+/* the monster classes, by the state byte's top three bits ($AC2D's
+   ladder: 0 ghost, 1 grunt, 2 demon, 3 lobber, 4 sorcerer, 5 death) --
+   the stats screen's kill columns */
+const KILL_CLASSES = ['GHOST', 'GRUNT', 'DEMON', 'LOBBER', 'SORCERER', 'DEATH'];
+/* the six columns' x, inside the panel's 8 px border; SORCERER is 39 px
+   wide, so DEATH sits a little further along than a flat pitch would */
+const STATS_CLASS_X = [8, 48, 88, 128, 168, 214];
 
 /* THE GAUNTLET LOGO -- not separate art: it is the credits page's own
    first three rows.  Block A's font redefines the lowercase letters (and a
@@ -4029,23 +4036,51 @@ class FrontEnd {
      options screen.  Everything drawn is the HUD font on the message
      panel, as the options screen is.  statsLines() is the data, so the
      suite can read what the screen says. */
+  /* THE TABLE (Anthony, 2026-09-05: "NAME, RACE, SCORE, KILLS", then
+     "break the kills into enemies"): a HUD-font row per player under a
+     header row, at fixed columns -- name at 1, race at 10, the score
+     right-aligned to 24, the kill count to 30 -- and under each row a
+     line in the MICRO font with the kills by class, beneath a line of
+     class labels (statsMicro).  Two cell rows per player: the HUD row
+     and, a pixel under it, the micro line. */
   statsLines(){
     const st = (typeof game !== 'undefined' && game.finalStats) || null;
-    const L = [{ row: 6, text: 'GAME OVER', attr: 0x46 }];
+    const L = [{ row: 5, text: 'GAME OVER', attr: 0x46 }];
     if (!st) return L;
-    L.push({ row: 8, text: 'DUNGEON ' + st.level, attr: UI_ATTR });
+    L.push({ row: 6, text: 'DUNGEON ' + st.level, attr: UI_ATTR });
+    /* 30 cells at col 1: inside the panel's border, never over it */
+    const cols = (a, b, c, d) => a.padEnd(8) + ' ' + b.padEnd(8) + ' ' + c.padStart(6) + ' ' + d.padStart(5);
+    L.push({ row: 8, col: 1, text: cols('NAME', 'RACE', 'SCORE', 'KILLS'), attr: 0x46 });
     const names = (typeof game !== 'undefined' && game.names) || [];
     const CH = ['WARRIOR', 'VALKYRIE', 'WIZARD', 'ELF'];
-    let row = 11;
+    let row = 10;
     for (const p of st.players){
       if (!p.played) continue;
       const nm = (names[p.idx] || CH[p.charIndex & 3]).slice(0, 8);
       const sc = p.score.toString(16).toUpperCase();            // packed BCD
-      L.push({ row, text: nm.padEnd(9) + CH[p.charIndex & 3].padEnd(10) + sc.padStart(6), attr: UI_ATTR });
-      row += 2;
+      const kills = (p.kills || []).reduce((a, b) => a + b, 0);
+      L.push({ row, col: 1, text: cols(nm, CH[p.charIndex & 3], sc, String(kills)), attr: UI_ATTR });
+      row += 3;                                   // the row, the micro line, air
     }
-    L.push({ row: 21, text: 'PRESS ENTER OR SPACE', attr: 0x47 });
+    L.push({ row: 22, text: 'PRESS ENTER OR SPACE', attr: 0x47 });
     return L;
+  }
+  /* the micro-font parts: the six class labels (row 9) and, under each
+     player's row, his kills of each -- one column per class */
+  statsMicro(){
+    const st = (typeof game !== 'undefined' && game.finalStats) || null;
+    if (!st) return [];
+    const M = [];
+    const X = STATS_CLASS_X;
+    KILL_CLASSES.forEach((c, i) => M.push({ x: X[i], y: 9 * 8 + 2, text: c, head: true }));
+    let row = 10;
+    for (const p of st.players){
+      if (!p.played) continue;
+      const k = p.kills || [0, 0, 0, 0, 0, 0];
+      X.forEach((x, i) => M.push({ x, y: row * 8 + 9, text: String(k[i] | 0), head: false }));
+      row += 3;
+    }
+    return M;
   }
   statsFrame(){
     const padv = (padStatus.bits && padStatus.bits[0]) | 0;
@@ -4059,7 +4094,9 @@ class FrontEnd {
     drawLogoOnline(ctx, 0, 8);
     uiPanelBorder(ctx, 0, 0, 32, 24, UI_ATTR);
     for (const l of this.statsLines())
-      uiText(ctx, l.text, (32 - l.text.length) >> 1, l.row, l.attr);
+      uiText(ctx, l.text, l.col !== undefined ? l.col : (32 - l.text.length) >> 1, l.row, l.attr);
+    for (const m of this.statsMicro())
+      drawMicro(ctx, m.text, m.x, m.y, m.head ? PAL_BRT[6] : PAL_BRT[7]);
   }
   /* the keys page's body -- see KEYS_PAGE.  Revealed by the page's own
      row clock: a line shows once the 8 px row its bottom falls in has
@@ -4445,6 +4482,13 @@ class Player{
        is a revive) and by startLevel -- a new dungeon has no old
        corpses.  Display reads it, no rule does. */
     this.died = false; this.diedX = 0; this.diedY = 0;
+    /* KILLS BY CLASS (this fork, 2026-09-05): ghost, grunt, demon,
+       lobber, sorcerer, death -- the actor's class bits (state >> 5).
+       Display metadata for the stats screen: credited at the four
+       places a monster dies by a player's hand (see creditKill), reset
+       with the block, carried by the snapshot like the corpse marker,
+       never fingerprinted and never read by a rule. */
+    this.kills = [0, 0, 0, 0, 0, 0];
   }
   /* (IX+$14) bit 7 -- the ONE flag that says whether this player exists.
      Cleared only at $9451, set at $93EE (death) and $9460 (join refused). */
@@ -4522,6 +4566,11 @@ class Game{
   others(p){ return this.players.filter(q => q !== p); }
   /* every block is dead or out: $B3AB's "both players dead", for four */
   allDead(){ return this.players.every(q => q.dead); }
+  /* a monster died by player q's hand: count it by class (display only) */
+  creditKill(q, state){
+    const c = (state >> 5) & 7;
+    if (q && q.kills && c < 6) q.kills[c]++;
+  }
   /* the four characters, one per block: the first two are the menu's
      ($FFFF / $FFFE); blocks 3 and 4 take what is given or else the
      lowest characters not yet fielded -- the engine never fields two of
@@ -5412,6 +5461,7 @@ class Game{
     this.health = 0x2000;                                // $9488 / $946F
     this.score = 0;                                      // $9472..$9478
     this.keys = 0; this.potions = 0; this.timer = 0;     // $947B..$9481
+    this.p.kills = [0, 0, 0, 0, 0, 0];                   // (stats) a fresh block
     this.shot.x = 0xFF;                                  // $9484 -- see above
     this.p14 &= 0x80;                                    // $948C AND $80
     this.installArmour();       // the inventory bit moved: $AB6F's row again
@@ -5998,12 +6048,18 @@ class Game{
       this.hurt(this.ghostDmg[tier]);        // $A627, tier -> $8437..$8439
       this.sfx(0);                           // $A63D SUB A / $A63E CALL $BA2B
       this.actorRemove(i);
+      this.creditKill(this.p, ob.state);     // (stats) a ghost, by touch
     } else if (cls === 0xA0){                        // $A5FD CP $A0 / RET z
       /* nothing at all: melee cannot touch class 5, it simply blocks */
     } else if ((this.passCtr & 3) === 0){            // $A600
       const st = (ob.state - 8) & 0xFF;              // $A606
       ob.state = st;
-      if ((~st & 0x18) === 0) this.actorRemove(i);   // $A60A CPL / AND $18
+      if ((~st & 0x18) === 0){                       // $A60A CPL / AND $18
+        this.actorRemove(i);
+        /* (stats) beaten in melee -- by `cls`, read BEFORE the hit: the
+           $A606 borrow runs out of the HP bits into the class bits */
+        this.creditKill(this.p, cls);
+      }
       /* $A610 LD DE,$0025 / JP $B807 -- 25 BCD points PER HIT, so a tier-t
          monster is worth 25*(t+1).  This used to be dropped because there was
          no live score to put it in; there is now. */
@@ -6034,12 +6090,14 @@ class Game{
     if (E >= 0xA0){                                     // $AF5E CP $A0
       this.genTally = daaAdd(this.genTally, 1, 0).v;    // $AF62 ADD 1 / DAA
       this.actorRemove(i);                              // $AF6B CALL $AE7E
+      this.creditKill(this.players[this.potionBy & 3], E);   // (stats) Death, by potion
       return null;                                      // $AF6E the unwind
     }
     this.killTally = daaAdd(this.killTally, 1, 0).v;    // $AF72 ADD 1 / DAA
     const d = (E < 0x20) ? this.potionLo : this.potionHi;   // $AF7C/$AF83
     if (((E & 0x18) - d) < 0){                          // $AF86 SUB D / JR c
       this.actorRemove(i);
+      this.creditKill(this.players[this.potionBy & 3], E);   // (stats) by potion
       return null;
     }
     return (E - d) & 0xFF;                              // $AF8B
@@ -7479,6 +7537,7 @@ class Game{
           this.hurt(this.ghostDmg[tier]);        // $A627, tier -> $8437..$8439
           this.sfx(0);                           // $AEFB SUB A / $AEFC
           this.actorRemove(i);
+          this.creditKill(this.p, a.state);      // (stats) the ghost it took
           return true;
         }
         a.flags &= ~0x20;                   // $AF06 RES 5
@@ -7493,7 +7552,11 @@ class Game{
           const k = (i * 4) & 0xFF;                      // IXL = 4*slot
           const acc = ((this.drain[k >> 1] || 0) + 4) & 0xFF;
           this.drain[k >> 1] = acc;
-          if (acc >= 0xC8){ this.actorRemove(i); return true; }
+          if (acc >= 0xC8){
+            this.actorRemove(i);
+            this.creditKill(this.p, a.state);    // (stats) Death, worn out on him
+            return true;
+          }
           this.hurt(4);
           this.sfx(2);                                   // $AF42/$AF44
         } else if ((a.flags & 3) === 0){
@@ -8276,7 +8339,13 @@ class Game{
     let bonus = 0;
     if ((t & 1) && (this.passCtr & 1)) bonus = 8;        // $90F4..$90FF
     const E = (bonus + t) & 0x18;                        // $9102 AND $18
-    if (((ob.state & 0x18) - E) < 0) this.actorRemove(i);   // $9108 JR nc
+    if (((ob.state & 0x18) - E) < 0){                    // $9108 JR nc
+      this.actorRemove(i);
+      /* (stats) a PLAYER's shot credits its owner -- `p` is the shot's
+         block inside shotPass; a monster's shot (flags bit 7) credits
+         nobody */
+      if (!(s && (s.flags & 0x80))) this.creditKill(this.p, ob.state);
+    }
     else ob.state = (ob.state - E) & 0xFF;               // $9110
   }
 
@@ -9436,7 +9505,8 @@ class Game{
     this.finalStats = {
       level: this.level,
       players: this.players.map(q => ({ idx: q.idx, played: !!(q.died || q.score !== 0),
-                                        score: q.score, charIndex: q.charIndex })),
+                                        score: q.score, charIndex: q.charIndex,
+                                        kills: (q.kills || [0, 0, 0, 0, 0, 0]).slice() })),
     };
   }
 
@@ -9470,6 +9540,7 @@ class Game{
   endGameOver(){
     this.millions = 0;                                   // $B364/$B367
     this.score = 0;                                      // a new player block
+    this.p.kills = [0, 0, 0, 0, 0, 0];                   // (stats)
     this.health = 0x2000; this.keys = 0; this.potions = 0;
     this.p14 &= 0x3F;                                    // not dead, no bonus
     this.dead = false;
@@ -10129,6 +10200,7 @@ class Game{
     s.players.forEach((sp, i) => {
       const q = this.players[i];
       for (const k of SNAP_PLAYER) q[k] = sp[k];
+      q.kills = Array.isArray(sp.kills) ? sp.kills.slice() : [0, 0, 0, 0, 0, 0];   // (stats)
       q.shot.x = sp.shot.x; q.shot.y = sp.shot.y; q.shot.state = sp.shot.state;
       q.shot.drawX = sp.shot.x; q.shot.drawY = sp.shot.y; q.shot.drawn = false;
       q.dmgRow = sp.dmgRow.slice();
@@ -10178,7 +10250,7 @@ const SNAP_PLAYER = [
   'x', 'y', 'dir', 'health', 'score', 'keys', 'potions', 'timer', 'f11',
   'levelOwn', 'bannerBonus', 'frameSlot', 'animCtl', 'shotTag', 'p14',
   'p15', 'exitCtr', 'exitFrames', 'dead', 'millions', 'hoardKey',
-  'charIndex', 'eBits', 'died', 'diedX', 'diedY',
+  'charIndex', 'eBits', 'died', 'diedX', 'diedY', 'kills',
   'camX', 'camY', 'camTgtX', 'camTgtY', 'camLive',
   'pend', 'pendCol', 'pendRow',
 ];
