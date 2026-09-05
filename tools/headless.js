@@ -10186,7 +10186,7 @@ if (process.argv[2] === '--table') {
     const lines = F.live.statsLines();
     check('the stats screen says GAME OVER, the dungeon, each player who played with character and score, and PRESS ENTER',
           lines.map(l => l.text.replace(/ +/g, ' ').trim()),
-          ['GAME OVER', 'DUNGEON 3', 'ANTHONY ELF 12340', 'VALKYRIE VALKYRIE 500', 'PRESS ENTER']);
+          ['GAME OVER', 'DUNGEON 3', 'ANTHONY ELF 12340', 'VALKYRIE VALKYRIE 500', 'PRESS ENTER OR SPACE']);
     checkTrue('...every line in the HUD font\'s charset', lines.every(l => /^[A-Z0-9 ]+$/.test(l.text) && l.text.length <= 32));
   }
   /* online, end to end: die, the hold, the handback -- disconnected */
