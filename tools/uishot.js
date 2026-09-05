@@ -192,11 +192,11 @@ for (const name of ['credits', 'keys', 'title', 'tune']){
 /* ---------- the stats screen: game over, the party's table ------------- */
 {
   const sg = G.seed({});
-  sg.autoJoin(4); sg.names = ['ANTHONY', '', 'NITRO 5', 'EVE'];
+  sg.autoJoin(3); sg.names = ['ANTHONY', '', 'NITRO 5', 'EVE'];
   sg.players[0].score = 0x012340; sg.players[0].kills = [12, 7, 3, 1, 0, 1];
   sg.players[1].score = 0x004200; sg.players[1].kills = [4, 2, 0, 0, 1, 0];
   sg.players[2].score = 0x017350; sg.players[2].kills = [20, 9, 5, 2, 2, 0];
-  sg.players[3].score = 0x000090; sg.players[3].kills = [1, 0, 0, 0, 0, 0];
+  sg.players[3].score = 0; sg.players[3].kills = [0, 0, 0, 0, 0, 0];
   sg.level = 4;
   sg.enterGameOver();
   const fe = new F.FrontEnd(); fe.enter('stats');

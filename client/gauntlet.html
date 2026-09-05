@@ -3026,9 +3026,23 @@ const KEYS_HEAD_ATTR = 0x46, KEYS_FOOT_ATTR = 0x47;   // bright yellow, bright w
    ladder: 0 ghost, 1 grunt, 2 demon, 3 lobber, 4 sorcerer, 5 death) --
    the stats screen's kill columns */
 const KILL_CLASSES = ['GHOST', 'GRUNT', 'DEMON', 'LOBBER', 'SORCERER', 'DEATH'];
-/* the six columns' x, inside the panel's 8 px border; SORCERER is 39 px
-   wide, so DEATH sits a little further along than a flat pitch would */
-const STATS_CLASS_X = [8, 48, 88, 128, 168, 214];
+/* the six sprites' x on the stats screen (16 px each on a 32 px pitch,
+   inside the panel's border) and their y */
+const STATS_SPRITE_X = [64, 96, 128, 160, 192, 224];
+const STATS_SPRITE_Y = 120;
+/* one monster of a class, as the actor blitter draws it: the bank's own
+   frame facing DOWN (slot 4), phase 0, in the class's own ink, opaque
+   over the panel's black */
+function drawClassSprite(ctx, cls, x, y){
+  const set = ACTOR_FRAMES[cls];
+  const bmp = set && set.frames[4];
+  if (!bmp) return;
+  const pal2 = (set.ink & 0x40) ? PAL_BRT : PAL_DIM;
+  const ink2 = pal2[set.ink & 7], paper2 = pal2[(set.ink >> 3) & 7];
+  for (let yy = 0; yy < 16; yy++)
+    for (let bx = 0; bx < 2; bx++)
+      blitOpaqueRow(ctx, bmp[yy * 2 + bx], ink2, paper2, x + bx * 8, y + yy, 256);
+}
 
 /* THE GAUNTLET LOGO -- not separate art: it is the credits page's own
    first three rows.  Block A's font redefines the lowercase letters (and a
@@ -4037,12 +4051,15 @@ class FrontEnd {
      panel, as the options screen is.  statsLines() is the data, so the
      suite can read what the screen says. */
   /* THE TABLE (Anthony, 2026-09-05: "NAME, RACE, SCORE, KILLS", then
-     "break the kills into enemies"): a HUD-font row per player under a
-     header row, at fixed columns -- name at 1, race at 10, the score
-     right-aligned to 24, the kill count to 30 -- and under each row a
-     line in the MICRO font with the kills by class, beneath a line of
-     class labels (statsMicro).  Two cell rows per player: the HUD row
-     and, a pixel under it, the micro line. */
+     "break the kills into enemies", then "a horizontal line of enemy
+     sprites with the kill count underneath"): a HUD-font header row and
+     one row per player at fixed columns -- name at 1, race at 10, the
+     score right-aligned to 24, the kill count to 30 -- then the SIX
+     MONSTERS themselves, one sprite each (the actor bank's own frames,
+     facing down) in a line, and under each sprite the count, one micro
+     line per player, his name at the left when more than one played
+     (statsMicro).  Rows 10..13 for the players, the sprites at y 120,
+     the counts from y 138 at 7 px, the footer on row 22. */
   statsLines(){
     const st = (typeof game !== 'undefined' && game.finalStats) || null;
     const L = [{ row: 5, text: 'GAME OVER', attr: 0x46 }];
@@ -4060,27 +4077,28 @@ class FrontEnd {
       const sc = p.score.toString(16).toUpperCase();            // packed BCD
       const kills = (p.kills || []).reduce((a, b) => a + b, 0);
       L.push({ row, col: 1, text: cols(nm, CH[p.charIndex & 3], sc, String(kills)), attr: UI_ATTR });
-      row += 3;                                   // the row, the micro line, air
+      row += 1;
     }
     L.push({ row: 22, text: 'PRESS ENTER OR SPACE', attr: 0x47 });
     return L;
   }
-  /* the micro-font parts: the six class labels (row 9) and, under each
-     player's row, his kills of each -- one column per class */
+  /* the enemy line: six sprites (class 0..5, facing down, phase 0, each
+     in its own ink) at STATS_SPRITE_X on y 120, and under them one micro
+     line per player who played -- his name at the left when more than
+     one did, then his count centred under each sprite */
   statsMicro(){
     const st = (typeof game !== 'undefined' && game.finalStats) || null;
-    if (!st) return [];
-    const M = [];
-    const X = STATS_CLASS_X;
-    KILL_CLASSES.forEach((c, i) => M.push({ x: X[i], y: 9 * 8 + 2, text: c, head: true }));
-    let row = 10;
-    for (const p of st.players){
-      if (!p.played) continue;
-      const k = p.kills || [0, 0, 0, 0, 0, 0];
-      X.forEach((x, i) => M.push({ x, y: row * 8 + 9, text: String(k[i] | 0), head: false }));
-      row += 3;
-    }
-    return M;
+    if (!st) return { sprites: [], lines: [] };
+    const names = (typeof game !== 'undefined' && game.names) || [];
+    const CH = ['WARRIOR', 'VALKYRIE', 'WIZARD', 'ELF'];
+    const sprites = STATS_SPRITE_X.map((x, cls) => ({ cls, x, y: STATS_SPRITE_Y }));
+    const played = st.players.filter(p => p.played);
+    const lines = played.map((p, k) => ({
+      y: STATS_SPRITE_Y + 18 + 7 * k,
+      name: played.length > 1 ? (names[p.idx] || CH[p.charIndex & 3]).slice(0, 8) : '',
+      counts: STATS_SPRITE_X.map((x, i) => ({ cx: x + 8, text: String((p.kills || [])[i] | 0) })),
+    }));
+    return { sprites, lines };
   }
   statsFrame(){
     const padv = (padStatus.bits && padStatus.bits[0]) | 0;
@@ -4095,8 +4113,12 @@ class FrontEnd {
     uiPanelBorder(ctx, 0, 0, 32, 24, UI_ATTR);
     for (const l of this.statsLines())
       uiText(ctx, l.text, l.col !== undefined ? l.col : (32 - l.text.length) >> 1, l.row, l.attr);
-    for (const m of this.statsMicro())
-      drawMicro(ctx, m.text, m.x, m.y, m.head ? PAL_BRT[6] : PAL_BRT[7]);
+    const M = this.statsMicro();
+    for (const s of M.sprites) drawClassSprite(ctx, s.cls, s.x, s.y);
+    for (const ln of M.lines){
+      if (ln.name) drawMicro(ctx, ln.name, 8, ln.y, PAL_BRT[7]);
+      for (const c of ln.counts) drawNameTag(ctx, c.text, c.cx, ln.y, PAL_BRT[7], 192);
+    }
   }
   /* the keys page's body -- see KEYS_PAGE.  Revealed by the page's own
      row clock: a line shows once the 8 px row its bottom falls in has
@@ -4484,10 +4506,14 @@ class Player{
     this.died = false; this.diedX = 0; this.diedY = 0;
     /* KILLS BY CLASS (this fork, 2026-09-05): ghost, grunt, demon,
        lobber, sorcerer, death -- the actor's class bits (state >> 5).
-       Display metadata for the stats screen: credited at the four
-       places a monster dies by a player's hand (see creditKill), reset
-       with the block, carried by the snapshot like the corpse marker,
-       never fingerprinted and never read by a rule. */
+       Display metadata for the stats screen, credited where a monster
+       dies BY WEAPON OR POTION (Anthony's rule): a player's shot, a
+       melee hit that finishes a monster, the potion sweep.  A monster
+       that dies by touching the player -- the ghost that bursts on him,
+       Death worn out draining him -- is the monster's attack, not a
+       kill, and is not counted.  Reset with the block, carried by the
+       snapshot like the corpse marker, never fingerprinted and never
+       read by a rule. */
     this.kills = [0, 0, 0, 0, 0, 0];
   }
   /* (IX+$14) bit 7 -- the ONE flag that says whether this player exists.
@@ -6047,8 +6073,7 @@ class Game{
     if (cls === 0){                                  // $A5FB -> $A627
       this.hurt(this.ghostDmg[tier]);        // $A627, tier -> $8437..$8439
       this.sfx(0);                           // $A63D SUB A / $A63E CALL $BA2B
-      this.actorRemove(i);
-      this.creditKill(this.p, ob.state);     // (stats) a ghost, by touch
+      this.actorRemove(i);                   // (stats) not a kill: it burst on him
     } else if (cls === 0xA0){                        // $A5FD CP $A0 / RET z
       /* nothing at all: melee cannot touch class 5, it simply blocks */
     } else if ((this.passCtr & 3) === 0){            // $A600
@@ -7536,8 +7561,7 @@ class Game{
           const tier = (a.state>>3)&3;
           this.hurt(this.ghostDmg[tier]);        // $A627, tier -> $8437..$8439
           this.sfx(0);                           // $AEFB SUB A / $AEFC
-          this.actorRemove(i);
-          this.creditKill(this.p, a.state);      // (stats) the ghost it took
+          this.actorRemove(i);                   // (stats) not a kill: its own attack
           return true;
         }
         a.flags &= ~0x20;                   // $AF06 RES 5
@@ -7552,11 +7576,7 @@ class Game{
           const k = (i * 4) & 0xFF;                      // IXL = 4*slot
           const acc = ((this.drain[k >> 1] || 0) + 4) & 0xFF;
           this.drain[k >> 1] = acc;
-          if (acc >= 0xC8){
-            this.actorRemove(i);
-            this.creditKill(this.p, a.state);    // (stats) Death, worn out on him
-            return true;
-          }
+          if (acc >= 0xC8){ this.actorRemove(i); return true; }   // (stats) not a kill
           this.hurt(4);
           this.sfx(2);                                   // $AF42/$AF44
         } else if ((a.flags & 3) === 0){

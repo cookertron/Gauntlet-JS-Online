@@ -10196,12 +10196,18 @@ if (process.argv[2] === '--table') {
               lines[3].text.indexOf('ANTHONY') === 0 && lines[3].text.indexOf('ELF') === 9 &&
               lines[3].text.indexOf('12340') + 5 === 24);
     const micro = F.live.statsMicro();
-    check('the breakdown: six class labels on the line under the header, and each player\'s six counts under his row',
-          [micro.filter(m => m.head).map(m => m.text), micro.filter(m => !m.head && m.y === 10 * 8 + 9).map(m => m.text),
-           micro.filter(m => !m.head && m.y === 13 * 8 + 9).map(m => m.text)],
-          [['GHOST', 'GRUNT', 'DEMON', 'LOBBER', 'SORCERER', 'DEATH'], ['2', '1', '0', '0', '0', '0'], ['0', '0', '0', '0', '0', '0']]);
-    checkTrue('...in the micro font\'s charset, one column per class', micro.every(m => /^[A-Z0-9]+$/.test(m.text)) &&
-              micro.filter(m => m.head).every((m, i) => m.x === [8, 48, 88, 128, 168, 214][i]));
+    check('the enemy line: six monster sprites (class 0..5) at 32 px across on y 120, and under them one count line per player, named',
+          [micro.sprites.map(s => [s.cls, s.x, s.y]), micro.lines.map(l => [l.y, l.name, l.counts.map(c => c.text).join(' ')])],
+          [[[0, 64, 120], [1, 96, 120], [2, 128, 120], [3, 160, 120], [4, 192, 120], [5, 224, 120]],
+           [[138, 'ANTHONY', '2 1 0 0 0 0'], [145, 'VALKYRIE', '0 0 0 0 0 0']]]);
+    checkTrue('...each count centred under its sprite', micro.lines.every(l => l.counts.every((c, i) => c.cx === 72 + 32 * i)));
+    check('the player rows sit on consecutive rows under the header, the footer on row 22',
+          [lines[3].row, lines[4].row, lines[5].row], [10, 11, 22]);
+    const rec2 = []; const cap2 = { set fillStyle(v){ this._f = v; }, get fillStyle(){ return this._f; },
+      fillRect(x, y, w, h){ rec2.push([x, y, w, h, this._f]); } };
+    F.live.statsRender(cap2);
+    checkTrue('the sprites are drawn with the actor bank\'s own frames: six 16 px blocks on y 120..135, each in its class ink',
+              [64, 96, 128, 160, 192, 224].every(x => rec2.some(c => c[0] >= x && c[0] < x + 16 && c[1] >= 120 && c[1] < 136 && c[4] !== '#000000')));
   }
   /* online, end to end: die, the hold, the handback -- disconnected */
   G.net.start('ws://mockover', { char: 3, method1: 3, zonePotion: false }, tpF);
@@ -10271,10 +10277,10 @@ if (process.argv[2] === '--table') {
   g.p = p0; p0.x = 12; p0.y = 8;
   g.actors = [{ x: 16, y: 8, state: 0x00, flags: 0 }];
   g.playerScan(16, 8);
-  check('walking into a ghost: a ghost', p0.kills[0], 1);
+  check('a ghost that bursts on the player is NOT a kill (by weapon or potion only)', [g.actors.length, p0.kills[0]], [0, 0]);
   g.actors = [{ x: 16, y: 8, state: 0x20, flags: 0 }]; g.passCtr = 0;
   g.playerScan(16, 8);
-  check('a grunt beaten in melee: a grunt', p0.kills[1], 2);
+  check('a grunt beaten in melee is: a grunt', p0.kills[1], 2);
   /* the shot credits its owner; a monster's shot credits nobody */
   g.actors = [{ x: 16, y: 8, state: 0x40, flags: 0 }];
   g.shotDamage(0, { flags: 0 });
@@ -10287,7 +10293,7 @@ if (process.argv[2] === '--table') {
   g.drain.fill(0); g.drain[0] = 0xC4;                       // slot 0's accumulator, one contact short
   let worn = 0;
   for (let i = 0; i < 6 && g.actors.length; i++){ g.onePass({}); worn++; }
-  check('Death drained to $C8 on the player dies, and is his kill', [g.actors.length, p0.kills[5]], [0, 2]);
+  check('Death worn out draining the player dies, and is NOT his kill', [g.actors.length, p0.kills[5]], [0, 1]);
   /* nothing a rule reads, everything the stats need */
   const fp = g.fingerprint();
   p0.kills[3] += 7;
@@ -10295,7 +10301,7 @@ if (process.argv[2] === '--table') {
   const wire = JSON.parse(JSON.stringify(g.snapshot()));
   const before = p0.kills.slice();
   g.reset({}); g.restore(wire);
-  check('the snapshot carries them, like the corpse marker (a late joiner sees the table too)', g.players[0].kills, before);
+  check('the snapshot carries them, like the corpse marker (a late joiner sees the table too)', [g.players[0].kills, before], [[0, 2, 1, 7, 0, 1], [0, 2, 1, 7, 0, 1]]);
   g.enterGameOver();
   check('...and finalStats takes a copy', g.finalStats.players[0].kills, before);
   g.mode = 'play'; g.p = g.players[0];
