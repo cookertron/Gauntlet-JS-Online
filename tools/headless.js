@@ -10201,6 +10201,19 @@ if (process.argv[2] === '--table') {
   check('START joins the online game', [G.game.mode, G.game.players[0].inGame], ['play', true]);
   G.game.players[0].health = 0;
   let n = 0; while (G.game.mode === 'play' && n < 10){ xchg(); n++; }
+  /* the join hint: never over the RIP -- not while he lies dead in a
+     running game, not during the hold; only for a join the dungeon refused */
+  const overlayDraws = () => { recording = true; drawCalls.length = 0; G.net.overlay(ctxStub); recording = false; return drawCalls.length; };
+  check('during the RIP hold the overlay says NOTHING (no PRESS Z TO JOIN over the bones)',
+        [G.game.mode, G.game.players[0].died, overlayDraws()], ['over', true, 0]);
+  {
+    const q = G.game.players[0], mode = G.game.mode;
+    G.game.mode = 'play';
+    check('...nor while he lies dead in a running game', overlayDraws(), 0);
+    q.died = false;
+    checkTrue('...but a join the dungeon REFUSED (out, no corpse, no latch) still gets the hint', overlayDraws() > 0);
+    q.died = true; G.game.mode = mode;
+  }
   let m = 0; while (G.game.mode === 'over' && m < 300){ xchg(); m++; }
   check('the RIP hold runs its 63 exchanges in lockstep and the sim reaches the attract loop', [m, G.game.mode], [63, 'attract']);
   checkTrue('the frame loop\'s check then hands the screen back: session OFF, transport closed, the front end at STATS',

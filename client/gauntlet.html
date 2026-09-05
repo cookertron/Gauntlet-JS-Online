@@ -12362,9 +12362,15 @@ function netOverlay(ctx){
   let line = net.status;
   if (net.phase === 'live'){
     const q = game.players[net.seat];
+    /* the join hint is for a player who is OUT and not on his way in --
+       never for a DEAD one (Anthony, 2026-09-05: not over the RIP; the
+       tag over the bones is the message, and during the hold nothing
+       can be pressed anyway).  What is left is a join the dungeon
+       refused ($9460 -- no free cell by the party), where FIRE again
+       is the answer. */
     line = (net.sentInput && netNow() - net.lastProgress > 700)
       ? 'WAITING FOR PLAYERS'
-      : (net.everLive && q && !q.inGame && !net.autoFire)
+      : (net.everLive && q && !q.inGame && !q.died && game.mode !== 'over' && !net.autoFire)
         ? 'PRESS ' + netFireKey() + ' TO JOIN'
         : '';
   }
