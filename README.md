@@ -36,10 +36,18 @@ and players — and each one is published as a GitHub release.
 ## Play online
 
 The relay serves the game itself: run it, share the address, done.
+Double-click `gauntlet-relay.exe` and it opens a window: the addresses,
+the seats (name, character, address, time connected, the ping the
+server measures to each player, and how long their moves wait for the
+rest — the seat that never waits is the one holding everyone up), a
+button that opens the router port, a Kick, and the stamped log behind
+View > Log.  With any argument it is the console relay instead:
 
 ```
-server\build\gauntlet-relay.exe          # builds below; --port/--seats/--html (four seats by default)
+server\build\gauntlet-relay.exe --console   # --port/--seats/--html (four seats by default); --gui forces the window
 ```
+
+![The server window](build/ui/server.png)
 
 Everyone opens `http://<host-ip>:33792/`, picks a character and a NAME
 (worn over your head when players meet on screen, in your own colour —
@@ -78,17 +86,18 @@ and `tick=` say how far a hidden tab's game has run ahead of real time
 and whether the speaker is keeping its clock: leaving the tab and
 coming back should cost nothing but a skip in the sound.
 
-For play from OUTSIDE the network, `--forward` asks the router to open
-the port itself (NAT-PMP first, then UPnP), prints the public address
-to share, renews the lease, and removes the mapping on Ctrl+C
-(`--unforward` cleans one up by hand).  It also tells the truth when
+For play from OUTSIDE the network, the window's "Open port on router"
+button — or `--forward` in the console — asks the router to open the
+port itself (NAT-PMP first, then UPnP), shows the public address to
+share, renews the lease, and removes the mapping when the window closes
+or on Ctrl+C (`--unforward` cleans one up by hand).  It also tells the truth when
 forwarding cannot work: a DOUBLE-NAT setup (the router behind an ISP
 modem — the outer box must forward too, or run in bridge mode) or
 carrier-grade NAT (only the ISP or a tunnel can fix that).  The
 Windows Firewall must allow the exe as well — it prompts on first run.
 
-The C++ relay server (`server/relay.cpp`, protocol in
-`shared/PROTOCOL.md`) builds inside the VS x64 environment:
+The C++ relay server (`server/relay.cpp`, its window `server/gui.cpp`,
+protocol in `shared/PROTOCOL.md`) builds inside the VS x64 environment:
 
 ```
 vcvars64 && cmake -S server -B server\build -G Ninja
@@ -96,7 +105,7 @@ vcvars64 && cmake -S server -B server\build -G Ninja
 python tools/protocheck.py                 # protocol constants in sync
 node tools/relaytest.js                    # the relay's own gate (54 checks)
 node tools/e2etest.js                      # four real clients through it (32 checks)
-server\build\gauntlet-relay.exe            # run it (--port 33792 --seats 4)
+server\build\gauntlet-relay.exe            # the window; --console (--port 33792 --seats 4) for a terminal
 ```
 
 ## Provenance

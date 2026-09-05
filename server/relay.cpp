@@ -25,7 +25,9 @@
      vcvars64 && cmake -S server -B server/build -G Ninja
               && ninja -C server/build
    Run:
-     gauntlet-relay [--port 33792] [--seats 4]
+     gauntlet-relay                      double-clicked: THE WINDOW (gui.cpp)
+     gauntlet-relay [--port 33792] [--seats 4] [--forward]   the console relay
+     (--gui / --console force either; the log is stamped in both)
    Test:
      node tools/relaytest.js server/build/gauntlet-relay.exe          */
 
@@ -38,14 +40,21 @@
 
 #include <sys/stat.h>
 
+#include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
+
+#include "relay.h"
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "iphlpapi.lib")
@@ -91,6 +100,69 @@ constexpr uint8_t  ERR_ORPHANED        = 4;
 constexpr uint8_t  MODE_FRESH          = 0;
 constexpr uint8_t  MODE_SNAPSHOT       = 1;
 /* ==== end protocol constants ======================================== */
+
+/* the relay's own WebSocket ping, once a second per connection (tick) --
+   transport, not protocol: a client that never answers loses nothing
+   but the host's ping column */
+constexpr uint32_t PING_EVERY_MS = 1000;
+
+/* ---- THE LOG: every line stamped HH:MM:SS.mmm (Anthony: real-time
+   logging "needs a timestamp btw"), to stdout in console mode and into
+   a queue the window drains (gui.cpp, View > Log).  A message may carry
+   '\n': each piece is a stamped line of its own. ------------------------ */
+static std::mutex logMx;
+static std::vector<std::string> logQueue;   // undrained lines, window mode
+static bool logKeep = false;                // window mode: queue the lines
+static bool logStdout = true;               // console mode, or a shared console
+static std::string logStamp(){
+  SYSTEMTIME st; GetLocalTime(&st);
+  char b[16];
+  snprintf(b, sizeof b, "%02u:%02u:%02u.%03u", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+  return b;
+}
+static void logf(const char* fmt, ...){
+  char buf[4096];
+  va_list ap; va_start(ap, fmt); vsnprintf(buf, sizeof buf, fmt, ap); va_end(ap);
+  const std::string stamp = logStamp(), text(buf);
+  std::lock_guard<std::mutex> g(logMx);
+  size_t a = 0;
+  for (;;){
+    size_t b = text.find('\n', a);
+    std::string line = stamp + "  " + text.substr(a, b == std::string::npos ? std::string::npos : b - a);
+    if (logStdout){ fputs(line.c_str(), stdout); fputc('\n', stdout); }
+    if (logKeep){
+      logQueue.push_back(line);
+      if (logQueue.size() > 5000) logQueue.erase(logQueue.begin(), logQueue.begin() + 1000);
+    }
+    if (b == std::string::npos) break;
+    a = b + 1;
+  }
+  if (logStdout) fflush(stdout);
+}
+std::vector<std::string> logTake(){
+  std::lock_guard<std::mutex> g(logMx);
+  std::vector<std::string> out; out.swap(logQueue); return out;
+}
+/* microseconds off the performance counter: GetTickCount64's ~16 ms
+   grain cannot time a LAN ping */
+static uint64_t nowUs(){
+  static LARGE_INTEGER f = {};
+  if (!f.QuadPart) QueryPerformanceFrequency(&f);
+  LARGE_INTEGER c; QueryPerformanceCounter(&c);
+  return uint64_t(c.QuadPart / f.QuadPart) * 1000000u +
+         uint64_t((c.QuadPart % f.QuadPart) * 1000000 / f.QuadPart);
+}
+
+/* ---- what the WINDOW sees (gui.cpp, relay.h): a status copy the loop
+   publishes after every turn, the kick queue it drains at the top of the
+   next, and the stop flag.  The window never touches Relay. ---------- */
+static std::mutex stMx;  static RelayStatus stCopy;
+static std::mutex cmdMx; static std::deque<int> kickQueue;
+static std::atomic<bool> stopFlag{false}, doneFlag{false};
+RelayStatus relayStatus(){ std::lock_guard<std::mutex> g(stMx); return stCopy; }
+void relayKick(int seat){ std::lock_guard<std::mutex> g(cmdMx); kickQueue.push_back(seat); }
+void relayStop(){ stopFlag = true; }
+bool relayDone(){ return doneFlag; }
 
 /* ---- SHA-1, for the one thing a WebSocket server needs it for: the
    Sec-WebSocket-Accept digest.  Straight RFC 3174 arithmetic. ---------- */
@@ -364,17 +436,34 @@ static bool soapCall(const Upnp& u, const std::string& action,
   if (!httpTalk(u.host, u.port, req, resp)) return false;
   return resp.find(" 200 ") != std::string::npos;
 }
-/* ---- the orchestration ------------------------------------------------ */
+/* ---- the orchestration ------------------------------------------------
+   Two locks: natMx guards the STATE (the window copies it at 4 Hz and
+   must never wait on a router), natOpMx serialises the OPERATIONS --
+   a forward or a removal works on a local copy for as long as the router
+   takes and commits at the end.  The console path calls these inline;
+   the window calls relayForward, which runs them on a thread. */
 struct NatState {
   bool active = false;
+  bool busy = false;              // an operation is under way
   bool pmp = false;               // which protocol holds the mapping
   uint32_t gw = 0;
   Upnp upnp;
   uint16_t port = 0, extPort = 0;
   std::string extIp, lan;
+  std::string summary, warning;   // for the window: the outcome, and DOUBLE/CG NAT
   uint64_t renewAt = 0;           // GetTickCount64 ms; 0 = no renewal needed
 };
 static NatState NAT;
+static std::mutex natMx, natOpMx;
+static NatState natCopy(){ std::lock_guard<std::mutex> g(natMx); return NAT; }
+static void natCommit(const NatState& n){ std::lock_guard<std::mutex> g(natMx); NAT = n; }
+NatStatus natStatus(){
+  NatState n = natCopy();
+  NatStatus s;
+  s.active = n.active; s.busy = n.busy; s.pmp = n.pmp; s.extPort = n.extPort;
+  s.extIp = n.extIp; s.lan = n.lan; s.summary = n.summary; s.warning = n.warning;
+  return s;
+}
 static bool upnpMap(const Upnp& u, uint16_t port, const std::string& lan,
                     uint32_t lease){
   std::string resp;
@@ -388,102 +477,140 @@ static bool upnpMap(const Upnp& u, uint16_t port, const std::string& lan,
     std::to_string(lease) + "</NewLeaseDuration>", resp);
 }
 static void natForward(uint16_t port, bool removeOnly){
-  NAT.port = port;
-  NAT.gw = natGateway();
-  if (!NAT.gw){ printf("[relay] forward: no default gateway found\n"); return; }
-  NAT.lan = natLocalIpToward(NAT.gw);
-  printf("[relay] forward: gateway %s, this machine %s\n",
-         ip4str(NAT.gw).c_str(), NAT.lan.c_str());
+  std::lock_guard<std::mutex> op(natOpMx);
+  NatState n = natCopy();
+  n.busy = true; n.warning.clear();
+  n.summary = removeOnly ? "closing the router port" : "asking the router to open the port";
+  natCommit(n);
+  n.port = port; n.gw = natGateway();
+  n.active = false; n.pmp = false; n.extIp.clear(); n.extPort = 0; n.renewAt = 0;
+  auto finish = [&](const std::string& summary){ n.summary = summary; n.busy = false; natCommit(n); };
+  if (!n.gw){
+    logf("forward: no default gateway found");
+    finish("no default gateway found"); return;
+  }
+  n.lan = natLocalIpToward(n.gw);
+  logf("forward: gateway %s, this machine %s", ip4str(n.gw).c_str(), n.lan.c_str());
   /* NAT-PMP first: one small exchange */
   uint16_t ep = 0;
-  if (natPmpMap(NAT.gw, port, removeOnly ? 0 : 7200, ep)){
-    if (removeOnly){ printf("[relay] forward: NAT-PMP mapping removed\n"); return; }
-    NAT.active = true; NAT.pmp = true; NAT.extPort = ep;
-    NAT.renewAt = GetTickCount64() + 3600u * 1000u;      // half the lease
-    natPmpExternalIp(NAT.gw, NAT.extIp);
+  if (natPmpMap(n.gw, port, removeOnly ? 0 : 7200, ep)){
+    if (removeOnly){ logf("forward: NAT-PMP mapping removed"); finish("router port closed (NAT-PMP)"); return; }
+    n.active = true; n.pmp = true; n.extPort = ep;
+    n.renewAt = GetTickCount64() + 3600u * 1000u;      // half the lease
+    natPmpExternalIp(n.gw, n.extIp);
   } else {
     /* UPnP: discovery, description, SOAP */
-    NAT.upnp = upnpFind();
-    if (!NAT.upnp.ok){
-      printf("[relay] forward: router answered neither NAT-PMP nor UPnP --\n"
-             "        forward TCP %u to %s manually in the router, or check\n"
-             "        that UPnP is enabled there\n", port, NAT.lan.c_str());
+    n.upnp = upnpFind();
+    if (!n.upnp.ok){
+      logf("forward: router answered neither NAT-PMP nor UPnP -- forward TCP %u to %s "
+           "manually in the router, or check that UPnP is enabled there", port, n.lan.c_str());
+      finish("the router answered neither NAT-PMP nor UPnP: forward TCP " + std::to_string(port) +
+             " to " + n.lan + " by hand, or enable UPnP in the router");
       return;
     }
     if (removeOnly){
       std::string resp;
-      soapCall(NAT.upnp, "DeletePortMapping",
+      soapCall(n.upnp, "DeletePortMapping",
         "<NewRemoteHost></NewRemoteHost><NewExternalPort>" +
         std::to_string(port) +
         "</NewExternalPort><NewProtocol>TCP</NewProtocol>", resp);
-      printf("[relay] forward: UPnP mapping removed\n");
-      return;
+      logf("forward: UPnP mapping removed");
+      finish("router port closed (UPnP)"); return;
     }
     /* permanent lease first; some routers only accept timed ones */
-    bool ok = upnpMap(NAT.upnp, port, NAT.lan, 0);
-    if (!ok && upnpMap(NAT.upnp, port, NAT.lan, 86400)){
-      ok = true; NAT.renewAt = GetTickCount64() + 43200u * 1000u;
+    bool ok = upnpMap(n.upnp, port, n.lan, 0);
+    if (!ok && upnpMap(n.upnp, port, n.lan, 86400)){
+      ok = true; n.renewAt = GetTickCount64() + 43200u * 1000u;
     }
     if (!ok){
-      printf("[relay] forward: UPnP found (%s) but AddPortMapping refused\n",
-             NAT.upnp.service.c_str());
-      return;
+      logf("forward: UPnP found (%s) but AddPortMapping refused", n.upnp.service.c_str());
+      finish("UPnP found the router but it refused the mapping"); return;
     }
-    NAT.active = true; NAT.extPort = port;
+    n.active = true; n.extPort = port;
     std::string resp;
-    if (soapCall(NAT.upnp, "GetExternalIPAddress", "", resp))
-      NAT.extIp = xmlTag(resp, "NewExternalIPAddress");
+    if (soapCall(n.upnp, "GetExternalIPAddress", "", resp))
+      n.extIp = xmlTag(resp, "NewExternalIPAddress");
   }
-  printf("[relay] forward: %s mapped tcp %u -> %s:%u\n",
-         NAT.pmp ? "NAT-PMP" : "UPnP", NAT.extPort, NAT.lan.c_str(), port);
-  if (!NAT.extIp.empty()){
-    if (privateIp(NAT.extIp)){
+  const char* proto = n.pmp ? "NAT-PMP" : "UPnP";
+  logf("forward: %s mapped tcp %u -> %s:%u", proto, n.extPort, n.lan.c_str(), port);
+  n.summary = std::string(proto) + " mapped tcp " + std::to_string(n.extPort) + " -> " +
+              n.lan + ":" + std::to_string(port);
+  if (!n.extIp.empty()){
+    if (privateIp(n.extIp)){
       unsigned pa = 0, pb = 0;
-      sscanf(NAT.extIp.c_str(), "%u.%u", &pa, &pb);
-      if (pa == 100 && pb >= 64 && pb <= 127)
-        printf("[relay] forward: WARNING -- the router's external address %s\n"
-               "        is CARRIER-GRADE NAT (the ISP's own).  No port forward\n"
-               "        can reach this from outside; ask the ISP for a public\n"
-               "        address, or use a tunnel.\n", NAT.extIp.c_str());
-      else
-        printf("[relay] forward: WARNING -- DOUBLE NAT.  This router's own\n"
-               "        external address %s is still private: it sits\n"
-               "        behind ANOTHER router (likely the ISP modem).  This\n"
-               "        mapping is good, but the OUTER box must also forward\n"
-               "        TCP %u to %s -- or be put in bridge mode so\n"
-               "        this router gets the public address.  The real public\n"
-               "        IP is on the outer box's status page.\n",
-               NAT.extIp.c_str(), NAT.extPort, NAT.extIp.c_str());
+      sscanf(n.extIp.c_str(), "%u.%u", &pa, &pb);
+      if (pa == 100 && pb >= 64 && pb <= 127){
+        logf("forward: WARNING -- the router's external address %s is CARRIER-GRADE NAT "
+             "(the ISP's own).  No port forward can reach this from outside; ask the ISP "
+             "for a public address, or use a tunnel.", n.extIp.c_str());
+        n.warning = "CARRIER-GRADE NAT: the router's external address " + n.extIp +
+                    " is the ISP's own, so no port forward can reach this PC from outside "
+                    "(ask the ISP for a public address, or use a tunnel)";
+      } else {
+        logf("forward: WARNING -- DOUBLE NAT.  This router's own external address %s is "
+             "still private: it sits behind ANOTHER router (likely the ISP modem).", n.extIp.c_str());
+        logf("forward: this mapping is good, but the OUTER box must also forward TCP %u to %s "
+             "-- or be put in bridge mode so this router gets the public address.  The real "
+             "public IP is on the outer box's status page.", n.extPort, n.extIp.c_str());
+        n.warning = "DOUBLE NAT: this router's external address " + n.extIp +
+                    " is still private (an ISP modem sits in front of it).  The port is open "
+                    "here; the outer box must also forward TCP " + std::to_string(n.extPort) +
+                    " to " + n.extIp + ", and the public address is on its status page";
+      }
     }
     else
-      printf("[relay] forward: share  http://%s:%u/\n",
-             NAT.extIp.c_str(), NAT.extPort);
+      logf("forward: share  http://%s:%u/", n.extIp.c_str(), n.extPort);
   }
-  printf("[relay] forward: if nobody can connect, also allow this exe through\n"
-         "        the Windows Firewall (it prompts on first run)\n");
+  logf("forward: if nobody can connect, also allow this exe through the Windows Firewall "
+       "(it prompts on first run)");
+  n.busy = false;
+  natCommit(n);
 }
 static void natRenew(){
-  if (!NAT.active || !NAT.renewAt || GetTickCount64() < NAT.renewAt) return;
-  if (NAT.pmp){
+  NatState n = natCopy();
+  if (!n.active || !n.renewAt || GetTickCount64() < n.renewAt) return;
+  if (!natOpMx.try_lock()) return;      // a forward or removal is under way
+  if (n.pmp){
     uint16_t ep = 0;
-    natPmpMap(NAT.gw, NAT.port, 7200, ep);
-    NAT.renewAt = GetTickCount64() + 3600u * 1000u;
+    natPmpMap(n.gw, n.port, 7200, ep);
+    n.renewAt = GetTickCount64() + 3600u * 1000u;
   } else {
-    upnpMap(NAT.upnp, NAT.port, NAT.lan, 86400);
-    NAT.renewAt = GetTickCount64() + 43200u * 1000u;
+    upnpMap(n.upnp, n.port, n.lan, 86400);
+    n.renewAt = GetTickCount64() + 43200u * 1000u;
   }
+  { std::lock_guard<std::mutex> g(natMx); if (NAT.active) NAT.renewAt = n.renewAt; }
+  natOpMx.unlock();
 }
 static void natCleanup(){
-  if (!NAT.active) return;
-  NAT.active = false;
-  if (NAT.pmp){ uint16_t ep; natPmpMap(NAT.gw, NAT.port, 0, ep); }
+  std::lock_guard<std::mutex> op(natOpMx);
+  NatState n = natCopy();
+  if (!n.active){
+    if (n.busy){ n.busy = false; natCommit(n); }
+    return;
+  }
+  n.active = false; n.busy = true; n.summary = "closing the router port";
+  natCommit(n);
+  if (n.pmp){ uint16_t ep; natPmpMap(n.gw, n.port, 0, ep); }
   else {
     std::string resp;
-    soapCall(NAT.upnp, "DeletePortMapping",
+    soapCall(n.upnp, "DeletePortMapping",
       "<NewRemoteHost></NewRemoteHost><NewExternalPort>" +
-      std::to_string(NAT.port) +
+      std::to_string(n.port) +
       "</NewExternalPort><NewProtocol>TCP</NewProtocol>", resp);
   }
+  logf("forward: %s mapping removed", n.pmp ? "NAT-PMP" : "UPnP");
+  n.busy = false; n.extIp.clear(); n.extPort = 0; n.warning.clear();
+  n.summary = "router port closed";
+  natCommit(n);
+}
+/* the window's button: the operation on its own thread, so neither the
+   window nor the lockstep loop waits on the router */
+void relayForward(bool on, uint16_t port){
+  { std::lock_guard<std::mutex> g(natMx);
+    if (NAT.busy) return;
+    NAT.busy = true;
+    NAT.summary = on ? "asking the router to open the port" : "closing the router port"; }
+  std::thread([on, port]{ if (on) natForward(port, false); else natCleanup(); }).detach();
 }
 static BOOL WINAPI natCtrlHandler(DWORD){
   natCleanup();                    // best effort inside the ~5 s Windows grants
@@ -520,6 +647,13 @@ struct Conn {
   uint32_t fpPass = 0, fpVal = 0;
   uint64_t bornMs = 0;            // for the handshake timeout
   uint64_t chatAtMs = 0;          // the last CHAT accepted (the spam guard)
+  std::string addr;               // ip:port, for the log and the window
+  /* the relay's own ping (tick): one in flight, the last eight answers */
+  uint64_t nextPingMs = 0, pingSentMs = 0, pingSentUs = 0;
+  uint32_t pingSeq = 0; bool pingOut = false;
+  int rtt[8] = {}; int rttHead = 0, rttN = 0;
+  /* the wait bytes' running mean over the last second, for the window */
+  uint64_t waitAcc = 0; uint32_t waitCnt = 0; int waitAvgMs = -1;
 };
 
 /* ---- the session ------------------------------------------------------ */
@@ -552,6 +686,12 @@ struct Relay {
   std::vector<int> targets;       // conn indices awaiting SNAP + their READY
   uint64_t syncStartMs = 0;
   std::deque<int> joinQueue;      // conn indices waiting for a sync slot
+  /* for the window: counters, the pass rate, this machine's LAN address */
+  uint32_t pages = 0, desyncs = 0, snapshots = 0;
+  uint64_t startMs = 0, rateAtMs = 0;
+  uint32_t passAtRate = 0;
+  double passRate = 0;
+  std::string lanIp;
 
   Relay(){ for (int i=0;i<MAX_SEATS;i++){ seat[i] = -1; charBySeat[i] = 0xFF;
                                           memset(nameBySeat[i], ' ', NAME_LEN); } }
@@ -622,7 +762,8 @@ struct Relay {
     if (!c.open) return;
     c.open = false;
     closesocket(c.s);
-    printf("[relay] drop seat=%d (%s)\n", c.seat, why); fflush(stdout);
+    if (c.seat >= 0) logf("seat %d left: %s (%s)", c.seat + 1, why, c.addr.c_str());
+    else if (c.state == Conn::UP) logf("connection closed: %s (%s)", why, c.addr.c_str());
     int idx = indexOf(c);
     if (c.seat >= 0){
       /* pre-start, a leaver's character pick -- and name -- leave with
@@ -649,8 +790,7 @@ struct Relay {
     /* every seat empty: the state died with the clients.  Reset to a
        fresh session; anyone still queued mid-sync is orphaned. */
     if (seatMask() == 0 && pass != 0){
-      printf("[relay] session orphaned at pass %u -- reset\n", pass);
-      fflush(stdout);
+      logf("session orphaned at pass %u -- reset", pass);
       pass = 0; syncing = false; provider = -1;
       buildSeed = freshSeed();
       for (int i=0;i<MAX_SEATS;i++){ charBySeat[i] = 0xFF;
@@ -703,8 +843,8 @@ struct Relay {
     syncing = true; targets.assign(1, joiner); syncStartMs = now();
     std::vector<uint8_t> m; m.push_back(MSG_SNAPREQ);
     queueMsg(*conns[provider], m);
-    printf("[relay] sync: provider seat=%d -> joiner seat=%d at pass %u\n",
-           conns[provider]->seat, conns[joiner]->seat, pass); fflush(stdout);
+    logf("sync: seat %d provides a snapshot for seat %d at pass %u",
+         conns[provider]->seat + 1, conns[joiner]->seat + 1, pass);
   }
 
   /* ---- the lockstep loop ---- */
@@ -748,7 +888,10 @@ struct Relay {
       for (int i=0;i<seatsN;i++){
         int idx = seat[i];
         uint64_t w = 0;
-        if (idx >= 0 && conns[idx]->hasInput) w = (emitMs - conns[idx]->inAtMs) / 4;
+        if (idx >= 0 && conns[idx]->hasInput){
+          w = (emitMs - conns[idx]->inAtMs) / 4;
+          conns[idx]->waitAcc += emitMs - conns[idx]->inAtMs; conns[idx]->waitCnt++;
+        }
         m.push_back(uint8_t(w > 255 ? 255 : w));
       }
       for (auto& c : conns)
@@ -796,8 +939,8 @@ struct Relay {
       if (idx >= 0) conns[idx]->hasFp = false;
     }
     if (bad.empty()) return;
-    printf("[relay] DESYNC at pass %u: %d client(s) off the majority\n",
-           want, (int)bad.size()); fflush(stdout);
+    desyncs++;
+    logf("DESYNC at pass %u: %d client(s) off the majority", want, (int)bad.size());
     /* the desynced clients leave the loop and re-enter through the same
        snapshot flow a joiner uses */
     for (int idx : bad){
@@ -840,9 +983,8 @@ struct Relay {
         m.push_back(uint8_t(s)); m.push_back(uint8_t(seatsN));
         putU32(m, buildSeed); m.push_back(mode); putU32(m, pass);
         queueMsg(c, m);
-        printf("[relay] seat %d taken (%s, pass %u)\n", s,
-               mode == MODE_FRESH ? "fresh" : "snapshot", pass);
-        fflush(stdout);
+        logf("seat %d taken by %s (%s; %s at pass %u)", s + 1, seatName(s).c_str(),
+             c.addr.c_str(), mode == MODE_FRESH ? "fresh boot" : "snapshot join", pass);
         if (mode == MODE_SNAPSHOT){
           /* his pick does not apply -- the block's character arrives
              inside the snapshot */
@@ -925,6 +1067,8 @@ struct Relay {
             ch = ' ';
           m.push_back(ch);
         }
+        logf("chat seat %d %s: %s", c.seat + 1, seatName(c.seat).c_str(),
+             std::string((const char*)m.data() + 3, len).c_str());
         for (auto& o : conns)
           if (o->open && o->state == Conn::UP && o->seat >= 0) queueMsg(*o, m);
         break;
@@ -941,13 +1085,12 @@ struct Relay {
         if (n < 4){ drop(c, "bad SNAP"); return; }
         uint32_t sp = getU32(p);
         if (sp != pass)
-          printf("[relay] SNAP pass %u != session %u (forwarding anyway)\n",
-                 sp, pass);
+          logf("SNAP pass %u != session %u (forwarding anyway)", sp, pass);
         std::vector<uint8_t> m; m.push_back(MSG_SNAP);
         m.insert(m.end(), p, p+n);                     // verbatim, never parsed
         for (int tI : targets) if (conns[tI]->open) queueMsg(*conns[tI], m);
-        printf("[relay] snapshot forwarded (%u bytes) to %d client(s)\n",
-               (unsigned)(n-4), (int)targets.size()); fflush(stdout);
+        snapshots++;
+        logf("snapshot forwarded (%u bytes) to %d client(s)", (unsigned)(n-4), (int)targets.size());
         break;
       }
       default:
@@ -1019,6 +1162,8 @@ struct Relay {
       }
     }
     if (!body.empty()){
+      pages++;
+      logf("page served to %s%s", c.addr.c_str(), gzipped ? " (gzip)" : "");
       head = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
              "Cache-Control: no-store\r\nConnection: close\r\n" +
              std::string(gzipped ? "Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n" : "") +
@@ -1119,7 +1264,14 @@ struct Relay {
         case 0x9:                                       // ping -> pong
           queueFrame(c, pay.data(), pay.size(), 0xA);
           break;
-        case 0xA: break;                                // pong: ignore
+        case 0xA:                                       // pong: our ping's echo
+          if (pay.size() == 4 && c.pingOut && getU32(pay.data()) == c.pingSeq){
+            c.pingOut = false;
+            uint64_t us = nowUs() - c.pingSentUs;
+            c.rtt[c.rttHead++ & 7] = int((us + 500) / 1000);
+            if (c.rttN < 8) c.rttN++;
+          }
+          break;
         default: drop(c, "bad opcode"); return;
       }
     }
@@ -1166,19 +1318,126 @@ struct Relay {
         passStartMs = t;
       }
     }
+    /* THE RELAY'S OWN PING: an RFC 6455 ping frame a second to every
+       upgraded connection.  Browsers answer from the network layer
+       without a line of page code -- a hidden tab answers too -- so the
+       pong times the LINK, and the client is untouched.  One in flight
+       at a time; the window shows the median of the last eight and the
+       worst (publish). */
+    for (auto& c : conns){
+      if (!c->open || c->state != Conn::UP || t < c->nextPingMs) continue;
+      c->nextPingMs = t + PING_EVERY_MS;
+      if (c->pingOut && t - c->pingSentMs < 5000) continue;   // the last is still out
+      c->pingSeq++;
+      uint8_t pl[4] = { uint8_t(c->pingSeq), uint8_t(c->pingSeq >> 8),
+                        uint8_t(c->pingSeq >> 16), uint8_t(c->pingSeq >> 24) };
+      c->pingOut = true; c->pingSentMs = t; c->pingSentUs = nowUs();
+      queueFrame(*c, pl, 4, 0x9);
+    }
+    /* once a second: the pass rate and each seat's mean wait, for the window */
+    if (t - rateAtMs >= 1000){
+      passRate = pass >= passAtRate ? (pass - passAtRate) * 1000.0 / double(t - rateAtMs) : 0.0;
+      passAtRate = pass; rateAtMs = t;
+      for (auto& c : conns){
+        c->waitAvgMs = c->waitCnt ? int(c->waitAcc / c->waitCnt) : -1;
+        c->waitAcc = 0; c->waitCnt = 0;
+      }
+    }
     natRenew();                    // keep a --forward mapping alive
     if (syncing && t - syncStartMs > LIM_SYNC_MS){
-      printf("[relay] sync timeout\n"); fflush(stdout);
+      logf("sync timeout");
       if (provider >= 0 && conns[provider]->open)
         drop(*conns[provider], "sync timeout");   // drop() re-picks/orphans
       else orphanTargets();
     }
   }
+  std::string seatName(int s){
+    std::string nm((const char*)nameBySeat[s], NAME_LEN);
+    while (!nm.empty() && nm.back() == ' ') nm.pop_back();
+    return nm.empty() ? std::string("(no name)") : nm;
+  }
+  /* the window's kick: a proper close frame (1000, "kicked by host"),
+     then the ordinary drop -- the seat frees like any leaver's */
+  void drainKicks(){
+    std::deque<int> k;
+    { std::lock_guard<std::mutex> g(cmdMx); k.swap(kickQueue); }
+    for (int s : k){
+      if (s < 0 || s >= seatsN || seat[s] < 0) continue;
+      Conn& c = *conns[seat[s]];
+      if (!c.open) continue;
+      logf("seat %d kicked by the host: %s (%s)", s + 1, seatName(s).c_str(), c.addr.c_str());
+      static const char reason[] = "kicked by host";
+      uint8_t cl[2 + sizeof reason - 1] = { 0x03, 0xE8 };
+      memcpy(cl + 2, reason, sizeof reason - 1);
+      queueFrame(c, cl, sizeof cl, 0x8);
+      drop(c, "kicked");
+    }
+  }
+  /* the status copy the window reads (relayStatus): rewritten after
+     every turn of the loop -- a few strings and numbers */
+  void publish(){
+    RelayStatus s;
+    s.port = port; s.proto = PROTO_VERSION; s.seatsN = seatsN; s.pass = pass;
+    s.passRate = passRate; s.syncing = syncing; s.pages = pages; s.desyncs = desyncs;
+    s.snapshots = snapshots; s.startMs = startMs; s.htmlPath = htmlPath; s.lanIp = lanIp;
+    const uint64_t t = now();
+    for (auto& c : conns) if (c->open) s.conns++;
+    /* the characters: the table's, and for a seat the table never picked
+       (a snapshot joiner into a seat that was empty at the fresh boot)
+       the rule every client derives its block from -- seat 2 the
+       valkyrie unless seat 1 is, seats 3 and 4 the lowest unused
+       (Game.charTable through netBoot).  Display only: the relay still
+       runs no game. */
+    int chr[MAX_SEATS];
+    for (int i=0;i<MAX_SEATS;i++) chr[i] = charBySeat[i] == 0xFF ? -1 : (charBySeat[i] & 3);
+    if (pass != 0){
+      if (chr[1] < 0) chr[1] = (chr[0] == 1) ? 2 : 1;
+      for (int i=2;i<MAX_SEATS;i++) if (chr[i] < 0){
+        int c = 0;
+        auto used = [&](int v){ for (int j=0;j<MAX_SEATS;j++) if (j != i && chr[j] == v) return true;
+                                return false; };
+        while (used(c) && c < 3) c++;
+        chr[i] = c;
+      }
+    }
+    for (int i=0;i<seatsN;i++){
+      int idx = seat[i];
+      if (idx < 0) continue;
+      const Conn& c = *conns[idx];
+      SeatStatus& q = s.seats[i];
+      q.taken = true; s.seated++;
+      std::string nm((const char*)nameBySeat[i], NAME_LEN);
+      while (!nm.empty() && nm.back() == ' ') nm.pop_back();
+      q.name = nm; q.chr = chr[i]; q.addr = c.addr; q.sinceMs = c.bornMs; q.ready = c.ready;
+      if (c.rttN){
+        int v[8]; const int n = c.rttN;
+        for (int k=0;k<n;k++) v[k] = c.rtt[k];
+        std::sort(v, v + n);
+        q.rttMs = v[n / 2]; q.rttWorstMs = v[n - 1];
+      }
+      q.waitMs = c.waitAvgMs;
+      bool target = false;
+      for (int tI : targets) if (tI == idx) target = true;
+      if (syncing && idx == provider) q.state = "sending a snapshot";
+      else if (target) q.state = "joining (snapshot)";
+      else if (!c.ready) q.state = "booting";
+      else if ((!c.hasInput || c.inPass != pass) && passStartMs && t - passStartMs > 500){
+        char b[32]; snprintf(b, sizeof b, "late %.1f s", (t - passStartMs) / 1000.0);
+        q.state = b;                                   // the one everyone waits for
+      }
+      else q.state = "connected";
+    }
+    std::lock_guard<std::mutex> g(stMx);
+    stCopy = std::move(s);
+  }
   void run(){
-    printf("RELAY LISTENING %u seats=%d proto=%u\n",
-           (unsigned)port, seatsN, (unsigned)PROTO_VERSION);
-    fflush(stdout);
-    for (;;){
+    startMs = rateAtMs = now();
+    { uint32_t gw = natGateway(); if (gw) lanIp = natLocalIpToward(gw); }
+    logf("RELAY LISTENING %u seats=%d proto=%u",
+         (unsigned)port, seatsN, (unsigned)PROTO_VERSION);
+    publish();
+    while (!stopFlag){
+      drainKicks();
       fd_set rf, wf; FD_ZERO(&rf); FD_ZERO(&wf);
       FD_SET(lis, &rf);
       for (auto& c : conns){
@@ -1188,9 +1447,10 @@ struct Relay {
       }
       timeval tv{0, 250000};
       int r = select(0, &rf, &wf, nullptr, &tv);
-      if (r == SOCKET_ERROR){ printf("[relay] select failed\n"); return; }
+      if (r == SOCKET_ERROR){ logf("select failed"); break; }
       if (FD_ISSET(lis, &rf)){
-        SOCKET s = accept(lis, nullptr, nullptr);
+        sockaddr_in ra{}; int rl = sizeof ra;
+        SOCKET s = accept(lis, (sockaddr*)&ra, &rl);
         if (s != INVALID_SOCKET){
           u_long nb = 1; ioctlsocket(s, FIONBIO, &nb);
           BOOL nd = TRUE;
@@ -1209,7 +1469,10 @@ struct Relay {
              still kernel-ACKed -- the 10 s input timeout remains the
              app-death detector.  The Win10 1709+ POSIX trio first; the
              Vista SIO_KEEPALIVE_VALS fallback (fixed 10 probes) is
-             tuned to ~7 s, still under the 10 s it exists to beat. */
+             tuned to ~7 s, still under the 10 s it exists to beat.
+             (The relay's own WebSocket ping -- tick -- is a once-a-second
+             frame for the window's ping column; it does not keep a
+             stalled gate's socket busy enough to matter here.) */
           BOOL ka = TRUE;
           setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, (const char*)&ka, sizeof ka);
           DWORD kIdle = 3, kIntvl = 1, kCnt = 3;
@@ -1225,7 +1488,8 @@ struct Relay {
                      nullptr, 0, &kOut, nullptr, nullptr);
           }
           auto c = std::make_unique<Conn>();
-          c->s = s; c->bornMs = now();
+          c->s = s; c->bornMs = now(); c->nextPingMs = c->bornMs + PING_EVERY_MS;
+          c->addr = ip4str(ra.sin_addr.s_addr) + ":" + std::to_string(ntohs(ra.sin_port));
           conns.push_back(std::move(c));
         }
       }
@@ -1267,13 +1531,18 @@ struct Relay {
             if (conns[i]->seat >= 0) seat[conns[i]->seat] = (int)i;
         }
       }
+      publish();
     }
+    /* the window closed (or select died): every socket goes, the port frees */
+    for (auto& c : conns) if (c->open){ c->open = false; closesocket(c->s); }
+    if (lis != INVALID_SOCKET){ closesocket(lis); lis = INVALID_SOCKET; }
   }
 };
 
 int main(int argc, char** argv){
   Relay R;
   bool doForward = false, doUnforward = false;
+  int mode = 0;                        // 0 by the arguments, 1 the window, 2 the console
   for (int i=1;i<argc;i++){
     if (!strcmp(argv[i], "--port") && i+1 < argc) R.port = (uint16_t)atoi(argv[++i]);
     else if (!strcmp(argv[i], "--seats") && i+1 < argc){
@@ -1284,7 +1553,14 @@ int main(int argc, char** argv){
     else if (!strcmp(argv[i], "--html") && i+1 < argc) R.htmlPath = argv[++i];
     else if (!strcmp(argv[i], "--forward")) doForward = true;
     else if (!strcmp(argv[i], "--unforward")) doUnforward = true;
+    else if (!strcmp(argv[i], "--gui")) mode = 1;
+    else if (!strcmp(argv[i], "--console")) mode = 2;
   }
+  /* THE WINDOW: double-clicked -- no arguments at all -- the exe opens
+     gui.cpp's window.  Any argument means a script or a terminal is
+     driving it (the batch files, the tests) and it stays the console
+     relay; --gui / --console say so outright. */
+  const bool gui = mode == 1 || (mode == 0 && argc == 1);
   /* the page (GET /): --html wins; otherwise look beside the cwd and the
      exe for client/gauntlet.html, the built single file */
   if (R.htmlPath.empty()){
@@ -1297,6 +1573,7 @@ int main(int argc, char** argv){
       size_t cut = d.find_last_of('\\');
       if (cut != std::string::npos){
         d = d.substr(0, cut);
+        cand.push_back(d + "\\client\\gauntlet.html");
         cand.push_back(d + "\\..\\..\\client\\gauntlet.html");
         cand.push_back(d + "\\gauntlet.html");
       }
@@ -1307,20 +1584,47 @@ int main(int argc, char** argv){
     }
   }
   WSADATA wsa;
-  if (WSAStartup(MAKEWORD(2,2), &wsa) != 0){ printf("WSAStartup failed\n"); return 1; }
+  if (WSAStartup(MAKEWORD(2,2), &wsa) != 0){
+    if (gui) MessageBoxA(nullptr, "WSAStartup failed", "Gauntlet Online Server", MB_OK | MB_ICONERROR);
+    else printf("WSAStartup failed\n");
+    return 1;
+  }
   if (doUnforward){ natForward(R.port, true); return 0; }
-  if (!R.listenOn()){ printf("bind/listen failed on %u\n", (unsigned)R.port); return 1; }
+  if (gui){
+    logKeep = true;
+    /* a console of our own (Explorer made it for the double-click) is
+       noise beside a window: let it go.  A shared one -- a terminal that
+       ran --gui -- keeps its copy of the log. */
+    DWORD pids[2];
+    if (GetConsoleProcessList(pids, 2) <= 1){ FreeConsole(); logStdout = false; }
+    if (!R.listenOn()){
+      std::string m = "Could not listen on port " + std::to_string(R.port) +
+                      ".\n\nIs another Gauntlet server already running?";
+      MessageBoxA(nullptr, m.c_str(), "Gauntlet Online Server", MB_OK | MB_ICONERROR);
+      return 1;
+    }
+    if (R.htmlPath.empty())
+      logf("no client page found -- GET / will 404 (put client\\gauntlet.html beside the exe, or --html)");
+    else logf("serving %s", R.htmlPath.c_str());
+    R.publish();
+    if (doForward) relayForward(true, R.port);
+    std::thread th([&]{ R.run(); natCleanup(); doneFlag = true; });
+    int rc = guiMain(R.port);
+    relayStop();
+    th.join();
+    return rc;
+  }
+  if (!R.listenOn()){ logf("bind/listen failed on %u", (unsigned)R.port); return 1; }
   if (doForward){
     natForward(R.port, false);
     SetConsoleCtrlHandler(natCtrlHandler, TRUE);   // unmap on Ctrl+C / close
   } else {
-    printf("[relay] LAN only (--forward asks the router to open this port "
-           "for internet play)\n");
+    logf("LAN only (--forward asks the router to open this port for internet "
+         "play; double-click the exe for the window)");
   }
-  printf(R.htmlPath.empty()
-           ? "[relay] no client page found -- GET / will 404 (use --html)\n"
-           : "[relay] serving %s\n",
-         R.htmlPath.c_str());
+  if (R.htmlPath.empty()) logf("no client page found -- GET / will 404 (use --html)");
+  else logf("serving %s", R.htmlPath.c_str());
   R.run();
+  natCleanup();
   return 0;
 }

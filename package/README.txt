@@ -9,7 +9,8 @@ to install for players.
 
 What is in this folder
 ----------------------
-  gauntlet-relay.exe            the server (Windows, no installer)
+  gauntlet-relay.exe            the server (Windows, no installer);
+                                double-click it for the server window
   client\gauntlet.html          the game page the server hands out
   client\gauntlet.html.gz       the same page compressed, for joiners
   relay-port-forwarding.bat     run the server and open the port
@@ -22,31 +23,46 @@ client\gauntlet.html next to itself.
 
 Hosting a game
 --------------
-1. Double-click relay-port-forwarding.bat.  Windows Firewall will ask
-   on the first run: allow it, or nobody can connect.
-2. The window prints a line like
+1. Double-click gauntlet-relay.exe.  A window opens.  Windows Firewall
+   asks on the first run: allow it, or nobody can connect.
+2. Press "Open port on router".  The server asks your router to open
+   the port itself (NAT-PMP first, then UPnP) and the Internet line
+   shows the address to give your players; "Copy internet address"
+   puts it on the clipboard.  The mapping is kept alive while the
+   server runs and removed when the window closes.
+3. If the Internet line says DOUBLE NAT, your router sits behind
+   another box (an ISP modem).  The outer box must forward TCP port
+   33792 to the router too, or be put in bridge mode.  If it says
+   carrier-grade NAT there is no way through from outside: play on the
+   LAN, or use a tunnel.
+4. People on your own network use the Local network address (the
+   first line of the window).  "Play in browser" opens the game on
+   this PC.
 
-       [relay] forward: share  http://81.2.3.4:33792/
+The window shows every seat: the player's name and character, their
+address, how long they have been connected, the ping the server
+measures to them (the median of the last eight seconds and the worst),
+how long their moves wait for the rest of the party -- the seat that
+never waits is the one holding everyone up -- and their state.  Select
+a seat and press Kick to drop that player; the seat frees and they can
+join again.  View > Log opens the console: every event with a
+timestamp, chat lines included; "Copy all" puts it on the clipboard
+for a bug report.
 
-   That is the address to give your players.  The server asked your
-   router to open the port itself (NAT-PMP first, then UPnP) and keeps
-   the mapping alive while it runs; closing the window or Ctrl+C stops
-   the server and removes the mapping.  relay-unforward.bat removes a
-   mapping that was left behind.
-3. If the window says DOUBLE NAT, your router sits behind another box
-   (an ISP modem).  The outer box must forward TCP port 33792 to the
-   router too, or be put in bridge mode.  If it says carrier-grade NAT
-   there is no way through from outside: play on the LAN, or use a
-   tunnel.
-4. For people on the same network, relay-lan-only.bat skips the router.
-   Share http://<this PC's LAN address>:33792/ (ipconfig shows it).
+The batch files run the same exe without the window; its log prints in
+the console instead and Ctrl+C stops it:
+  relay-port-forwarding.bat   the server with the router port opened
+  relay-lan-only.bat          the server for your own network only
+  relay-unforward.bat         remove a mapping that was left behind
 
 Server options (add them after the exe name in a .bat)
    --port N       listen on port N (default 33792)
    --seats N      table size, 1 to 4 (default 4)
    --html PATH    serve a different page file
-   --forward      open the port on the router
+   --forward      open the port on the router at once
    --unforward    remove the router mapping and exit
+   --gui          open the window even with other options
+   --console      never open the window
 
 Playing
 -------

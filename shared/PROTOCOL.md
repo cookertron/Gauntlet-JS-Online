@@ -34,6 +34,13 @@ All multi-byte integers below are **little-endian** (both ends are
 explicit about this; the RFC's own length fields stay network order as
 the RFC demands).
 
+The relay also sends an RFC 6455 **ping** control frame once a second
+to every upgraded connection and times the pong for its window's ping
+column (browsers answer in the network layer, no page code involved).
+That is transport, not protocol: a client that never answers loses
+nothing but that column.  The protocol's own PING/PONG (14/15) remain
+the client's clean round-trip probe.
+
 ## Messages
 
 One message = `u8 type` then the fields.  C→S / S→C marks direction.

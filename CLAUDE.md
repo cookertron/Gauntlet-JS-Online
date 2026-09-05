@@ -14,13 +14,17 @@ checks. The faithful build is FROZEN — never edit anything in that folder.
 - `client/template.html` — the engine SOURCE (~10.6k lines). Never edit
   `client/gauntlet.html`; it is generated.
 - `client/gauntlet.html` — the built, playable single file.
-- `server/relay.cpp` — the C++ lockstep relay (one file, ws2_32 +
-  iphlpapi only; speaks RFC 6455 itself, and NAT-PMP/UPnP for
-  `--forward` self-port-forwarding with double-NAT/CGNAT detection —
-  Anthony's own network IS double-NATted: router 192.168.50.1 behind
-  an ISP box, its "external" address 192.168.1.239).  Build inside
-  vcvars64:
-  `cmake -S server -B server\build -G Ninja && ninja -C server\build`.
+- `server/relay.cpp` — the C++ lockstep relay (ws2_32 + iphlpapi;
+  speaks RFC 6455 itself, and NAT-PMP/UPnP for `--forward`
+  self-port-forwarding with double-NAT/CGNAT detection — Anthony's
+  network WAS double-NATted at the fork: router 192.168.50.1 behind an
+  ISP box, "external" 192.168.1.239; on 2026-09-05 NAT-PMP reported a
+  PUBLIC address, so the outer box has since been bridged).
+  `server/gui.cpp` + `server/relay.h` — THE WINDOW (planned work 8):
+  plain Win32, the relay on its own thread.  Build inside vcvars64:
+  `cmake -S server -B server\build -G Ninja && ninja -C server\build`
+  (a RUNNING relay locks its exe: build to another dir, e.g.
+  `server\build-dev`, and pass the exe path to relaytest/e2etest).
 - `shared/PROTOCOL.md` + `shared/protocol.json` — the wire contract, v3.
   The JSON is the source of truth; `python tools/protocheck.py` holds
   the C++ constants block to it (36 constants, both directions).
@@ -624,6 +628,64 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      exactly the tested sim, so the whole change is provable against the
      current suite.  The leash stays off online; load-slowdown is forced
      OFF in online sessions (its pass-cost model reads a camera).
+
+8. **THE SERVER WINDOW — BUILT 2026-09-05** (Anthony: "Can we have a
+   GUI for it? Yes a console to see real-time logging (which needs a
+   timestamp btw) but hidden behind a menu option.  The GUI should
+   display seats taken, ping rate and other useful or interesting
+   data.  Port forward can be done with a button, as can kicking a
+   player?").  `server/gui.cpp` (+ `relay.h`, the data contract):
+   plain Win32 — user32/gdi32/comctl32/shell32, the comctl v6 manifest
+   by linker pragma, per-monitor DPI v2 — no framework, the same exe.
+   DOUBLE-CLICKED (no arguments) the exe opens the window and frees the
+   console Explorer made for it (`GetConsoleProcessList` == 1); ANY
+   argument keeps it the console relay the bats and the tests drive;
+   `--gui`/`--console` force either; `--gui --forward` opens the port
+   on its thread at start.
+   - **The relay runs on its own thread** and the window never touches
+     it: the loop PUBLISHES a `RelayStatus` copy after every turn
+     (`publish()`: port, pass, pass rate, the seats — name, character,
+     address, since, ready, rtt, wait, state — and counters), DRAINS a
+     kick queue at the top of the next (`drainKicks`: a 1000 "kicked by
+     host" close frame, then the ordinary drop) and stops on a flag
+     (`relayStop` → run() returns, sockets close, `natCleanup`, the
+     done flag; the window waits up to 15 s).  NAT has two locks:
+     `natMx` for the state the window copies at 4 Hz, `natOpMx`
+     serialising forward/removal, which work on a local copy and
+     commit — `relayForward` runs them on a detached thread so neither
+     the window nor the lockstep waits on a router; `natRenew`
+     try_locks.
+   - **THE RELAY'S OWN PING**: an RFC 6455 ping frame a second per
+     upgraded connection (`PING_EVERY_MS`, outside the protocol block),
+     the pong timed on QueryPerformanceCounter (`nowUs`: GetTickCount64's
+     16 ms grain cannot time a LAN ping), median of the last eight and
+     worst per seat.  Browsers answer in the network layer — a hidden
+     tab too — so it times the LINK and the client is untouched;
+     wsmini answers as well, so the tests see it.  Transport, not
+     protocol (PROTOCOL.md says so).
+   - **WAIT per seat**: the PASS wait bytes' mean over the last second
+     — the seat that never waits is the one everyone waits for; a READY
+     seat missing the current pass beyond 500 ms shows "late N.N s".
+     The character of a seat the CHARS table never picked mirrors the
+     client's derivation (valkyrie-or-wizard for seat 2, lowest unused
+     for 3/4) — display only.
+   - **THE LOG** (`logf`): every line stamped HH:MM:SS.mmm, to stdout
+     in console mode (the `[relay]` tag is gone; the tests match
+     `RELAY LISTENING` unanchored) and into a queue the window drains
+     (View > Log: a read-only Consolas edit, Copy all / Clear, 5000
+     lines kept).  New lines: page served (address, gzip), seat taken
+     with name and address, chat lines, kicks; seats are 1-based to
+     humans everywhere (log, table, dialogs).
+   - **Verified by driving the window with messages** (a PowerShell
+     script of the session, not checked in): two paced wsmini clients
+     (80 ms, the second 30 ms slower) → the table read Wait 24 ms /
+     0 ms, naming the slow one; a row click + Kick + Yes → "seat 1
+     kicked by the host" and that client's socket closed; Open port →
+     NAT-PMP in 24 ms and the Internet line/Copy button flipped; again →
+     mapping removed; WM_CLOSE with a seat taken → the confirm, exit,
+     port free.  relaytest 54, e2e 32, protocheck 36 unchanged.  A
+     fresh exe PATH triggers the Windows Firewall prompt (README says
+     so).  `build/ui/server.png` is the window (README.md shows it).
 
 ## Engine facts that cost real effort to learn — don't rediscover them
 
