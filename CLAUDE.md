@@ -730,6 +730,22 @@ with:
 "E:\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
 ```
 
+**THE SHIPPED EXE MUST BE A RELEASE BUILD WITH THE STATIC RUNTIME**
+(found 2026-09-05: Anthony ran the window on a second machine and got
+ucrtbased.dll / VCRUNTIME140D.dll / MSVCP140D.dll / VCRUNTIME140_1D.dll
+errors in turn -- the build dir had been configured Debug with the DLL
+runtime, `/Od /RTC1 -MDd`, since the fork, and every release before
+v2026.09.06.1 shipped that exe; it only ever ran where Visual Studio
+is).  CMakeLists.txt now defaults a fresh cache to Release, sets
+`CMAKE_MSVC_RUNTIME_LIBRARY` to the static `/MT` (the exe depends on
+nothing but Windows), and WARNS on a Debug configure; an EXISTING
+Debug cache keeps its setting, so reconfigure with
+`-DCMAKE_BUILD_TYPE=Release`.  `tools/package.py` reads the exe and
+refuses one that imports the debug or DLL CRT.  Verify with
+`dumpbin /dependents server\build\gauntlet-relay.exe` inside vcvars64:
+KERNEL32/USER32/GDI32/COMCTL32/SHELL32/WS2_32/IPHLPAPI and nothing
+else.
+
 Verified end to end (compiled, linked ws2_32.lib, ran, WSAStartup OK):
 
 - MSVC `cl` 19.50.35726 for x64 (`/std:c++20` works; toolset v145)

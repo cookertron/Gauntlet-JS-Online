@@ -101,7 +101,7 @@ The C++ relay server (`server/relay.cpp`, its window `server/gui.cpp`,
 protocol in `shared/PROTOCOL.md`) builds inside the VS x64 environment:
 
 ```
-vcvars64 && cmake -S server -B server\build -G Ninja
+vcvars64 && cmake -S server -B server\build -G Ninja      # Release, static runtime: the exe needs nothing installed
          && ninja -C server\build
 python tools/protocheck.py                 # protocol constants in sync
 node tools/relaytest.js                    # the relay's own gate (54 checks)

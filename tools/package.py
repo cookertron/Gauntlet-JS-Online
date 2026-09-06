@@ -39,6 +39,23 @@ if missing:
     print('build the relay (ninja -C server/build) and the client (python tools/build.py) first')
     sys.exit(1)
 
+# a DEBUG exe imports the debug CRT DLLs (ucrtbased, VCRUNTIME140D, ...),
+# which exist only where Visual Studio is installed -- it runs on the
+# build machine and nowhere else (found on a second machine 2026-09-05).
+# The import names sit in the exe as plain text: refuse to ship one.
+with open(os.path.join(ROOT, files[0][0]), 'rb') as f:
+    exe = f.read()
+debug_dlls = [n for n in (b'ucrtbased.dll', b'VCRUNTIME140D.dll', b'MSVCP140D.dll', b'VCRUNTIME140_1D.dll')
+              if n in exe]
+if debug_dlls:
+    print('the relay exe is a DEBUG build (it imports ' + ', '.join(n.decode() for n in debug_dlls) + ')')
+    print('reconfigure Release: cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release && ninja -C server/build')
+    sys.exit(1)
+if b'VCRUNTIME140.dll' in exe or b'MSVCP140.dll' in exe:
+    print('the relay exe links the CRT as DLLs -- it needs the VC++ redistributable on every host machine')
+    print('CMakeLists.txt sets the static runtime (/MT); reconfigure from a clean build directory')
+    sys.exit(1)
+
 version = ('Gauntlet Online %s\ncommit %s\nbuilt %s\n'
            % (tag, git('rev-parse', '--short', 'HEAD'),
               datetime.datetime.now().strftime('%Y-%m-%d %H:%M')))
