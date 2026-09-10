@@ -2902,7 +2902,19 @@ if (A.player_frames) {
      character-is-the-seat rule (the same day) ended that.  drawQuarter
      has always used $B474's out bit as well, which is why the phantom
      had a tag but no panel; playerOnScreen is now the one rule for the
-     sprite loop and the tags too. */
+     sprite loop and the tags too.
+     AND ONE LAYER DOWN (Anthony, the same day: "when the player goes
+     into the exit it no longer goes to the next level.  Also when the
+     player dies it doesn't go to the stats screen"): every "both
+     players" rule reads the DEAD bit -- $94B4's level end waits for
+     every block to be dead-or-exited, $B3AB's game over for every block
+     to be dead -- on the promise, written into levelEnd's own comment,
+     that "a block never in the game ships $C0".  Block 1 ships $00.  So
+     THE START OF PLAY now puts any block still out into reset's
+     out-block state outright, dead like the others; it rejoins through
+     $9440 like any dead player.  A no-op for a block that joined and for
+     one already dead, which is every case the two-block reference ever
+     reached. */
   {
     const paint = gg => { recording = true; drawCalls.length = 0;
                           G.render(ctxStub, gg); recording = false;
@@ -2918,10 +2930,11 @@ if (A.player_frames) {
     g.stepTick({ p3: { fire: true } });                 // the THIRD seat, and only it
     check('one FIRE from the third seat takes the sim into play with only him in',
           [g.mode, g.players.map(q => !!q.inGame)], ['play', [false, false, true, false]]);
-    check('...so only he is on screen -- while block 1 is still ALIVE, which is the whole point',
+    check('...and THE START OF PLAY puts the unjoined block 1 out AND DEAD, as blocks 2..4 already are',
           [g.players.map(q => G.playerOnScreen(q)),
-           (g.players[0].f11 & 0x80) ? 'dead' : 'alive'],
-          [[false, false, true, false], 'alive']);
+           g.players.map(q => (q.f11 & 0x80) ? 'dead' : 'alive'),
+           [g.players[0].x, g.players[0].y, g.players[0].health, g.players[0].score, g.players[0].p14]],
+          [[false, false, true, false], ['dead', 'dead', 'alive', 'dead'], [0, 0, 0, 0, 0x80]]);
     /* and the RENDERER really obeys it: move the unjoined block and not
        one pixel of the frame may change (the camera is sim state, so a
        render between passes cannot follow it either way) */
@@ -2934,6 +2947,57 @@ if (A.player_frames) {
     g.players[2].x = (g.players[2].x + 16) & 0xFF;
     checkTrue('...while the same move of the joined one does',
               JSON.stringify(paint(g)) !== joined);
+    /* ...and the player who DOES sit in seat 1 -- in the lobby, FIRE not
+       yet pressed when the wizard started -- joins later through $9440
+       from that state exactly as blocks 2..4 always have: placed, alive,
+       on screen, with $9488's 2000 health less at most the drain point of
+       the pass that joined him ($B717's robin may or may not serve him) */
+    g.onePass({ fire: true });
+    check('a seat-1 player arriving AFTER the start joins from the dead state like any other block',
+          [g.players[0].inGame, (g.players[0].f11 & 0x80) ? 'dead' : 'alive',
+           g.players[0].health >= 0x1999 && g.players[0].health <= 0x2000,
+           g.players[0].x !== 0 || g.players[0].y !== 0, g.players.map(q => G.playerOnScreen(q))],
+          [true, 'alive', true, true, [true, false, true, false]]);
+  }
+  /* --- ...AND THE LEVEL ENDS FOR HIM: the exit, and the death ---------- */
+  {
+    /* the suite's own exit recipe, for a wizard ALONE: a $36 planted two
+       rows below him, walked into; $94B4's "every block dead or exited"
+       must be satisfied by a block 1 nobody ever joined */
+    const g = G.seed({});
+    g.enterAttract();
+    g.stepTick({ p3: { fire: true } });
+    const q = g.players[2];
+    g.map[(q.y >> 2) + 2][q.x >> 2] = 0x36;
+    let passes = 0;
+    while (g.mode === 'play' && passes < 300){
+      g.onePass({ p3: { down: true } }); passes++;
+      if (g.levelDone){ g.levelOver(); break; }
+    }
+    check('A LONE WIZARD WALKS INTO THE EXIT and the next dungeon loads (block 1, never joined, does not hold him)',
+          [g.level, g.gameOver, passes < 300], [2, false, true]);
+    check('...and block 1 stays out and dead across the level start ($B42D skips a block not in the game)',
+          [g.players[0].inGame, (g.players[0].f11 & 0x80) ? 'dead' : 'alive', [g.players[0].x, g.players[0].y]],
+          [false, 'dead', [0, 0]]);
+    /* the suite's own death recipe, for a wizard ALONE: $B3AB's "every
+       block dead" must be satisfied the same way */
+    const s = G.seed({});
+    s.enterAttract();
+    s.stepTick({ p3: { fire: true } });
+    { const save = s.p; s.p = s.players[2]; s.health = 0; s.p = save; }
+    let died = 0;
+    while (s.mode === 'play' && died < 10){
+      s.onePass({}); died++;
+      if (s.levelDone){ s.levelOver(); break; }
+    }
+    check('A LONE WIZARD DIES and the party is over: the game-over hold, in two passes as measured',
+          [s.gameOver, s.mode, died], [true, 'over', 2]);
+    check('...and the stats screen will list HIM ALONE: the never-joined block 1 is not a player who played',
+          s.finalStats.players.filter(p => p.played).map(p => p.idx), [2]);
+    while (s.mode === 'over') s.overTick();
+    check('...and the hold ends into the stats screen\'s handback (overEnded), the way every death does',
+          [s.mode, s.overEnded], ['attract', true]);
+    s.overEnded = false;
   }
 
   /* --- both players drain, and the HUD round robin is FOUR passes long */

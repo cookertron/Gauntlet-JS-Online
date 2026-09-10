@@ -5533,6 +5533,25 @@ class Game{
        would wake every actor on its path, which no faithful join did. */
     if (this.online){ this.p.camLive = true; this.vcamConverge(this.p); }
   }
+  /* reset()'s OUT-BLOCK state -- what its loop writes for blocks B..D --
+     applied to a live block that never joined (attractTick, the start of
+     play).  Everything that loop writes but the character, which is the
+     session's table's ($FFFF/$FFFE, CHARS); the inventory bits go with
+     $948C's AND $80; the carried keys, potions and kills are a fresh
+     block's zeros, as $9440's join would leave them. */
+  putOut(q){
+    const save = this.p; this.p = q;
+    this.x = 0; this.y = 0;
+    this.health = 0; this.score = 0;
+    this.keys = 0; this.potions = 0; this.timer = 0;
+    this.f11 = 0xC0;                                    // $844B: dead, exited
+    this.p14 = 0x80;                                    // $8454: out, nothing carried
+    this.dead = true;
+    this.levelOwn = A.player.block2 ? A.player.block2[0x0C] : 1;
+    this.shot = {x:0, y:0, state:0xFF, drawX:0, drawY:0, drawn:false};
+    q.kills = [0, 0, 0, 0, 0, 0];
+    this.p = save;
+  }
   /* ADDED -- START MEANS START (upstream f23d538, adapted).  The
      streamlined options screen ends on a button that says START GAME, so
      the OFFLINE handover (feHandover) joins the local player HERE -- by
@@ -9651,6 +9670,27 @@ class Game{
     this.readKeys(input);
     this.joinPass();                                     // $B47B CALL $9432
     if (this.players.some(q => q.inGame)){               // $B47E AND / RLA
+      /* A BLOCK NOBODY JOINED IS DEAD (2026-09-10).  reset() ships block
+         A alive -- the tape's own, captured mid-game with player 1
+         playing -- and $B474 puts it OUT without killing it, where
+         blocks B..D start out AND dead ($C0).  On the original that never
+         mattered: block A is always the block that starts the game.
+         Online any seat can start it (the character IS the seat, so a
+         lone WIZARD starts with block A empty), and every "both players"
+         rule reads the DEAD bit on the promise that a block never in the
+         game ships $C0: $94B4's level end waited for a block that would
+         never exit (Anthony: "when the player goes into the exit it no
+         longer goes to the next level"), $B3AB's game over for one that
+         would never die ("when the player dies it doesn't go to the stats
+         screen"), $ADDA chased it, $B6DA drained it, and it stood in the
+         window with a name tag.  So the moment the game STARTS, a block
+         still out becomes what the others already are -- reset's own
+         out-block state, exactly (putOut) -- and rejoins through $9440
+         like any dead player.  A no-op for a block that joined (it is in)
+         and for one already dead (B..D): every case the two-block
+         reference ever reached, so the degeneracy gate never sees it. */
+      for (const q of this.players)
+        if (!q.inGame && !(q.f11 & F_DEAD)) this.putOut(q);
       /* SITE 3 of the tape-prompt boundary.  $B48F BIT 7,($84CC) puts up the
          REWIND prompt on a COLD BOOT only -- the pack is not held yet, so the
          original needs side 2 in the deck before it can start.  This port
@@ -11079,7 +11119,9 @@ function drawPanel(ctx, g, q){
    joined the game by myself and warrior is there for some reason".
    drawQuarter has always used the out bit, which is why the phantom had
    a name tag but no HUD panel.  DISPLAY ONLY: no sim state, no
-   fingerprint, no wire. */
+   fingerprint, no wire.  (Since the start of play kills an unjoined
+   block outright -- attractTick, putOut -- the out bit here is belt and
+   braces: nothing alive is out during play any more.) */
 function playerOnScreen(q){
   return q.inGame && !(q.f11 & F_DEAD) && !(q.animCtl & 4);
 }

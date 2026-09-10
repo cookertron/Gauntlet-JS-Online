@@ -765,6 +765,40 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      ways, including a RENDER-level one: moving the unjoined block must
      not change one draw call, while the same move of the joined block
      must (mutation-verified — the old gate fails three of them).
+   - **...AND ONE LAYER DOWN, THE REAL FIX** (Anthony, later: "when the
+     player goes into the exit it no longer goes to the next level.
+     Also when the player dies it doesn't go to the stats screen").
+     Every "both players" rule reads the DEAD bit on the promise —
+     written into `levelEnd`'s own comment — that "a block never in the
+     game ships $C0".  Blocks 2..4 do; block 1 ships $00 and $B474 only
+     puts it OUT.  So with a lone wizard, $94B4's level end waited for a
+     block that would never exit, $B3AB's game over for one that would
+     never die, $ADDA's chase aimed at it and $B6DA drained it.  THE
+     START OF PLAY now restores the invariant: in `attractTick`, the
+     moment someone is in the game, every block still out and alive
+     gets `putOut(q)` — reset()'s own out-block state, exactly (x/y 0,
+     health/score/keys/potions/timer 0, $844B = $C0, $8454 = $80, dead,
+     levelOwn, a fresh shot, zero kills; the character is the table's
+     and is left alone) — and rejoins through $9440 like any dead
+     block.  Chosen over killing block 1 at reset or at the attract
+     because the four-block DEGENERACY reference (recorded on the
+     two-block build, per-tick, attract included) holds block 1
+     alive-out through every lobby; the transition is a no-op for a
+     block that joined and for one already dead, which is every case
+     that reference reaches — and the gate passed untouched.  What was
+     checked for collateral (Anthony: "does this effect anything
+     else?"): offline is unchanged (block 1 is the player and joins
+     first; the whole suite is green); lockstep (every client runs the
+     same transition, e2e 40/40 including the two-fresh-high-seats
+     session); a seat-1 player arriving AFTER the start joins from the
+     dead state (pinned: placed, alive, on screen, $9488's health less
+     one drain point); the next level keeps it out and dead ($B42D
+     skips a block not in the game — pinned); the stats screen lists
+     the wizard alone (score 0, never died — pinned); snapshots carry
+     the dead state (SNAP_PLAYER has f11/p14/dead); monsters no longer
+     chase or drain a phantom.  Mutation-verified: with the transition
+     removed, the lone wizard's exit and death checks fail.  headless
+     1544 → 1550.
    - **Verified by driving the window**: reservations typed into three
      cells reached the file and the log, then four clients proved every
      branch — ANTHONY asked for the warrior and got the reserved elf,
