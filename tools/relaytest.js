@@ -71,7 +71,8 @@ async function main(){
   console.log('relaytest: ' + EXE);
   /* the two-seat table, explicitly: the relay's DEFAULT is four seats now
      (the sim carries four blocks) and the four-seat run is below */
-  const proc = spawn(EXE, ['--console', '--port', String(PORT), '--seats', '2'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn(EXE, ['--console', '--whitelist', 'none', '--port', String(PORT), '--seats', '2'],
+                     { stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   proc.stdout.on('data', d => { out += d.toString(); });
   proc.stderr.on('data', d => { out += d.toString(); });
@@ -142,13 +143,13 @@ async function main(){
 
     /* ---- seating and the fresh boot -------------------------------- */
     const c0 = await new Ws().connect(PORT);
-    c0.msg(M.HELLO, P.version, 3, Buffer.from('anthony!'));   // the elf, named
+    c0.msg(M.HELLO, P.version, 3, Buffer.from('anthony!'));   // asks for the elf, named
     const w0 = rdWelcome(await c0.expect(M.WELCOME));
-    check('first client seats at 0, fresh, pass 0',
+    check('first client seats at 0 -- the elf he asked for is seat 3, outside a TWO-seat table',
           [w0.seat, w0.seats, w0.mode, w0.pass], [0, 2, MODE.FRESH, 0]);
     checkTrue('...with a nonzero buildSeed', w0.seed !== 0);
-    check('...and CHARS carries his pick, other seats unset',
-          Array.from((await c0.expect(M.CHARS)).subarray(1)), [3, 255, 255, 255]);
+    check('...and CHARS is the IDENTITY: seat i fields character i, empty seats included',
+          Array.from((await c0.expect(M.CHARS)).subarray(1)), [0, 1, 2, 3]);
     check('...and NAMES carries his name SANITIZED (upper, junk to space)',
           (await c0.expect(M.NAMES)).subarray(1).toString(),
           'ANTHONY ' + ' '.repeat(24));
@@ -159,10 +160,10 @@ async function main(){
     check('second client seats at 1, still fresh (pass 0)',
           [w1.seat, w1.mode, w1.pass], [1, MODE.FRESH, 0]);
     check('...and both clients share the ONE buildSeed', w1.seed, w0.seed);
-    check('a clashing pick is BUMPED past the earlier seat (the engine never fields two of one)',
-          Array.from((await c1.expect(M.CHARS)).subarray(1)), [3, 0, 255, 255]);
-    check('...and the first client hears the new table too',
-          Array.from((await c0.expect(M.CHARS)).subarray(1)), [3, 0, 255, 255]);
+    check('...and the table is the same constant: nothing to bump, one character per seat',
+          Array.from((await c1.expect(M.CHARS)).subarray(1)), [0, 1, 2, 3]);
+    check('...and the first client hears it too',
+          Array.from((await c0.expect(M.CHARS)).subarray(1)), [0, 1, 2, 3]);
     check('NAMES now carries both seats, to both clients',
           [(await c0.expect(M.NAMES)).subarray(1).toString(),
            (await c1.expect(M.NAMES)).subarray(1).toString()],
@@ -325,12 +326,12 @@ async function main(){
     c0.close(); c3.close();
     await sleep(300);
     const c4 = await new Ws().connect(PORT);
-    c4.msg(M.HELLO, P.version, 1);
+    c4.msg(M.HELLO, P.version, 1);              // asks for the valkyrie
     const w4 = rdWelcome(await c4.expect(M.WELCOME));
-    check('with every seat emptied the session reset: next client is FRESH at pass 0',
-          [w4.seat, w4.mode, w4.pass], [0, MODE.FRESH, 0]);
-    check('...and the character table reset with it',
-          Array.from((await c4.expect(M.CHARS)).subarray(1)), [1, 255, 255, 255]);
+    check('with every seat emptied the session reset: next client is FRESH at pass 0, IN THE CHARACTER HE PICKED',
+          [w4.seat, w4.mode, w4.pass], [1, MODE.FRESH, 0]);
+    check('...and the character table is the same constant (there is nothing left to reset)',
+          Array.from((await c4.expect(M.CHARS)).subarray(1)), [0, 1, 2, 3]);
     check('...and the name table too',
           (await c4.expect(M.NAMES)).subarray(1).toString(), ' '.repeat(32));
     c4.close();
@@ -340,7 +341,8 @@ async function main(){
 
   /* ---- FOUR SEATS, the default table (this fork's four-block sim) ---- */
   const PORT4 = PORT + 1;
-  const proc4 = spawn(EXE, ['--console', '--port', String(PORT4)], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc4 = spawn(EXE, ['--console', '--whitelist', 'none', '--port', String(PORT4)],
+                      { stdio: ['ignore', 'pipe', 'pipe'] });
   let out4 = '';
   proc4.stdout.on('data', d => { out4 += d.toString(); });
   proc4.stderr.on('data', d => { out4 += d.toString(); });
@@ -354,24 +356,25 @@ async function main(){
     const cs = [];
     for (let i = 0; i < 4; i++){
       const c = await new Ws().connect(PORT4);
-      c.msg(M.HELLO, P.version, 3, Buffer.from('P' + (i + 1) + '      '));   // everyone picks the elf
+      c.msg(M.HELLO, P.version, 3, Buffer.from('P' + (i + 1) + '      '));   // everyone asks for the elf
       cs.push(c);
     }
     const ws = [];
     for (const c of cs) ws.push(rdWelcome(await c.expect(M.WELCOME)));
-    check('four clients seat 0..3 of a four-seat FRESH session',
-          ws.map(w => [w.seat, w.seats, w.mode]), [[0, 4, MODE.FRESH], [1, 4, MODE.FRESH], [2, 4, MODE.FRESH], [3, 4, MODE.FRESH]]);
+    const seatOf = ws.map(w => w.seat);        // join order -> character
+    check('FOUR ELVES become one of each: the first gets the elf he asked for, the rest the lowest free character',
+          ws.map(w => [w.seat, w.seats, w.mode]), [[3, 4, MODE.FRESH], [0, 4, MODE.FRESH], [1, 4, MODE.FRESH], [2, 4, MODE.FRESH]]);
     checkTrue('...one buildSeed for all four', ws.every(w => w.seed === ws[0].seed));
-    /* every HELLO rebroadcasts the tables to the seated: seat i hears
-       4 - i of them, and the last one anyone hears is the settled table */
+    /* every HELLO rebroadcasts the tables to the seated: the i-th to
+       join hears 4 - i of them, and the last one is the settled table */
     let lastChars = null;
     for (let i = 0; i < 4; i++)
       for (let k = 0; k < 4 - i; k++) lastChars = await cs[i].expect(M.CHARS);
     const lastNames = await cs[3].expect(M.NAMES);
-    check('four elves become ONE of each: every clash bumped past every earlier seat',
-          Array.from(lastChars.subarray(1)), [3, 0, 1, 2]);
-    check('NAMES is the four-wide table', lastNames.subarray(1).toString(),
-          'P1      P2      P3      P4      ');
+    check('...and the character table never moved: it is the identity',
+          Array.from(lastChars.subarray(1)), [0, 1, 2, 3]);
+    check('NAMES is the four-wide table, each name in HIS character\'s slot',
+          lastNames.subarray(1).toString(), 'P2      P3      P4      P1      ');
     const c5 = await new Ws().connect(PORT4);
     c5.msg(M.HELLO, P.version, 0);
     check('a FIFTH client is refused: ERROR FULL (seats=4)', (await c5.expect(M.ERROR))[1], E.FULL);
@@ -381,8 +384,8 @@ async function main(){
     for (const c of cs) c.msg(M.READY, U32(0));
     let pass4 = 0, ok4 = 0, waits4 = true;
     for (let i = 0; i < 10; i++){
-      const bytes = [1, 2, 4, 8].map(b => (b * (i + 1)) & 0x3F);
-      cs.forEach((c, s) => c.msg(M.INPUT, U32(pass4), bytes[s]));
+      const bytes = [1, 2, 4, 8].map(b => (b * (i + 1)) & 0x3F);   // by SEAT, not join order
+      cs.forEach((c, k) => c.msg(M.INPUT, U32(pass4), bytes[seatOf[k]]));
       const got = [];
       for (const c of cs) got.push(await c.expect(M.PASS));
       const all = got.every(m => { const p = rdPass(m);
@@ -394,23 +397,84 @@ async function main(){
     check('ten passes carry FOUR bytes in seat order to all four clients', ok4, 10);
     checkTrue('...each with four trailing WAIT bytes', waits4);
     /* one leaves mid-game: his byte is substituted, the other three play on */
+    const gone = seatOf[2];
     cs[2].close();
     await sleep(300);
-    for (const s of [0, 1, 3]) cs[s].msg(M.INPUT, U32(pass4), 0x10 + s);
+    for (const k of [0, 1, 3]) cs[k].msg(M.INPUT, U32(pass4), 0x10 + seatOf[k]);
     const pl = rdPass(await cs[0].expect(M.PASS));
-    check('seat 2 gone: its byte is substituted 0x00 and the pass still carries four',
-          [pl.pass, pl.dirs], [pass4, [0x10, 0x11, 0, 0x13]]);
-    for (const s of [1, 3]) await cs[s].expect(M.PASS);
+    check('a leaver mid-game: his byte is substituted 0x00 and the pass still carries four',
+          [pl.pass, pl.dirs], [pass4, [0, 1, 2, 3].map(s => s === gone ? 0 : 0x10 + s)]);
+    for (const k of [1, 3]) await cs[k].expect(M.PASS);
     pass4++;
-    /* ...and a newcomer takes the freed seat as a SNAPSHOT joiner */
+    /* ...and a newcomer ASKS FOR the freed character and takes it as a
+       SNAPSHOT joiner: his pick chooses the block, and the block already
+       IS that character on every client */
     const c6 = await new Ws().connect(PORT4);
-    c6.msg(M.HELLO, P.version, 1, Buffer.from('LATE    '));
+    c6.msg(M.HELLO, P.version, gone, Buffer.from('LATE    '));
     const w6 = rdWelcome(await c6.expect(M.WELCOME));
-    check('a late joiner takes the freed seat 2 in SNAPSHOT mode', [w6.seat, w6.seats, w6.mode, w6.pass], [2, 4, MODE.SNAPSHOT, pass4]);
+    check('a late joiner takes the freed character in SNAPSHOT mode',
+          [w6.seat, w6.seats, w6.mode, w6.pass], [gone, 4, MODE.SNAPSHOT, pass4]);
     for (const c of cs) c.close();
     c6.close();
   } finally {
     proc4.kill();
+  }
+
+  /* ---- THE WHITELIST: a character reserved for a NAME ----------------
+     Anthony, 2026-09-10.  Two of the four are spoken for; --reserve is
+     the command-line form of the window's own cells (and keeps this
+     test off the host's whitelist.txt).  Note the lower case: what the
+     host types is sanitized the same way the options NAME row is. */
+  const PORT5 = PORT + 2;
+  const proc5 = spawn(EXE, ['--console', '--port', String(PORT5),
+                            '--reserve', 'ELF=anthony', '--reserve', 'wizard=Eve'],
+                      { stdio: ['ignore', 'pipe', 'pipe'] });
+  let out5 = '';
+  proc5.stdout.on('data', d => { out5 += d.toString(); });
+  proc5.stderr.on('data', d => { out5 += d.toString(); });
+  const t5 = Date.now();
+  while (!/RELAY LISTENING/.test(out5)){
+    if (Date.now() - t5 > 5000) throw new Error('server never listened: ' + out5);
+    await sleep(20);
+  }
+  checkTrue('the reservations are logged, sanitized to the tag font\'s charset',
+            /Elf is reserved for ANTHONY/.test(out5) && /Wizard is reserved for EVE/.test(out5), out5);
+  try {
+    const hello = async (name, pick) => {
+      const c = await new Ws().connect(PORT5);
+      c.msg(M.HELLO, P.version, pick, Buffer.from(name.padEnd(8).slice(0, 8)));
+      return c;
+    };
+    const cn = await hello('NOBODY', 3);          // asks for the elf: it is not his
+    check('an unlisted player does NOT get a reserved character, even the one they picked',
+          rdWelcome(await cn.expect(M.WELCOME)).seat, 0);
+    const cr = await hello('RANDOM', 2);          // asks for the wizard: EVE's
+    check('...they get a free UNRESERVED one instead', rdWelcome(await cr.expect(M.WELCOME)).seat, 1);
+    const cx = await hello('STRANGER', 0);
+    check('with both free characters RESERVED, an unlisted player is refused ERROR FULL',
+          (await cx.expect(M.ERROR))[1], E.FULL);
+    cx.close();
+    const ca = await hello('anthony', 1);         // asks for the valkyrie
+    check('but the player it is reserved FOR walks into it, overriding their own pick',
+          rdWelcome(await ca.expect(M.WELCOME)).seat, 3);
+    const ce = await hello('EVE', 0);             // asks for the warrior
+    check('...and so does the other', rdWelcome(await ce.expect(M.WELCOME)).seat, 2);
+    const cf = await hello('SIXTH', 1);
+    check('with every character taken the next is ERROR FULL too', (await cf.expect(M.ERROR))[1], E.FULL);
+    cf.close();
+    /* the owner leaves: their character is HELD, not handed on */
+    ca.close();
+    await sleep(300);
+    const cy = await hello('LATECOMER', 3);
+    check('when the owner leaves it goes back to being reserved: a stranger is still refused',
+          (await cy.expect(M.ERROR))[1], E.FULL);
+    cy.close();
+    const ca2 = await hello('ANTHONY', 0);
+    check('...and it is waiting when they come back',
+          rdWelcome(await ca2.expect(M.WELCOME)).seat, 3);
+    for (const c of [cn, cr, ce, ca2]) c.close();
+  } finally {
+    proc5.kill();
   }
 
   console.log(`\n${checks - failures}/${checks} relay checks passed`);

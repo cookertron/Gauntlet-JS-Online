@@ -58,7 +58,7 @@ One message = `u8 type` then the fields.  C→S / S→C marks direction.
 | 9    | READY   | C→S | `u32 pass`                                         |
 | 10   | SEATS   | S→C | `u8 occupiedBitmask`                               |
 | 11   | ERROR   | S→C | `u8 code` — then the server closes                 |
-| 12   | CHARS   | S→C | `maxSeats × u8` character per seat, `0xFF` unset   |
+| 12   | CHARS   | S→C | `maxSeats × u8` character per seat — the identity table since 2026-09-10 (`0xFF`, unset, is still parsed by the client) |
 | 13   | NAMES   | S→C | `maxSeats × nameLen × u8` name per seat, space-padded |
 | 14   | PING    | C→S | `u32 tag` — answered at once, seat or no seat, ahead of every other duty |
 | 15   | PONG    | S→C | `u32 tag` echoed verbatim                          |
@@ -69,24 +69,33 @@ One message = `u8 type` then the fields.  C→S / S→C marks direction.
 
 ## The session
 
-* **Seating.**  HELLO with the right version takes the lowest free seat
-  below the server's seat count, else `ERROR FULL`.  The protocol
-  allows up to `maxSeats` (4) and the server defaults to
-  `defaultSeats` (4): the sim carries four player blocks (2026-09-02).
-  `--seats` lowers it for a smaller table.
+* **Seating.**  HELLO with the right version is given a CHARACTER, and
+  since 2026-09-10 the character IS the seat: seat *i* always fields
+  character *i*.  Which one a client gets (server-side policy, not
+  wire): a character RESERVED for the HELLO's name if there is one;
+  otherwise a free unreserved character — the `char` it asked for if
+  that one is free, else the lowest.  Nothing left is `ERROR FULL`, and
+  a reserved-but-empty character counts as nothing left: it is held for
+  the player it names.  The protocol allows up to `maxSeats` (4) and
+  the server defaults to `defaultSeats` (4): the sim carries four
+  player blocks (2026-09-02).  `--seats` lowers it for a smaller table,
+  which therefore ends the character list early.
 * **Boot.**  `WELCOME.mode` is FRESH while the session is at pass 0:
   the client boots `reset({online:true, buildSeed})` and sends READY.
   The buildSeed is the server's one die roll, shared by everyone.
 * **Characters are sim state** (they pick shot/fight/magic/armour), so
-  every client must boot every block identically.  A fresh HELLO's
-  `char` is stored per seat — bumped `(c+1)&3` past any earlier seat's
-  pick, since the engine never fields two of one character — and CHARS
-  is broadcast to everyone seated.  On CHARS at pass 0 a booted client
-  simply resets again (TCP ordering puts every CHARS before PASS 0, so
-  nobody has stepped).  The table freezes at the first PASS; an unset
-  seat's block derives its character deterministically (the client's
-  own default rule), and a late joiner takes characters from the
-  snapshot, where they already live.
+  every client must boot every block identically — and CHARS is
+  therefore the IDENTITY table, `[0,1,2,3]`, complete at every moment
+  of the session, empty seats included.  It used to carry `0xFF` for a
+  seat nobody had claimed, and the client then fell back to its OWN
+  options pick for that block (`netBoot`'s `pick(0, cfgLocal.char)`):
+  harmless while the first joiner was always seat 0, a DESYNC as soon
+  as they were not — which a reservation makes ordinary.  Mutation-
+  verified in `tools/e2etest.js`: with the old table two clients who
+  boot fresh into seats 3 and 2 field different block 1s and diverge on
+  the first fingerprint.  A late joiner still takes characters from the
+  snapshot, where they already live — and they agree, because the boot
+  they came from used the same identity.
 * **Names are display metadata**, never sim state: they ride HELLO's
   optional trailing field (a HELLO without it means a blank name — old
   clients stay parseable), the server stores one per seat — sanitized

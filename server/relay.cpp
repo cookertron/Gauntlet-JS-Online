@@ -27,7 +27,9 @@
    Run:
      gauntlet-relay [--port 33792] [--seats 4] [--forward]   THE WINDOW (gui.cpp)
      gauntlet-relay --console ...                            the console relay
-     (the log is stamped in both; --unforward removes a mapping and exits)
+     (the log is stamped in both; --unforward removes a mapping and exits;
+      --reserve ELF=ANTHONY reserves a character, --whitelist PATH|none
+      chooses or refuses the file the window keeps them in)
    Test:
      node tools/relaytest.js server/build/gauntlet-relay.exe          */
 
@@ -143,6 +145,89 @@ std::vector<std::string> logTake(){
   std::lock_guard<std::mutex> g(logMx);
   std::vector<std::string> out; out.swap(logQueue); return out;
 }
+/* =======================================================================
+   THE WHITELIST -- Anthony, 2026-09-10: "a player name white list with
+   the ability to assign character which basically overrides the player
+   choice in the options... If no player name is in a character slot
+   whitelist then they're assigned a character that's not got a
+   whitelist name attached.  If all character slots contain a name in
+   the whitelist or it's full then the player trying to join the server
+   should receive a server full message."
+   =======================================================================
+   One optional NAME per character, matched against the name the player
+   types on the options screen (HELLO's trailing field).  Held here
+   because BOTH the window (which edits it) and the lockstep loop (which
+   seats by it) need it; the loop copies it once a turn rather than
+   locking inside a join.  Kept in a small text file beside the exe so a
+   host sets the table up once.                                        */
+static std::mutex wlMx;
+static std::string wlName[MAX_SEATS];        // sanitized, trimmed; "" = unreserved
+static std::string wlPath;                   // "" = no file (--whitelist none, or --reserve)
+/* the tag font's charset, the one the options NAME row can type:
+   upper A-Z, 0-9 and space, at most NAME_LEN, trimmed both ends */
+static std::string sanitizeName(const std::string& in){
+  std::string o;
+  for (char c0 : in){
+    uint8_t ch = uint8_t(c0);
+    if (ch >= 'a' && ch <= 'z') ch = uint8_t(ch - 32);
+    if (!(ch == ' ' || (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z'))) ch = ' ';
+    if (o.empty() && ch == ' ') continue;                  // no leading space
+    o += char(ch);
+    if (o.size() == size_t(NAME_LEN)) break;
+  }
+  while (!o.empty() && o.back() == ' ') o.pop_back();
+  return o;
+}
+static void wlLoad(){
+  if (wlPath.empty()) return;
+  FILE* f = fopen(wlPath.c_str(), "rb");
+  if (!f) return;                                          // no file yet: nothing reserved
+  char line[512];
+  int got = 0;
+  while (fgets(line, sizeof line, f)){
+    std::string s(line);
+    size_t h = s.find_first_of("#;");
+    if (h != std::string::npos) s = s.substr(0, h);
+    size_t eq = s.find('=');
+    if (eq == std::string::npos) continue;
+    std::string key = sanitizeName(s.substr(0, eq)), val = sanitizeName(s.substr(eq + 1));
+    for (int i=0;i<MAX_SEATS;i++){
+      if (key != sanitizeName(RELAY_CHAR_NAMES[i])) continue;
+      std::lock_guard<std::mutex> g(wlMx);
+      wlName[i] = val;
+      if (!val.empty()) got++;
+    }
+  }
+  fclose(f);
+  if (got) logf("whitelist: %d character(s) reserved, from %s", got, wlPath.c_str());
+}
+static void wlSave(){
+  if (wlPath.empty()) return;
+  FILE* f = fopen(wlPath.c_str(), "wb");
+  if (!f){ logf("whitelist: could not write %s", wlPath.c_str()); return; }
+  fputs("# Gauntlet Online -- reserved characters.\r\n"
+        "# One player NAME per character: whoever types that name on the game's\r\n"
+        "# options screen always plays that character.  Leave a line empty and\r\n"
+        "# the character goes to whoever joins.  The server window edits this.\r\n", f);
+  std::lock_guard<std::mutex> g(wlMx);
+  for (int i=0;i<MAX_SEATS;i++)
+    fprintf(f, "%s=%s\r\n", RELAY_CHAR_NAMES[i], wlName[i].c_str());
+  fclose(f);
+}
+void relaySetReserved(int chr, const std::string& name){
+  if (chr < 0 || chr >= MAX_SEATS) return;
+  const std::string v = sanitizeName(name);
+  {
+    std::lock_guard<std::mutex> g(wlMx);
+    if (wlName[chr] == v) return;
+    wlName[chr] = v;
+  }
+  if (v.empty()) logf("the %s is no longer reserved", RELAY_CHAR_NAMES[chr]);
+  else logf("the %s is reserved for %s (from their next join; anyone in it now stays)",
+            RELAY_CHAR_NAMES[chr], v.c_str());
+  wlSave();
+}
+
 /* microseconds off the performance counter: GetTickCount64's ~16 ms
    grain cannot time a LAN ping */
 static uint64_t nowUs(){
@@ -686,6 +771,9 @@ struct Relay {
   std::vector<int> targets;       // conn indices awaiting SNAP + their READY
   uint64_t syncStartMs = 0;
   std::deque<int> joinQueue;      // conn indices waiting for a sync slot
+  /* the whitelist, copied once a turn (syncReserved) so a join never
+     waits on the window's lock -- reserved[i] is character i's owner */
+  std::string reserved[MAX_SEATS];
   /* for the window: counters, the pass rate, this machine's LAN address */
   uint32_t pages = 0, desyncs = 0, snapshots = 0;
   uint64_t startMs = 0, rateAtMs = 0;
@@ -693,7 +781,14 @@ struct Relay {
   double passRate = 0;
   std::string lanIp;
 
-  Relay(){ for (int i=0;i<MAX_SEATS;i++){ seat[i] = -1; charBySeat[i] = 0xFF;
+  /* THE CHARACTER TABLE IS THE IDENTITY (2026-09-10): seat i fields
+     character i, always, so CHARS is a constant and every client derives
+     the same four blocks -- including the ones nobody is sitting in.
+     (It used to carry 0xFF for an empty seat, and netBoot then fell back
+     to each client's OWN options pick for that block: harmless while the
+     first joiner was always seat 0, a desync the moment he is not, which
+     a reservation makes ordinary.) */
+  Relay(){ for (int i=0;i<MAX_SEATS;i++){ seat[i] = -1; charBySeat[i] = uint8_t(i);
                                           memset(nameBySeat[i], ' ', NAME_LEN); } }
   uint64_t now(){ return GetTickCount64(); }
 
@@ -766,12 +861,10 @@ struct Relay {
     else if (c.state == Conn::UP) logf("connection closed: %s (%s)", why, c.addr.c_str());
     int idx = indexOf(c);
     if (c.seat >= 0){
-      /* pre-start, a leaver's character pick -- and name -- leave with
-         him; mid-game both stay with the standing block until the seat
-         is reused */
-      if (pass == 0){ charBySeat[c.seat] = 0xFF; broadcastChars();
-                      memset(nameBySeat[c.seat], ' ', NAME_LEN);
-                      broadcastNames(); }
+      /* pre-start a leaver's NAME leaves with him; mid-game it stays
+         with the standing block until the seat is reused.  His CHARACTER
+         is the seat itself and stays either way. */
+      if (pass == 0){ memset(nameBySeat[c.seat], ' ', NAME_LEN); broadcastNames(); }
       seat[c.seat] = -1; c.seat = -1;
     }
     if (syncing){
@@ -793,8 +886,7 @@ struct Relay {
       logf("session orphaned at pass %u -- reset", pass);
       pass = 0; syncing = false; provider = -1;
       buildSeed = freshSeed();
-      for (int i=0;i<MAX_SEATS;i++){ charBySeat[i] = 0xFF;
-                                     memset(nameBySeat[i], ' ', NAME_LEN); }
+      for (int i=0;i<MAX_SEATS;i++) memset(nameBySeat[i], ' ', NAME_LEN);
       orphanTargets();
       while (!joinQueue.empty()){
         int j = joinQueue.front(); joinQueue.pop_front();
@@ -961,47 +1053,44 @@ struct Relay {
       case MSG_HELLO: {
         if (n < 2 || p[0] != PROTO_VERSION){ sendError(c, ERR_VERSION); return; }
         if (c.seat >= 0){ drop(c, "double HELLO"); return; }
-        int s = -1;
-        for (int i=0;i<seatsN;i++) if (seat[i] < 0){ s = i; break; }
-        if (s < 0){ sendError(c, ERR_FULL); return; }
+        /* THE NAME comes first now, because it chooses the seat: it is
+           HELLO's optional trailing field, sanitized to the tag font's
+           charset (upper A-Z, 0-9, space; a short HELLO means a blank
+           name).  Display metadata on the wire as ever -- but the
+           WHITELIST reads it, so a reserved player is seated by the very
+           name they typed on the options screen.  It applies to SNAPSHOT
+           joiners too: snapshots carry no names, the table is the
+           wire's own. */
+        std::string who;
+        for (int j=0;j<NAME_LEN;j++)
+          who += char((n >= size_t(2 + NAME_LEN)) ? p[2 + j] : ' ');
+        who = sanitizeName(who);
+        std::string why;
+        const int s = pickSlot(who, p[1] & 3, why);
+        if (s < 0){
+          logf("%s refused (%s): %s", who.empty() ? "an unnamed player" : who.c_str(),
+               c.addr.c_str(), why.c_str());
+          sendError(c, ERR_FULL); return;
+        }
         if (seatMask() == 0 && pass == 0) buildSeed = freshSeed();
         seat[s] = indexOf(c); c.seat = s; c.ready = false;
-        /* the NAME -- HELLO's optional trailing field, display-only.
-           Sanitized to the tag font's charset (uppercase A-Z, 0-9,
-           space); a short HELLO means a blank name.  Unlike the pick
-           this applies to SNAPSHOT joiners too: snapshots carry no
-           names, the table is the wire's own. */
-        for (int j=0;j<NAME_LEN;j++){
-          uint8_t ch = (n >= size_t(2 + NAME_LEN)) ? p[2 + j] : uint8_t(' ');
-          if (ch >= 'a' && ch <= 'z') ch = uint8_t(ch - 32);
-          if (!(ch == ' ' || (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z')))
-            ch = ' ';
-          nameBySeat[s][j] = ch;
-        }
+        memset(nameBySeat[s], ' ', NAME_LEN);
+        memcpy(nameBySeat[s], who.data(), who.size());
         uint8_t mode = (pass == 0) ? MODE_FRESH : MODE_SNAPSHOT;
         std::vector<uint8_t> m; m.push_back(MSG_WELCOME);
         m.push_back(uint8_t(s)); m.push_back(uint8_t(seatsN));
         putU32(m, buildSeed); m.push_back(mode); putU32(m, pass);
         queueMsg(c, m);
-        logf("seat %d taken by %s (%s; %s at pass %u)", s + 1, seatName(s).c_str(),
-             c.addr.c_str(), mode == MODE_FRESH ? "fresh boot" : "snapshot join", pass);
+        logf("the %s: %s joined (%s; %s at pass %u)%s", RELAY_CHAR_NAMES[s],
+             who.empty() ? "an unnamed player" : who.c_str(), c.addr.c_str(),
+             mode == MODE_FRESH ? "fresh boot" : "snapshot join", pass,
+             reserved[s] == who && !who.empty() ? " -- their reserved character" : "");
         if (mode == MODE_SNAPSHOT){
-          /* his pick does not apply -- the block's character arrives
-             inside the snapshot */
+          /* the block he takes is already this character's: the table is
+             the identity on every client, so a snapshot carries it */
           joinQueue.push_back(indexOf(c));
           startSyncIfDue();
-        } else {
-          uint8_t ch = p[1] & 3;
-          for (int guard=0; guard<4; guard++){
-            bool clash = false;
-            for (int i=0;i<MAX_SEATS;i++)
-              if (i != s && charBySeat[i] == ch) clash = true;
-            if (!clash) break;
-            ch = (ch + 1) & 3;                    // the engine never fields
-          }                                       // two of one character
-          charBySeat[s] = ch;
-          broadcastChars();
-        }
+        } else broadcastChars();
         broadcastNames();
         broadcastSeats();
         break;
@@ -1351,6 +1440,40 @@ struct Relay {
       else orphanTargets();
     }
   }
+  /* WHICH CHARACTER A JOINER GETS -- and because the character IS the
+     seat, that one choice seats him:
+       1. a RESERVATION for their name wins outright: that character is
+          held for them even while the rest of the table fills, and it
+          overrides whatever they picked on the options screen;
+       2. otherwise they get an UNRESERVED character -- the one they
+          picked if it is free, else the lowest free one.  With nothing
+          reserved that is exactly the old behaviour: pick honoured,
+          clashes moved along;
+       3. nothing left: ERR_FULL, and a reserved-but-empty character
+          counts as nothing left -- it belongs to the player it names,
+          not to the next comer (Anthony's rule).
+     --seats N ends the table early, so a smaller one is the first N
+     characters and a reservation outside it can never be met. */
+  int pickSlot(const std::string& who, uint8_t pref, std::string& why){
+    for (int i=0;i<seatsN;i++){
+      if (reserved[i].empty() || reserved[i] != who || who.empty()) continue;
+      if (seat[i] < 0) return i;
+      why = std::string("the ") + RELAY_CHAR_NAMES[i] + " is reserved for that name "
+            "and someone is already playing it";
+      return -1;
+    }
+    if (pref < seatsN && reserved[pref].empty() && seat[pref] < 0) return pref;
+    for (int i=0;i<seatsN;i++) if (reserved[i].empty() && seat[i] < 0) return i;
+    bool anyFree = false;
+    for (int i=0;i<seatsN;i++) if (seat[i] < 0) anyFree = true;
+    why = anyFree ? "every free character is reserved for someone else"
+                  : "every character is taken";
+    return -1;
+  }
+  void syncReserved(){
+    std::lock_guard<std::mutex> g(wlMx);
+    for (int i=0;i<MAX_SEATS;i++) reserved[i] = wlName[i];
+  }
   std::string seatName(int s){
     std::string nm((const char*)nameBySeat[s], NAME_LEN);
     while (!nm.empty() && nm.back() == ' ') nm.pop_back();
@@ -1365,7 +1488,8 @@ struct Relay {
       if (s < 0 || s >= seatsN || seat[s] < 0) continue;
       Conn& c = *conns[seat[s]];
       if (!c.open) continue;
-      logf("seat %d kicked by the host: %s (%s)", s + 1, seatName(s).c_str(), c.addr.c_str());
+      logf("the %s: %s kicked by the host (%s)", RELAY_CHAR_NAMES[s],
+           seatName(s).c_str(), c.addr.c_str());
       static const char reason[] = "kicked by host";
       uint8_t cl[2 + sizeof reason - 1] = { 0x03, 0xE8 };
       memcpy(cl + 2, reason, sizeof reason - 1);
@@ -1382,23 +1506,9 @@ struct Relay {
     s.snapshots = snapshots; s.startMs = startMs; s.htmlPath = htmlPath; s.lanIp = lanIp;
     const uint64_t t = now();
     for (auto& c : conns) if (c->open) s.conns++;
-    /* the characters: the table's, and for a seat the table never picked
-       (a snapshot joiner into a seat that was empty at the fresh boot)
-       the rule every client derives its block from -- seat 2 the
-       valkyrie unless seat 1 is, seats 3 and 4 the lowest unused
-       (Game.charTable through netBoot).  Display only: the relay still
-       runs no game. */
-    int chr[MAX_SEATS];
-    for (int i=0;i<MAX_SEATS;i++) chr[i] = charBySeat[i] == 0xFF ? -1 : (charBySeat[i] & 3);
-    if (pass != 0){
-      if (chr[1] < 0) chr[1] = (chr[0] == 1) ? 2 : 1;
-      for (int i=2;i<MAX_SEATS;i++) if (chr[i] < 0){
-        int c = 0;
-        auto used = [&](int v){ for (int j=0;j<MAX_SEATS;j++) if (j != i && chr[j] == v) return true;
-                                return false; };
-        while (used(c) && c < 3) c++;
-        chr[i] = c;
-      }
+    for (int i=0;i<MAX_SEATS;i++){
+      s.seats[i].reserved = reserved[i];       // seats[i] IS character i
+      s.seats[i].available = i < seatsN;
     }
     for (int i=0;i<seatsN;i++){
       int idx = seat[i];
@@ -1408,7 +1518,7 @@ struct Relay {
       q.taken = true; s.seated++;
       std::string nm((const char*)nameBySeat[i], NAME_LEN);
       while (!nm.empty() && nm.back() == ' ') nm.pop_back();
-      q.name = nm; q.chr = chr[i]; q.addr = c.addr; q.sinceMs = c.bornMs; q.ready = c.ready;
+      q.name = nm; q.addr = c.addr; q.sinceMs = c.bornMs; q.ready = c.ready;
       if (c.rttN){
         int v[8]; const int n = c.rttN;
         for (int k=0;k<n;k++) v[k] = c.rtt[k];
@@ -1432,11 +1542,13 @@ struct Relay {
   }
   void run(){
     startMs = rateAtMs = now();
+    syncReserved();
     { uint32_t gw = natGateway(); if (gw) lanIp = natLocalIpToward(gw); }
     logf("RELAY LISTENING %u seats=%d proto=%u",
          (unsigned)port, seatsN, (unsigned)PROTO_VERSION);
     publish();
     while (!stopFlag){
+      syncReserved();
       drainKicks();
       fd_set rf, wf; FD_ZERO(&rf); FD_ZERO(&wf);
       FD_SET(lis, &rf);
@@ -1542,6 +1654,8 @@ struct Relay {
 int main(int argc, char** argv){
   Relay R;
   bool doForward = false, doUnforward = false;
+  std::string wlFile;                            // --whitelist PATH, or "none"
+  std::vector<std::string> reserveArgs;          // --reserve ELF=ANTHONY
   int mode = 0;                        // 0 by the arguments, 1 the window, 2 the console
   for (int i=1;i<argc;i++){
     if (!strcmp(argv[i], "--port") && i+1 < argc) R.port = (uint16_t)atoi(argv[++i]);
@@ -1555,6 +1669,8 @@ int main(int argc, char** argv){
     else if (!strcmp(argv[i], "--unforward")) doUnforward = true;
     else if (!strcmp(argv[i], "--gui")) mode = 1;
     else if (!strcmp(argv[i], "--console")) mode = 2;
+    else if (!strcmp(argv[i], "--whitelist") && i+1 < argc) wlFile = argv[++i];
+    else if (!strcmp(argv[i], "--reserve") && i+1 < argc) reserveArgs.push_back(argv[++i]);
   }
   /* THE WINDOW IS THE SERVER (Anthony, 2026-09-05: "make that the main
      server for this repo, maybe keep the old one for reference"): every
@@ -1583,6 +1699,33 @@ int main(int argc, char** argv){
       FILE* f = fopen(p.c_str(), "rb");
       if (f){ fclose(f); R.htmlPath = p; break; }
     }
+  }
+  /* THE WHITELIST: the file lives beside the exe so a host keeps his
+     table between runs.  --reserve on the command line is the whole
+     policy for that run instead -- the file is neither read nor
+     written, which is also what makes the tests hermetic. */
+  if (reserveArgs.empty() && wlFile != "none"){
+    if (!wlFile.empty()) wlPath = wlFile;
+    else {
+      char exe[MAX_PATH];
+      if (GetModuleFileNameA(nullptr, exe, MAX_PATH)){
+        std::string d(exe);
+        size_t cut = d.find_last_of('\\');
+        if (cut != std::string::npos) wlPath = d.substr(0, cut) + "\\whitelist.txt";
+      }
+    }
+    wlLoad();
+  }
+  for (const std::string& a : reserveArgs){
+    size_t eq = a.find('=');
+    std::string key = sanitizeName(eq == std::string::npos ? a : a.substr(0, eq));
+    std::string val = eq == std::string::npos ? "" : sanitizeName(a.substr(eq + 1));
+    int chr = -1;
+    for (int i=0;i<MAX_SEATS;i++) if (key == sanitizeName(RELAY_CHAR_NAMES[i])) chr = i;
+    if (chr < 0 && key.size() == 1 && key[0] >= '1' && key[0] <= '4') chr = key[0] - '1';
+    if (chr < 0){ logf("--reserve %s: no such character (warrior, valkyrie, wizard, elf)", a.c_str()); continue; }
+    { std::lock_guard<std::mutex> g(wlMx); wlName[chr] = val; }
+    logf("the %s is reserved for %s", RELAY_CHAR_NAMES[chr], val.c_str());
   }
   WSADATA wsa;
   if (WSAStartup(MAKEWORD(2,2), &wsa) != 0){

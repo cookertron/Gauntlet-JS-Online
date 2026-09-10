@@ -36,12 +36,18 @@ and players — and each one is published as a GitHub release.
 ## Play online
 
 The relay serves the game itself: run it, share the address, done.
-`gauntlet-relay.exe` opens a window: the addresses, the seats (name,
-character, address, time connected, the ping the server measures to
-each player, and how long their moves wait for the rest — the seat that
-never waits is the one holding everyone up), a button that opens the
-router port, a Kick, and the stamped log behind View > Log.  The old
-console relay is kept behind `--console`:
+`gauntlet-relay.exe` opens a window: the addresses, the four characters
+(who is playing each, from where, time connected, the ping the server
+measures to them, and how long their moves wait for the rest — the one
+that never waits is the player holding everyone up), a button that
+opens the router port, a Kick, and the stamped log behind View > Log.
+Each character can be RESERVED for a player's options NAME: click its
+"Reserved for" cell and type one, and that player is given that
+character whenever they join, whatever they picked — while nobody else
+can be given it, even when the rest of the table is full (they are
+told SERVER FULL and it keeps waiting).  Reservations live in
+`whitelist.txt` beside the exe.  The old console relay is kept behind
+`--console`:
 
 ```
 server\build\gauntlet-relay.exe             # the window; --port/--seats/--html (four seats by default)

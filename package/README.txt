@@ -11,6 +11,7 @@ What is in this folder
 ----------------------
   gauntlet-relay.exe            the server (Windows, no installer);
                                 double-click it for the server window
+  whitelist.txt                 appears when you reserve a character
   client\gauntlet.html          the game page the server hands out
   client\gauntlet.html.gz       the same page compressed, for joiners
   relay-port-forwarding.bat     the server window, port opened at once
@@ -40,15 +41,38 @@ Hosting a game
    first line of the window).  "Play in browser" opens the game on
    this PC.
 
-The window shows every seat: the player's name and character, their
-address, how long they have been connected, the ping the server
-measures to them (the median of the last eight seconds and the worst),
-how long their moves wait for the rest of the party -- the seat that
-never waits is the one holding everyone up -- and their state.  Select
-a seat and press Kick to drop that player; the seat frees and they can
-join again.  View > Log opens the console: every event with a
-timestamp, chat lines included; "Copy all" puts it on the clipboard
-for a bug report.
+The window lists THE FOUR CHARACTERS -- Warrior, Valkyrie, Wizard, Elf
+-- because each one is a seat: four characters, four players.  Against
+each you see who is playing it, from what address, how long they have
+been connected, the ping the server measures to them (the median of
+the last eight seconds and the worst), how long their moves wait for
+the rest of the party -- the one that never waits is the player holding
+everyone up -- and their state.  Select a row and press Kick to drop
+that player; the character frees and they can join again.  View > Log
+opens the console: every event with a timestamp, chat lines included;
+"Copy all" puts it on the clipboard for a bug report.
+
+Reserving a character for a player
+----------------------------------
+Click a character's "Reserved for" cell and type a player's NAME --
+the one they type on the game's own options screen -- then press
+Enter.  From then on that character is theirs:
+
+  * whenever they join they are given it, whatever they picked in the
+    options;
+  * nobody else is ever given it, even when the rest of the table is
+    full: an unreserved player who finds only reserved characters free
+    is told SERVER FULL, and the character keeps waiting;
+  * a player with no reservation gets the character they picked if it
+    is free and unreserved, otherwise the lowest one that is.
+
+So with nothing reserved the server behaves as it always has, and you
+only need to fill in the players you want to pin down.  Clear a cell to
+free the character again.  The list is kept in whitelist.txt beside the
+exe, so it survives a restart; it is a plain text file you can also
+edit by hand (one line per character).  --reserve ELF=ANTHONY on the
+command line does the same for one run, and --whitelist none ignores
+the file altogether.
 
 The batch files open the same window: relay-port-forwarding.bat with
 the router port opened at once, relay-lan-only.bat for your own network
@@ -64,6 +88,8 @@ Server options (add them after the exe name in a .bat)
    --forward      open the port on the router at once
    --unforward    remove the router mapping and exit
    --console      the console server instead of the window
+   --reserve C=N  reserve character C for player N, this run only
+   --whitelist P  keep the reservations in file P ("none" for no file)
 
 Playing
 -------

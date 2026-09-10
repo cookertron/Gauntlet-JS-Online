@@ -15,12 +15,15 @@
 
    The main window: four status lines (the local-network address, the
    internet address or why there is none, the session, the page), the
-   SEAT TABLE (name, character, address, time connected, the relay's own
-   ping -- median and worst -- and how long each seat's byte waits for
-   the rest: the seat that never waits is the one holding everyone up),
-   the buttons, and the newest log line.  View > Log opens the console:
-   every line stamped HH:MM:SS.mmm.  Per-monitor DPI aware, so the 4x5
-   micro font's cousin here -- Segoe UI -- stays sharp on the laptop.  */
+   CHARACTER TABLE -- one row per character, since 2026-09-10 the
+   character IS the seat: who has it, from where, for how long, the
+   relay's own ping (median and worst), how long his byte waits for the
+   rest (the seat that never waits is the one holding everyone up), and
+   the WHITELIST cell, an edit box over the list where the host reserves
+   that character for one player's options NAME -- the buttons, and the
+   newest log line.  View > Log opens the console: every line stamped
+   HH:MM:SS.mmm.  Per-monitor DPI aware, so the 4x5 micro font's cousin
+   here -- Segoe UI -- stays sharp on the laptop.  */
 #define UNICODE
 #define _UNICODE
 #define WIN32_LEAN_AND_MEAN
@@ -53,26 +56,33 @@ namespace {
 enum : int {
   IDM_FORWARD = 101, IDM_COPY, IDM_PLAY, IDM_EXIT, IDM_LOG, IDM_ABOUT,
   IDC_LIST = 201, IDC_FORWARD, IDC_COPY, IDC_PLAY, IDC_KICK, IDC_LAST,
+  IDC_RESERVE,                            // the edit box that floats over a cell
   IDC_LINE0 = 300,                        // + i
   IDC_LOGEDIT = 401, IDC_LOGCOPY, IDC_LOGCLEAR,
 };
 constexpr int  LINES = 4;
 constexpr int  LINE_ROWS[LINES] = { 1, 2, 1, 1 };   // the internet line may warn at length
-constexpr int  COLS = 9;
+/* the row is the CHARACTER; "Reserved for" is the whitelist, and the
+   only cell the host can type in */
+enum : int { COL_CHAR = 0, COL_RESERVED, COL_PLAYER, COL_ADDR, COL_CONN,
+             COL_PING, COL_WORST, COL_WAIT, COL_STATE, COLS };
 constexpr UINT TIMER_ID = 1, TIMER_MS = 250;
 constexpr int  LOG_MAX_LINES = 5000, LOG_TRIM_LINES = 1000;
 const wchar_t* MAIN_CLASS = L"GauntletRelayMain";
 const wchar_t* LOG_CLASS  = L"GauntletRelayLog";
 const wchar_t* TITLE      = L"Gauntlet Online Server";
 const char*    CHAR_NAMES[4] = { "WARRIOR", "VALKYRIE", "WIZARD", "ELF" };
-const char*    CHAR_WORDS[4] = { "Warrior", "Valkyrie", "Wizard", "Elf" };
-const wchar_t* COL_NAMES[COLS] = { L"Seat", L"Name", L"Character", L"Address",
+const wchar_t* COL_NAMES[COLS] = { L"Character", L"Reserved for", L"Player", L"Address",
                                    L"Connected", L"Ping", L"Worst", L"Wait", L"State" };
-const int      COL_DIPS[COLS]  = { 46, 96, 84, 150, 84, 66, 66, 66, 130 };
+const int      COL_DIPS[COLS]  = { 76, 96, 96, 146, 76, 60, 60, 60, 126 };
+const wchar_t* HINT =
+  L"Reserved for: click a cell and type a player's options NAME -- that character is then always theirs.";
 
 struct Ui {
   HINSTANCE inst = nullptr;
-  HWND main = nullptr, list = nullptr, last = nullptr;
+  HWND main = nullptr, list = nullptr, last = nullptr, hint = nullptr;
+  HWND reserve = nullptr;                 // the floating cell editor
+  int  reserveRow = -1;                   // which character it is editing; -1 = closed
   HWND line[LINES] = {};
   HWND btn[4] = {};                       // forward, copy, play, kick
   HWND log = nullptr, logEdit = nullptr, logBtn[2] = {};
@@ -97,6 +107,14 @@ std::wstring W(const std::string& s){
   return w;
 }
 
+std::string A(const std::wstring& w){
+  if (w.empty()) return "";
+  int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+  std::string s((size_t)n, '\0');
+  WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), &s[0], n, nullptr, nullptr);
+  return s;
+}
+
 HFONT makeFont(int pt, int weight, const wchar_t* face, int dpi){
   return CreateFontW(-MulDiv(pt, dpi, 72), 0, 0, 0, weight, FALSE, FALSE, FALSE,
                      DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
@@ -112,6 +130,8 @@ void makeFonts(){
   setFont(U.list, U.font);
   for (HWND b : U.btn) setFont(b, U.font);
   setFont(U.last, U.font);
+  setFont(U.hint, U.font);
+  setFont(U.reserve, U.font);
 }
 void makeLogFonts(){
   if (U.mono) DeleteObject(U.mono);
@@ -156,6 +176,54 @@ void setCell(int row, int col, const std::string& s){
   U.cell[row][col] = s;
   std::wstring w = W(s);
   ListView_SetItemText(U.list, row, col, (LPWSTR)w.c_str());
+}
+
+/* ---- THE WHITELIST CELL EDITOR ----------------------------------------
+   One EDIT control for the life of the window, moved over the clicked
+   "Reserved for" cell and hidden again -- never destroyed inside its own
+   kill-focus, which is the classic way to crash this.  Enter and losing
+   the focus commit, Escape abandons; the relay sanitizes what it stores,
+   so the cell shows back what the server actually kept. ---------------- */
+void endEdit(bool commit){
+  if (U.reserveRow < 0) return;
+  const int row = U.reserveRow;
+  U.reserveRow = -1;                      // before the hide: its kill-focus must no-op
+  if (commit){
+    wchar_t buf[64] = {};
+    GetWindowTextW(U.reserve, buf, 63);
+    relaySetReserved(row, A(buf));
+  }
+  ShowWindow(U.reserve, SW_HIDE);
+  if (GetFocus() == U.reserve) SetFocus(U.list);
+}
+void beginEdit(int row){
+  RelayStatus s = relayStatus();
+  if (row < 0 || row >= RELAY_MAX_SEATS || !s.seats[row].available) return;
+  if (U.reserveRow == row) return;
+  endEdit(true);
+  RECT rc{};
+  if (!ListView_GetSubItemRect(U.list, row, COL_RESERVED, LVIR_BOUNDS, &rc)) return;
+  MapWindowPoints(U.list, U.main, (POINT*)&rc, 2);
+  U.reserveRow = row;
+  SetWindowTextW(U.reserve, W(s.seats[row].reserved).c_str());
+  MoveWindow(U.reserve, rc.left, rc.top - px(2), rc.right - rc.left, rc.bottom - rc.top + px(4), TRUE);
+  ShowWindow(U.reserve, SW_SHOW);
+  SetFocus(U.reserve);
+  SendMessageW(U.reserve, EM_SETSEL, 0, -1);
+}
+LRESULT CALLBACK editProc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR){
+  switch (m){
+    case WM_GETDLGCODE: return DLGC_WANTALLKEYS;      // Enter and Escape are ours
+    case WM_KEYDOWN:
+      if (w == VK_RETURN){ endEdit(true); return 0; }
+      if (w == VK_ESCAPE){ endEdit(false); return 0; }
+      break;
+    case WM_CHAR:
+      if (w == VK_RETURN || w == VK_ESCAPE) return 0;  // no MessageBeep
+      break;
+    case WM_KILLFOCUS: endEdit(true); break;
+  }
+  return DefSubclassProc(h, m, w, l);
 }
 
 /* ---- the log window -------------------------------------------------- */
@@ -254,10 +322,12 @@ void layout(){
     y += lh * LINE_ROWS[i] + px(2);
   }
   y += px(6);
-  int listH = ch - y - gap - bh - gap - lh - m;
+  int listH = ch - y - px(4) - lh - gap - bh - gap - lh - m;
   if (listH < px(80)) listH = px(80);
   MoveWindow(U.list, m, y, cw - 2 * m, listH, TRUE);
-  y += listH + gap;
+  y += listH + px(4);
+  MoveWindow(U.hint, m, y, cw - 2 * m, lh, TRUE);
+  y += lh + gap;
   int x = m;
   for (int i = 0; i < 3; i++){ MoveWindow(U.btn[i], x, y, bw, bh, TRUE); x += bw + gap; }
   MoveWindow(U.btn[3], cw - m - px(110), y, px(110), bh, TRUE);     // Kick, at the right
@@ -269,17 +339,19 @@ void layout(){
   int rest = (cw - 2 * m) - used - GetSystemMetricsForDpi(SM_CXVSCROLL, U.dpi) - px(4);
   ListView_SetColumnWidth(U.list, COLS - 1, rest < px(COL_DIPS[COLS - 1]) ? px(COL_DIPS[COLS - 1]) : rest);
 }
-void ensureRows(int n){
-  if (n == U.rows) return;
+/* the four characters are the four rows, always -- a --seats 2 table
+   still SHOWS the Wizard and the Elf, saying they are out of play */
+void ensureRows(){
+  if (U.rows == RELAY_MAX_SEATS) return;
   ListView_DeleteAllItems(U.list);
-  for (int i = 0; i < n; i++){
-    wchar_t t[8]; swprintf(t, 8, L"%d", i + 1);
-    LVITEMW it{}; it.mask = LVIF_TEXT; it.iItem = i; it.pszText = t;
+  for (int i = 0; i < RELAY_MAX_SEATS; i++){
+    std::wstring nm = W(RELAY_CHAR_NAMES[i]);
+    LVITEMW it{}; it.mask = LVIF_TEXT; it.iItem = i; it.pszText = (LPWSTR)nm.c_str();
     ListView_InsertItem(U.list, &it);
     for (int c = 0; c < COLS; c++) U.cell[i][c].clear();
-    U.cell[i][0] = std::to_string(i + 1);
+    U.cell[i][COL_CHAR] = RELAY_CHAR_NAMES[i];
   }
-  U.rows = n;
+  U.rows = RELAY_MAX_SEATS;
 }
 int selectedSeat(){
   int sel = ListView_GetNextItem(U.list, -1, LVNI_SELECTED);
@@ -333,7 +405,7 @@ void refresh(){
     if (s.seated == 0 && s.pass == 0)
       snprintf(b, sizeof b, "Session:   no players yet   |   up %s", fmtDur(tNow - s.startMs).c_str());
     else
-      snprintf(b, sizeof b, "Session:   %d of %d seats taken   |   pass %u at %.1f a second%s   |   %s, %s   |   up %s",
+      snprintf(b, sizeof b, "Session:   %d of %d characters in play   |   pass %u at %.1f a second%s   |   %s, %s   |   up %s",
                s.seated, s.seatsN, s.pass, s.passRate,
                s.syncing ? " (snapshot in flight)" : "",
                plural(s.desyncs, "desync").c_str(), plural(s.snapshots, "snapshot").c_str(),
@@ -345,25 +417,25 @@ void refresh(){
     ? "Page:        NO CLIENT PAGE FOUND -- put client\\gauntlet.html beside the exe (or --html); GET / answers 404"
     : "Page:        " + s.htmlPath + "   |   served " + plural(s.pages, "time") + "   |   " + plural((unsigned)s.conns, "connection") + " open");
 
-  /* the seat table */
-  ensureRows(s.seatsN);
-  for (int i = 0; i < s.seatsN && i < RELAY_MAX_SEATS; i++){
+  /* THE CHARACTER TABLE: one row per character, its reservation, and
+     whoever is playing it */
+  ensureRows();
+  for (int i = 0; i < RELAY_MAX_SEATS; i++){
     const SeatStatus& q = s.seats[i];
+    setCell(i, COL_RESERVED, q.reserved);
     if (!q.taken){
-      for (int c = 1; c < COLS - 1; c++) setCell(i, c, "");
-      setCell(i, COLS - 1, "empty");
+      for (int c = COL_PLAYER; c < COL_STATE; c++) setCell(i, c, "");
+      setCell(i, COL_STATE, !q.available ? "off (--seats " + std::to_string(s.seatsN) + ")"
+                          : q.reserved.empty() ? "free" : "waiting for " + q.reserved);
       continue;
     }
-    std::string chr = q.chr >= 0 && q.chr < 4 ? CHAR_WORDS[q.chr] : "?";
-    std::string name = !q.name.empty() ? q.name : (q.chr >= 0 && q.chr < 4 ? CHAR_NAMES[q.chr] : "");
-    setCell(i, 1, name);
-    setCell(i, 2, chr);
-    setCell(i, 3, q.addr);
-    setCell(i, 4, fmtDur(tNow - q.sinceMs));
-    setCell(i, 5, fmtMs(q.rttMs));
-    setCell(i, 6, fmtMs(q.rttWorstMs));
-    setCell(i, 7, fmtMs(q.waitMs));
-    setCell(i, 8, q.state);
+    setCell(i, COL_PLAYER, !q.name.empty() ? q.name : std::string("(no name)"));
+    setCell(i, COL_ADDR, q.addr);
+    setCell(i, COL_CONN, fmtDur(tNow - q.sinceMs));
+    setCell(i, COL_PING, fmtMs(q.rttMs));
+    setCell(i, COL_WORST, fmtMs(q.rttWorstMs));
+    setCell(i, COL_WAIT, fmtMs(q.waitMs));
+    setCell(i, COL_STATE, q.state);
   }
 
   /* the buttons and the Server menu */
@@ -388,11 +460,13 @@ void refresh(){
 void kickSelected(){
   RelayStatus s = relayStatus();
   int sel = selectedSeat();
-  if (sel < 0 || sel >= s.seatsN || !s.seats[sel].taken) return;
+  if (sel < 0 || sel >= RELAY_MAX_SEATS || !s.seats[sel].taken) return;
   const SeatStatus& q = s.seats[sel];
-  std::string who = !q.name.empty() ? q.name : (q.chr >= 0 && q.chr < 4 ? CHAR_NAMES[q.chr] : "the player");
-  std::wstring msg = W("Kick " + who + " (" + q.addr + ") from seat " + std::to_string(sel + 1) +
-                       "?\n\nThe connection is closed; the seat frees for the next joiner.");
+  std::string who = !q.name.empty() ? q.name : std::string("the unnamed player");
+  std::wstring msg = W("Kick " + who + " (" + q.addr + "), playing the " +
+                       RELAY_CHAR_NAMES[sel] + "?\n\nThe connection is closed and the "
+                       "character frees for the next joiner" +
+                       (q.reserved.empty() ? "." : " -- it is reserved for " + q.reserved + "."));
   if (MessageBoxW(U.main, msg.c_str(), TITLE, MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) == IDYES)
     relayKick(sel);
 }
@@ -405,6 +479,8 @@ void about(){
     "snapshot to every joiner.  It never runs the game.\n\n"
     "Every launch opens this window; --console runs the terminal relay instead, "
     "the same server without it.\n\n"
+    "The four characters are the four seats: reserve one for a player's options "
+    "NAME and it is theirs whenever they join, overriding their own pick.\n\n"
     "Protocol v" + std::to_string(s.proto) + "   |   built " __DATE__ "\n"
     "https://github.com/cookertron/Gauntlet-JS-Online");
   MessageBoxW(U.main, msg.c_str(), L"About", MB_OK | MB_ICONINFORMATION);
@@ -448,6 +524,13 @@ LRESULT CALLBACK mainProc(HWND h, UINT m, WPARAM w, LPARAM l){
         col.cx = px(COL_DIPS[c]); col.pszText = (LPWSTR)COL_NAMES[c];
         ListView_InsertColumn(U.list, c, &col);
       }
+      U.hint = CreateWindowExW(0, L"STATIC", HINT, WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS,
+                               0, 0, 0, 0, h, (HMENU)(INT_PTR)(IDC_LINE0 + LINES), U.inst, nullptr);
+      U.reserve = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+        WS_CHILD | ES_LEFT | ES_AUTOHSCROLL, 0, 0, 0, 0, h,
+        (HMENU)(INT_PTR)IDC_RESERVE, U.inst, nullptr);
+      SendMessageW(U.reserve, EM_SETLIMITTEXT, 8, 0);        // the options NAME row's own cap
+      SetWindowSubclass(U.reserve, editProc, 1, 0);
       const wchar_t* labels[4] = { L"Open port on router", L"Copy address", L"Play in browser", L"Kick" };
       const int ids[4] = { IDC_FORWARD, IDC_COPY, IDC_PLAY, IDC_KICK };
       for (int i = 0; i < 4; i++)
@@ -457,21 +540,22 @@ LRESULT CALLBACK mainProc(HWND h, UINT m, WPARAM w, LPARAM l){
       U.last = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS,
                                0, 0, 0, 0, h, (HMENU)(INT_PTR)IDC_LAST, U.inst, nullptr);
       makeFonts();
-      ensureRows(relayStatus().seatsN);
+      ensureRows();
       layout();
       refresh();
       SetTimer(h, TIMER_ID, TIMER_MS, nullptr);
       return 0;
     }
-    case WM_SIZE: layout(); return 0;
+    case WM_SIZE: endEdit(true); layout(); return 0;
     case WM_GETMINMAXINFO: {
       MINMAXINFO* mm = (MINMAXINFO*)l;
-      mm->ptMinTrackSize.x = px(640);
-      mm->ptMinTrackSize.y = px(400);
+      mm->ptMinTrackSize.x = px(700);
+      mm->ptMinTrackSize.y = px(420);
       return 0;
     }
     case WM_DPICHANGED: {
       U.dpi = HIWORD(w);
+      endEdit(true);
       makeFonts();
       const RECT* rc = (const RECT*)l;
       SetWindowPos(h, nullptr, rc->left, rc->top, rc->right - rc->left, rc->bottom - rc->top,
@@ -482,10 +566,26 @@ LRESULT CALLBACK mainProc(HWND h, UINT m, WPARAM w, LPARAM l){
     case WM_TIMER: if (w == TIMER_ID) refresh(); return 0;
     case WM_NOTIFY: {
       const NMHDR* nm = (const NMHDR*)l;
-      if (nm->idFrom == IDC_LIST && nm->code == LVN_ITEMCHANGED){
-        RelayStatus s = relayStatus();
-        int sel = selectedSeat();
-        EnableWindow(U.btn[3], sel >= 0 && sel < s.seatsN && s.seats[sel].taken);
+      if (nm->idFrom != IDC_LIST) return 0;
+      switch (nm->code){
+        case LVN_ITEMCHANGED: {
+          RelayStatus s = relayStatus();
+          int sel = selectedSeat();
+          EnableWindow(U.btn[3], sel >= 0 && sel < RELAY_MAX_SEATS && s.seats[sel].taken);
+          break;
+        }
+        case NM_CLICK: case NM_DBLCLK: {
+          const NMITEMACTIVATE* ia = (const NMITEMACTIVATE*)l;
+          if (ia->iItem >= 0 && ia->iSubItem == COL_RESERVED) beginEdit(ia->iItem);
+          else endEdit(true);
+          break;
+        }
+        case LVN_KEYDOWN: {                     // F2 edits, as a grid should
+          const NMLVKEYDOWN* kd = (const NMLVKEYDOWN*)l;
+          if (kd->wVKey == VK_F2) beginEdit(selectedSeat());
+          break;
+        }
+        case LVN_BEGINSCROLL: endEdit(true); break;   // the box does not follow the cell
       }
       return 0;
     }

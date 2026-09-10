@@ -124,7 +124,7 @@ async function barrier(a, b, label){ return barrierN([a, b], label); }
 
 async function main(){
   console.log('e2etest: ' + EXE);
-  const proc = spawn(EXE, ['--console', '--port', String(PORT)],
+  const proc = spawn(EXE, ['--console', '--whitelist', 'none', '--port', String(PORT)],
                      { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   proc.stdout.on('data', d => { out += d.toString(); });
@@ -138,13 +138,13 @@ async function main(){
   try {
     /* ---- A boots the session; B joins the LIVE lobby ------------------
        A's solo lobby is already stepping by the time B arrives, so B is
-       a SNAPSHOT joiner even at the attract screen -- the design's own
-       consequence: the character table froze with A's boot (his pick,
-       plus the derived default for the empty seat), and B inherits the
-       blocks as they stand.  The CHARS bump path is relaytest's to
-       check; what matters here is that a mid-LOBBY join restores clean. */
+       a SNAPSHOT joiner even at the attract screen; what matters here is
+       that a mid-LOBBY join restores clean.  Since 2026-09-10 the
+       character IS the seat -- each client asks for one and the relay
+       seats them in it if it is free (the whitelist, off here, would
+       override) -- so A asks for the warrior and B for the valkyrie. */
     const A = loadClient('A'), B = loadClient('B');
-    A.G.net.start('e2e', { char: 3, method1: 3, zonePotion: false,
+    A.G.net.start('e2e', { char: 0, method1: 3, zonePotion: false,
                            name: 'anthony' }, vmTransport());
     await until([A], () => A.net.phase === 'live', 'client A goes live');
     /* let A's lobby EXCHANGE before B arrives: a lobby tick is 80 ms now
@@ -152,7 +152,7 @@ async function main(){
        FRESH joiner whose pick applies -- legitimate, but not the mid-lobby
        snapshot join this scenario is about */
     await pump([A], 12);
-    B.G.net.start('e2e', { char: 3, method1: 3, zonePotion: false,
+    B.G.net.start('e2e', { char: 1, method1: 3, zonePotion: false,
                            name: 'NITRO 5' }, vmTransport());
     await until([A, B], () => B.net.phase === 'live',
                 'client B snapshot-joins the live lobby');
@@ -161,9 +161,9 @@ async function main(){
     check('NAMES crossed the relay: each sim tags BOTH players, sanitized',
           [A.G.game.names.slice(0, 2), B.G.game.names.slice(0, 2)],
           [['ANTHONY', 'NITRO 5'], ['ANTHONY', 'NITRO 5']]);
-    check('both sims field the SAME four blocks: A\'s pick + the three derived',
+    check('both sims field the SAME four blocks: the character IS the seat, empty seats included',
           [A.G.game.players.map(q => q.charIndex), B.G.game.players.map(q => q.charIndex)],
-          [[3, 1, 0, 2], [3, 1, 0, 2]]);
+          [[0, 1, 2, 3], [0, 1, 2, 3]]);
     check('both sims sit in the attract LOBBY',
           [A.G.game.mode, B.G.game.mode], ['attract', 'attract']);
     check('each displays its OWN window', [A.G.game.localIdx, B.G.game.localIdx], [0, 1]);
@@ -256,6 +256,8 @@ async function main(){
     check('four characters, one of each, on every sim',
           four.map(c => c.G.game.players.map(q => q.charIndex).slice().sort().join('')),
           four.map(() => '0123'));
+    check('...and each client plays the character its own seat names',
+          four.map(c => c.G.game.players[c.net.seat].charIndex), four.map(c => c.net.seat));
     const at = c => c.G.game.players.map(q => [q.x, q.y]);
     A.kb.press('D'); C.kb.press('S'); D.kb.press('1'); E5.kb.press('Q');   // right, left, up, down
     /* the BYTES, not the walk: the join ring can leave every player boxed
@@ -291,6 +293,54 @@ async function main(){
     checkTrue('...and the four play on, still in step', four.every(c => c.G.game.fingerprint() === A.G.game.fingerprint()));
 
     check('no desyncs anywhere', four.map(c => c.net.desyncs), [0, 0, 0, 0]);
+
+    /* ---- A SESSION WITH SEAT 0 EMPTY AT THE BOOT -----------------------
+       The whitelist (2026-09-10) makes this ordinary: reserve the elf and
+       its owner may be the only one who ever starts a session.  Two
+       clients boot FRESH here -- neither in seat 0 -- which is the case
+       that retired the old 0xFF character table: an unclaimed block fell
+       back to each client's OWN options pick (netBoot's `pick(0,
+       net.cfgLocal.char)`), so two fresh clients who picked differently
+       fielded different block 1s and diverged.  A snapshot joiner never
+       could: the table arrives inside the snapshot.  Mutation-verified
+       against the old table -- it desyncs at the first fingerprint. */
+    for (const c of four) c.net.tp.close();
+    await sleep(500);                  // every seat empty: the relay resets the session
+    const EL = loadClient('ELF'), WZ = loadClient('WIZ'), WA = loadClient('WAR');
+    /* no pumping in between: both HELLOs land before either can boot and
+       step the session's first pass, so BOTH are fresh joiners */
+    EL.G.net.start('e2e', { char: 3, method1: 3, zonePotion: false,
+                            name: 'ELFLORD' }, vmTransport());
+    WZ.G.net.start('e2e', { char: 2, method1: 3, zonePotion: false,
+                            name: 'WIZLORD' }, vmTransport());
+    await until([EL, WZ], () => EL.net.phase === 'live' && WZ.net.phase === 'live',
+                'an elf and a wizard boot a fresh session between them', 3000);
+    check('neither is seat 0: the elf is block 4, the wizard block 3, and both were FRESH',
+          [EL.net.seat, EL.G.game.localIdx, WZ.net.seat, WZ.G.game.localIdx], [3, 3, 2, 2]);
+    check('...and they DERIVE THE SAME FOUR BLOCKS, the two empty ones included',
+          [EL.G.game.players.map(q => q.charIndex), WZ.G.game.players.map(q => q.charIndex)],
+          [[0, 1, 2, 3], [0, 1, 2, 3]]);
+    await barrier(EL, WZ, 'the empty first seat');
+    checkTrue('SEAT 0 EMPTY AT THE BOOT LOCKSTEPS: fingerprints equal at step ' + EL.net.step,
+              EL.G.game.fingerprint() === WZ.G.game.fingerprint());
+    EL.kb.press('Z'); WZ.kb.press('Z');
+    await until([EL, WZ], () => EL.G.game.players[3].inGame && WZ.G.game.players[2].inGame,
+                'FIRE joins them as players 4 and 3');
+    EL.kb.releaseAll(); WZ.kb.releaseAll();
+    await pump([EL, WZ], 30);
+    await barrier(EL, WZ, 'both high blocks in play');
+    checkTrue('...and they PLAY in step, two high blocks and nobody in block 1',
+              EL.G.game.fingerprint() === WZ.G.game.fingerprint());
+    WA.G.net.start('e2e', { char: 0, method1: 3, zonePotion: false,
+                            name: 'WARLORD' }, vmTransport());
+    await until([EL, WZ, WA], () => WA.net.phase === 'live', 'the warrior joins off their snapshot', 3000);
+    check('...and the warrior takes the character he asked for, in block 1',
+          [WA.net.seat, WA.G.game.players.map(q => q.charIndex)], [0, [0, 1, 2, 3]]);
+    await pump([EL, WZ, WA], 30);
+    await barrierN([EL, WZ, WA], 'all three');
+    checkTrue('...all three in step', [WZ, WA].every(c => c.G.game.fingerprint() === EL.G.game.fingerprint()));
+    check('...with nobody desynced', [EL.net.desyncs, WZ.net.desyncs, WA.net.desyncs], [0, 0, 0]);
+
     checkTrue('the relay never arbitrated a desync', out.indexOf('DESYNC') < 0);
   } finally {
     proc.kill();

@@ -692,6 +692,69 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      fresh exe PATH triggers the Windows Firewall prompt (README says
      so).  `build/ui/server.png` is the window (README.md shows it).
 
+9. **THE WHITELIST — BUILT 2026-09-10** (Anthony: "a player name white
+   list with the ability to assign character which basically overrides
+   the player choice in the options... If no player name is in a
+   character slot whitelist then they're assigned a character that's
+   not got a whitelist name attached.  If all character slots contain a
+   name in the whitelist or it's full then the player trying to join
+   the server should receive a server full message.").
+   - **THE CHARACTER IS THE SEAT** (`RELAY_CHAR_NAMES`, relay.h): seat
+     *i* fields character *i*, always.  Forced by the requirement, not
+     chosen: reserving the elf only means anything if its owner lands
+     in the elf's BLOCK, mid-game joins included, and a snapshot joiner
+     inherits the block's character — so the block must already be theirs.
+     `--seats N` therefore ends the character list early (a two-seat
+     table is the Warrior and the Valkyrie; the window says so).
+   - **CHARS is now the IDENTITY table** and complete at every moment,
+     empty seats included — the clash-bump is gone (nothing to clash),
+     and so is the pre-start clear on a leaver and the orphan reset's.
+     THE BUG THIS KILLED: `0xFF` meant "unclaimed", and netBoot's
+     `pick(0, net.cfgLocal.char)` fell back to each client's OWN
+     options pick for block 1 — harmless while the first joiner was
+     always seat 0, a desync the moment they are not, which a reservation
+     makes ordinary.  MUTATION-VERIFIED end to end (e2etest's last
+     section): with the old table two clients booting FRESH into seats
+     3 and 2 field `[3,1,2,3]` and `[2,1,2,3]` — the elf twice in one
+     of them — and diverge on the first fingerprint; five checks fail.
+     The first cut of that mutation restored only the constructor's
+     0xFF and passed, because a stale `charBySeat[0]` from the previous
+     session survived the orphan reset: an incomplete mutation is a
+     green test that proves nothing, so the reset's clear had to go
+     back too before the claim held.  (A SNAPSHOT joiner never showed
+     it either — the table rides inside the snapshot.)
+   - **The rule** (`Relay::pickSlot`): a reservation for the HELLO's
+     name wins outright; else a free UNRESERVED character, the one
+     picked if free, else the lowest; else `ERR_FULL` — a
+     reserved-but-empty character counting as nothing left, which is
+     the heart of Anthony's spec and its own mutation test (let
+     strangers take reserved slots and the "with both free characters
+     RESERVED" check fails).  With nothing reserved the behaviour is
+     exactly what it was: pick honoured, clashes moved along.
+   - **Where it lives**: `wlName[4]` behind `wlMx` in relay.cpp, copied
+     into `Relay::reserved` once a turn (`syncReserved`) so a join
+     never waits on the window's lock; `whitelist.txt` beside the exe
+     (`--whitelist PATH|none`, `--reserve ELF=ANTHONY` — which replaces
+     the file for that run and is what keeps relaytest hermetic);
+     sanitized by `sanitizeName` to the options NAME row's own charset,
+     so the cell shows back what the server stored.
+   - **The window**: the seat table became the CHARACTER table (one row
+     per character, `Reserved for` the only editable cell — one EDIT
+     control for the life of the window, moved over the clicked
+     subitem, F2 too, committed on Enter or focus loss, never destroyed
+     inside its own kill-focus).  An empty reserved row reads "waiting
+     for ANTHONY".  `build/ui/server.png` is the window with three
+     reserved and one held open.
+   - **Verified by driving the window**: reservations typed into three
+     cells reached the file and the log, then four clients proved every
+     branch — ANTHONY asked for the warrior and got the reserved elf,
+     EVE asked for the wizard and got the reserved valkyrie, an
+     unlisted player asked for
+     the elf and got the warrior, and a stranger was refused while the
+     wizard sat waiting for NITRO 5.  relaytest 54 → 63, e2e 32 → 40,
+     protocheck 36, headless 1538 (the client is UNTOUCHED — the whole
+     feature is server-side).
+
 ## Engine facts that cost real effort to learn — don't rediscover them
 
 - A player's input is one clean per-pass direction byte (bits: up/down/

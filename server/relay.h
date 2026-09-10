@@ -11,13 +11,20 @@
 #include <vector>
 
 constexpr int RELAY_MAX_SEATS = 4;
+/* THE FOUR CHARACTERS ARE THE FOUR SEATS (Anthony's whitelist,
+   2026-09-10): seat i always fields character i, so one slot is one
+   character, a reservation names a character, and the window lists
+   characters rather than seat numbers. */
+inline const char* const RELAY_CHAR_NAMES[RELAY_MAX_SEATS] =
+  { "Warrior", "Valkyrie", "Wizard", "Elf" };
 
-struct SeatStatus {
+struct SeatStatus {                        // seats[i] IS character i
   bool taken = false, ready = false;
+  bool available = false;      // within --seats: a smaller table ends at the Valkyrie
+  std::string reserved;        // the whitelist: whose character this is; empty = anyone's
   std::string name;            // the wire's, trailing spaces trimmed; empty = unset
   std::string addr;            // ip:port of the connection
   std::string state;           // a few words: booting / connected / late 1.2 s / ...
-  int chr = -1;                // 0 warrior, 1 valkyrie, 2 wizard, 3 elf; -1 unknown
   uint64_t sinceMs = 0;        // GetTickCount64 when the connection was accepted
   int rttMs = -1;              // the relay's own WebSocket ping: median of the last 8
   int rttWorstMs = -1;         // ... and the worst of them
@@ -50,7 +57,11 @@ struct NatStatus {
 RelayStatus relayStatus();
 NatStatus   natStatus();
 std::vector<std::string> logTake();          // the stamped lines since the last take
-void relayKick(int seat);                     // the loop closes that seat on its next turn
+void relayKick(int seat);                      // the loop closes that seat on its next turn
+/* the whitelist: reserve character `chr` for the player who types that
+   NAME on the options screen ("" frees it).  Sanitized and persisted by
+   the relay, so the window shows back exactly what was stored. */
+void relaySetReserved(int chr, const std::string& name);
 void relayForward(bool on, uint16_t port);    // open/close the router port, on its own thread
 void relayStop();                             // the loop returns; the thread removes the mapping
 bool relayDone();                             // ... and this goes true when it has
