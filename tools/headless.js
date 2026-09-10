@@ -2890,6 +2890,52 @@ if (A.player_frames) {
     gR.players[1].died = false;
   }
 
+  /* --- A BLOCK NOBODY JOINED IS NOT ON SCREEN -------------------------
+     Anthony, 2026-09-10, playing ALONE as the wizard: "I joined the game
+     by myself and warrior is there for some reason" -- a warrior stood
+     in his window wearing a name tag, with no HUD quarter of its own.
+     reset() leaves BLOCK 1 alive, placed and healthy (the tape's own
+     capture was taken mid-game with player 1 playing) while blocks 2..4
+     start out AND dead, so $A446's dead bit -- the sprite loop's whole
+     gate -- drew block 1 whether or not anybody had joined it.  It never
+     showed while the first player was always block 1; the whitelist's
+     character-is-the-seat rule (the same day) ended that.  drawQuarter
+     has always used $B474's out bit as well, which is why the phantom
+     had a tag but no panel; playerOnScreen is now the one rule for the
+     sprite loop and the tags too. */
+  {
+    const paint = gg => { recording = true; drawCalls.length = 0;
+                          G.render(ctxStub, gg); recording = false;
+                          return drawCalls.slice(); };
+    const g = G.seed({});
+    g.enterAttract();                                   // $B474 puts everyone OUT
+    check('the attract screen puts every block out -- but block 1 stays ALIVE, the tape\'s own',
+          [g.players.map(q => !!q.inGame),
+           g.players.map(q => (q.f11 & 0x80) ? 'dead' : 'alive')],
+          [[false, false, false, false], ['alive', 'dead', 'dead', 'dead']]);
+    check('...and nobody is on screen',
+          g.players.map(q => G.playerOnScreen(q)), [false, false, false, false]);
+    g.stepTick({ p3: { fire: true } });                 // the THIRD seat, and only it
+    check('one FIRE from the third seat takes the sim into play with only him in',
+          [g.mode, g.players.map(q => !!q.inGame)], ['play', [false, false, true, false]]);
+    check('...so only he is on screen -- while block 1 is still ALIVE, which is the whole point',
+          [g.players.map(q => G.playerOnScreen(q)),
+           (g.players[0].f11 & 0x80) ? 'dead' : 'alive'],
+          [[false, false, true, false], 'alive']);
+    /* and the RENDERER really obeys it: move the unjoined block and not
+       one pixel of the frame may change (the camera is sim state, so a
+       render between passes cannot follow it either way) */
+    const before = JSON.stringify(paint(g));
+    g.players[0].x = (g.players[0].x + 16) & 0xFF;
+    checkTrue('MOVING the unjoined block changes nothing on screen',
+              JSON.stringify(paint(g)) === before);
+    /* NON-VACUITY: the same move of the JOINED block must change it */
+    const joined = JSON.stringify(paint(g));
+    g.players[2].x = (g.players[2].x + 16) & 0xFF;
+    checkTrue('...while the same move of the joined one does',
+              JSON.stringify(paint(g)) !== joined);
+  }
+
   /* --- both players drain, and the HUD round robin is FOUR passes long */
   {
     const g = G.seed({ char: 0x2A, char2: 0x2A });

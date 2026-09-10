@@ -745,6 +745,26 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      inside its own kill-focus).  An empty reserved row reads "waiting
      for ANTHONY".  `build/ui/server.png` is the window with three
      reserved and one held open.
+   - **FOUND ON THE WAY — THE PHANTOM WARRIOR** (Anthony, alone as the
+     wizard: "I joined the game by myself and warrior is there for some
+     reason").  `reset()` leaves BLOCK 1 alive, placed and healthy — the
+     tape's own capture was taken mid-game with player 1 playing, which
+     is why drawWait exists to repaint his HUD half — while blocks 2..4
+     start out AND dead; `enterAttract`'s $B474 then puts everyone OUT
+     without killing anyone, so block 1 sits out-but-ALIVE.  The sprite
+     loop's gate was $A446's DEAD bit alone, so it drew that block
+     whether or not anyone had joined it, and the tag pass (same gate)
+     labelled it with its character's name — a warrior with a name tag
+     and no HUD quarter, drawQuarter having always used the out bit.
+     Never seen before because the first player was always block 1;
+     character-is-the-seat ended that.  `playerOnScreen(q)` is now the
+     one rule for the sprite loop and the tags ($A446 dead + $B474 out +
+     $A491 teleport), exported for the suite.  DISPLAY ONLY — no sim
+     state, no fingerprint, no wire, and the offline single player is
+     block 1 and joins at once, so nothing there moves.  Pinned six
+     ways, including a RENDER-level one: moving the unjoined block must
+     not change one draw call, while the same move of the joined block
+     must (mutation-verified — the old gate fails three of them).
    - **Verified by driving the window**: reservations typed into three
      cells reached the file and the log, then four clients proved every
      branch — ANTHONY asked for the warrior and got the reserved elf,
@@ -752,8 +772,8 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      unlisted player asked for
      the elf and got the warrior, and a stranger was refused while the
      wizard sat waiting for NITRO 5.  relaytest 54 → 63, e2e 32 → 40,
-     protocheck 36, headless 1538 (the client is UNTOUCHED — the whole
-     feature is server-side).
+     protocheck 36, headless 1538 → 1544 (the whitelist itself is
+     entirely server-side; the six are the phantom warrior above).
 
 ## Engine facts that cost real effort to learn — don't rediscover them
 

@@ -11064,6 +11064,27 @@ function drawPanel(ctx, g, q){
    the attract/rewind screens keep the classic captured halves
    (drawPanel).  Everything drawn here is the game's own furniture: its
    tag font, its icon glyphs, its attribute palette. */
+/* IS THIS BLOCK ON SCREEN?  The one rule the SPRITE loop and the NAME
+   TAGS share -- and the half of it that was missing until 2026-09-10:
+     $A446 BIT 7   the DEAD bit: a corpse is not drawn (the RIP marker is)
+     $B474         the OUT bit -- inGame: a block nobody has joined
+     $A491 BIT 2   $B208's teleport in flight, four passes of nothing
+   $A446's dead bit ALONE was the original's whole gate, and on the
+   original that was enough: block A is the tape's own live block (reset
+   leaves it alive, placed and healthy, exactly as the capture holds it)
+   and it is always the block that starts the game, blocks B..D being
+   marked out AND dead until they join.  Online any seat can start a
+   session, and since the character IS the seat (the whitelist,
+   2026-09-10) a lone WIZARD leaves block A alive, unjoined, and standing
+   in everyone's window wearing its character's name -- Anthony: "I
+   joined the game by myself and warrior is there for some reason".
+   drawQuarter has always used the out bit, which is why the phantom had
+   a name tag but no HUD panel.  DISPLAY ONLY: no sim state, no
+   fingerprint, no wire. */
+function playerOnScreen(q){
+  return q.inGame && !(q.f11 & F_DEAD) && !(q.animCtl & 4);
+}
+
 const QUARTER_COLS = 8, QUARTER_W = QUARTER_COLS * 8;
 function drawQuarter(ctx, g, q){
   const P = HUD ? HUD.panel : null, F = HUD_FIELDS;
@@ -11267,12 +11288,12 @@ function render(ctx,g){
         (IX+10) the invisibility timer, on odd passes only (see
         drawBookkeeping) -- 50% or 75% flicker, not "not drawn"          */
   for (const q of g.players){
-    if (q.f11 & F_DEAD) continue;                        // $A446 BIT 7
-    /* $A491 BIT 2,(IX+14) / RET nz -- the last gate before $A496 builds the
-       sprite id and $A4B2 jumps into the blitter.  Bit 2 is $B208's "teleport
-       in flight", so the player is NOT DRAWN for the four passes $B20C
-       counts down: he vanishes at one pad and reappears at another. */
-    if (q.animCtl & 4) continue;                         // $A491 BIT 2
+    /* $A446's dead bit, $B474's out bit and $A491 BIT 2,(IX+14) -- the
+       last gate before $A496 builds the sprite id and $A4B2 jumps into
+       the blitter.  Bit 2 is $B208's "teleport in flight", so the player
+       is NOT DRAWN for the four passes $B20C counts down: he vanishes at
+       one pad and reappears at another.  (playerOnScreen.) */
+    if (!playerOnScreen(q)) continue;
     if (q.timer !== 0 && (g.passCtr & 1) &&              // $A457 / $A45D
         (q.timer >= 0x32 || (g.passCtr & 2))) continue;  // $A467 / $A46A
     const psx=(((q.x-dcamX)&0x7E)>>1)*8+SPRITE_DX,
@@ -11595,8 +11616,7 @@ function render(ctx,g){
     }
     const vis = [];
     for (const q of g.players){
-      if (q.f11 & F_DEAD) continue;
-      if (q.animCtl & 4) continue;
+      if (!playerOnScreen(q)) continue;          // the sprite loop's own rule
       const psx=(((q.x-dcamX)&0x7E)>>1)*8+SPRITE_DX,
             psy=(((q.y-dcamY)&0x7E)>>1)*8+SPRITE_DY;
       if (psx > -16 && psx < 256 && psy > -16 && psy < PLAYFIELD_H)
@@ -12674,7 +12694,7 @@ let fullscreenToggle = null;
 
 
 globalThis.__GAUNTLET__={
-  Game,game,render,assets:A,
+  Game,game,render,playerOnScreen,assets:A,
   net:{ state:net, start:netStart, frame:netFrame, overlay:netOverlay,
         onMessage:netOnMessage, apply:netApply, boot:netBoot, pump:netPump,
         localDir:netLocalDir, info:netInfo, chatKey:netChatKey, chatLines,
