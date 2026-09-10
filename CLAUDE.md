@@ -798,7 +798,17 @@ feel, on both the worklet (localhost) and sproc (LAN) paths.
      the dead state (SNAP_PLAYER has f11/p14/dead); monsters no longer
      chase or drain a phantom.  Mutation-verified: with the transition
      removed, the lone wizard's exit and death checks fail.  headless
-     1544 → 1550.
+     1544 → 1550.  TWO EXITS (Anthony: "one player goes in an exit to the
+     next level and the other ... to level 4 ... there's an exit to
+     level 8 too"): $94C3's measured rule holds in the new state space —
+     walked for real with the wizard and the elf in the high seats,
+     staggered four passes apart: the level waits for every block to be
+     dead or exited (the first through keeps his HUD, loses his sprite),
+     the UNSIGNED MAX of the players' targets picks the dungeon (2+4 → 4
+     either way round, 2+8 → 8), the never-joined blocks' target of 1
+     never drags anyone deeper, and a death beside an exit is not a
+     game over (the dead player is carried along out; FIRE rejoins).
+     Pinned, seven checks; headless 1550 → 1557.
    - **Verified by driving the window**: reservations typed into three
      cells reached the file and the log, then four clients proved every
      branch — ANTHONY asked for the warrior and got the reserved elf,

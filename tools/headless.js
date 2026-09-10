@@ -2999,6 +2999,54 @@ if (A.player_frames) {
           [s.mode, s.overEnded], ['attract', true]);
     s.overEnded = false;
   }
+  /* --- TWO PLAYERS, TWO EXITS (Anthony, 2026-09-10: "one player goes in
+     an exit to the next level and the other goes in an exit to level 4
+     ... there's an exit to level 8 too").  $94C3's rule, measured on the
+     Z80 for two joined blocks (the poked pairs above): the level ends
+     only when EVERY block is dead or exited, and the next dungeon is the
+     UNSIGNED MAX of the players' own (IX+12).  Here the same rule walked
+     for real in the NEW state space -- the wizard and the elf in the two
+     high seats, blocks 1 and 2 never joined (dead, target 1, so they can
+     never drag the party deeper), the elf's exit two rows farther than
+     the wizard's so the two go through on DIFFERENT passes. */
+  {
+    const walk = (tileW, tileE, killWizard) => {
+      const g = G.seed({});
+      g.enterAttract();
+      g.stepTick({ p3: { fire: true }, p4: { fire: true } });
+      const w = g.players[2], e = g.players[3];
+      g.map[(w.y >> 2) + 2][w.x >> 2] = tileW;
+      g.map[(e.y >> 2) + 4][e.x >> 2] = tileE;
+      let passes = 0, wOut = -1, eOut = -1, endedAt = -1, hudW = null, seenW = null;
+      while (g.mode === 'play' && passes < 500){
+        if (killWizard && passes === 5){ const s = g.p; g.p = w; g.health = 0; g.p = s; }
+        g.onePass({ p3: { down: true }, p4: { down: true } }); passes++;
+        if (wOut < 0 && (w.f11 & 0x80)) wOut = passes;
+        if (eOut < 0 && (e.f11 & 0x80)) eOut = passes;
+        if (wOut > 0 && eOut < 0 && hudW === null){ hudW = w.inGame; seenW = G.playerOnScreen(w); }
+        if (g.levelDone){ endedAt = passes; g.levelOver(); break; }
+      }
+      return { level: g.level, gameOver: g.gameOver, wOut, eOut, endedAt, hudW, seenW,
+               placed: [w, e].map(q => q.inGame && !(q.f11 & 0x80) && !!(q.x || q.y)),
+               wizardIn: w.inGame, deadTargets: [g.players[0].levelOwn, g.players[1].levelOwn] };
+    };
+    const a = walk(0x36, 0x37, false);
+    check('the wizard takes the next-level exit, the elf the level-4 one FOUR PASSES LATER: the level waits for both',
+          [a.wOut < a.eOut, a.endedAt > a.eOut, a.endedAt > 0], [true, true, true]);
+    check('...and the DEEPEST exit takes the whole party: dungeon 4, both placed, no game over',
+          [a.level, a.placed, a.gameOver], [4, [true, true], false]);
+    check('...while he waited the first one through had his HUD and no sprite',
+          [a.hudW, a.seenW], [true, false]);
+    check('...and the never-joined blocks\' target of 1 never drags anyone deeper',
+          a.deadTargets, [1, 1]);
+    const b = walk(0x37, 0x36, false);
+    check('the other way round -- level 4 first, next-level second -- is the same dungeon 4', [b.level, b.placed], [4, [true, true]]);
+    const c = walk(0x36, 0x38, false);
+    check('and the level-8 exit takes the party to 8', [c.level, c.placed], [8, [true, true]]);
+    const d = walk(0x36, 0x37, true);
+    check('the wizard DIES on pass 5 and the elf exits to 4: not a game over -- dungeon 4, the dead wizard carried along OUT (FIRE rejoins him)',
+          [d.level, d.gameOver, d.wizardIn, d.placed[1]], [4, false, false, true]);
+  }
 
   /* --- both players drain, and the HUD round robin is FOUR passes long */
   {
